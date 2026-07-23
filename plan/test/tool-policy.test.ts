@@ -1,0 +1,25 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { isPlanToolAllowed, selectPlanTools } from "../src/tool-policy.ts";
+
+test("planning exposes only explicit read-only tools and Plan submission choices", () => {
+  const active = selectPlanTools(
+    ["read", "grep", "bash", "edit", "write", "lsp", "rg", "get_goal", "update_goal", "unknown_writer"],
+    "planning",
+  );
+  assert.deepEqual(active, ["read", "rg", "grep", "lsp", "get_goal", "submit_plan", "request_plan_choice"]);
+});
+
+test("awaiting approval removes submission and keeps workspace read-only", () => {
+  assert.equal(isPlanToolAllowed("submit_plan", "awaitingApproval"), false);
+  assert.equal(isPlanToolAllowed("read", "awaitingApproval"), true);
+  assert.equal(isPlanToolAllowed("rg", "awaitingApproval"), true);
+  assert.equal(isPlanToolAllowed("bash", "awaitingApproval"), false);
+  assert.equal(isPlanToolAllowed("update_goal", "awaitingApproval"), false);
+  assert.equal(isPlanToolAllowed("unknown_writer", "awaitingApproval"), false);
+});
+
+test("executing and off phases do not restrict tools", () => {
+  assert.equal(isPlanToolAllowed("bash", "executing"), true);
+  assert.equal(isPlanToolAllowed("unknown_writer", "off"), true);
+});
