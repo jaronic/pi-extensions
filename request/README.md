@@ -15,15 +15,14 @@ mkdir -p "$HOME/.pi/agent/extensions"
 ln -sfn "$PWD" "$HOME/.pi/agent/extensions/request"
 ```
 
-软链接必须指向 `request/` package，而不是仓库根目录。安装或修改后在 Pi 中执行 `/reload`。如需一次链接本仓库全部 extension：
+软链接必须指向 `request/` package，而不是仓库根目录。安装或修改后在 Pi 中执行 `/reload`。如需从仓库根目录管理全部 extension：
 
 ```bash
-cd /path/to/pi-extensions
-mkdir -p "$HOME/.pi/agent/extensions"
-for name in goal plan lsp request rg; do
-  ln -sfn "$PWD/$name" "$HOME/.pi/agent/extensions/$name"
-done
+make pi-extensions-on
+make pi-extensions-status
 ```
+
+`make pi-extensions-off` 和 `make pi-extensions-toggle` 提供安全关闭与切换；管理器只处理仍指向当前仓库的链接，不覆盖同名普通文件、目录或外部软链接。
 
 Request 本身不分发、不选择、也不写入任何 theme；所有颜色只从 Pi 当前 `Theme` 的语义 token 读取。仓库提供的可选全局 palette 独立位于 [`../themes/`](../themes/README.md)，即使不安装 Request 也可使用。
 

@@ -203,15 +203,16 @@ mkdir -p "$HOME/.pi/agent/extensions"
 ln -sfn "$PWD/example" "$HOME/.pi/agent/extensions/example"
 ```
 
-本仓库现有插件可批量链接：
+本仓库现有插件通过根目录 Makefile 批量管理：
 
 ```sh
-for name in goal plan lsp rg; do
-  ln -sfn "$PWD/$name" "$HOME/.pi/agent/extensions/$name"
-done
+make pi-extensions-on
+make pi-extensions-status
 ```
 
-然后在 Pi 中执行 `/reload`。只链接 package，不链接仓库根目录；根目录没有 `package.json`。临时试运行单文件可使用 `pi -e ./path/to/extension.ts`。
+`make pi-extensions-off` 只删除仍指向当前仓库的五个链接；`make pi-extensions-toggle` 在全部启用时关闭，否则补齐缺失链接。冲突的普通文件、目录和外部软链接会导致操作在修改前失败。
+
+然后在 Pi 中执行 `/reload`。只链接 package，不链接仓库根目录；根目录没有 `package.json`。完整的扩展与主题开关可使用 `make pi-on|off|toggle|status`，临时试运行单文件可使用 `pi -e ./path/to/extension.ts`。
 
 ### 4.5 开发命令
 

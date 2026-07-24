@@ -34,6 +34,7 @@ Each `<extension>/package.json` declares `pi.extensions: ["./src/index.ts"]`. Pi
 | `rg/src/`, `rg/test/` | Ripgrep tool registration, priority logic, and focused tests. |
 | `request/src/`, `request/test/` | Request schemas, responsive TUI, native adapters, event protocol, serialized coordinator, and tests. |
 | `themes/` | Standalone repository-wide light/dark Pi palettes and their global installation/activation contract. |
+| `Makefile`, `scripts/` | Safe global Pi link controls and their dependency-free behavior tests. |
 
 Each package owns its dependencies, lockfile, compiler configuration, and tests. Do not add cross-package production imports or assume root-level dependency resolution.
 
@@ -60,19 +61,16 @@ GitHub Actions runs the same `npm ci`, `npm run check`, and `npm test` sequence 
 
 There are no `build`, `lint`, `format`, `start`, or `dev` scripts. TypeScript is loaded directly by Pi and tests; `npm run check` intentionally emits no build artifacts.
 
-For global development use, every plugin Pi should load must be symlinked into Pi's global extension directory. Link package directories separately—the repository root is not a Pi package:
+For global development use, enable this repository's five extensions and six themes from the repository root:
 
 ```sh
-mkdir -p "$HOME/.pi/agent/extensions" "$HOME/.pi/agent/themes"
-for name in goal plan lsp request rg; do
-  ln -sfn "$PWD/$name" "$HOME/.pi/agent/extensions/$name"
-done
-for theme in "$PWD"/themes/pi-extensions-*.json; do
-  ln -sfn "$theme" "$HOME/.pi/agent/themes/$(basename "$theme")"
-done
+make pi-on
+make pi-status
 ```
 
-Run that loop from the repository root, or link only the package under development. Pi follows each package's manifest to `src/index.ts`; use `/reload` after changing extension code. Theme discovery is independent: select a newly installed theme once through `/settings` or restart after changing `settings.json`; only an already-active custom theme file hot reloads. Do not use `npm link` for this workflow or commit machine-specific links.
+Use `make pi-extensions-on|off|toggle|status` or `make pi-themes-on|off|toggle|status` for one resource class. The generic `pi-on`, `pi-off`, `pi-toggle`, and `pi-status` targets also accept `SCOPE=extensions` or `SCOPE=themes`. They delegate to `scripts/pi-global-links.sh`, respect `PI_CODING_AGENT_DIR`, touch only links that resolve into this repository, and refuse conflicting files, directories, or foreign links. Theme-off operations also refuse while a managed theme is selected; choose a built-in theme through `/settings` first.
+
+Pi follows each linked package's manifest to `src/index.ts`; use `/reload` after changing extension code. Theme discovery is independent: select a newly installed theme once through `/settings`; only an already-active custom theme file hot reloads. Do not use `npm link` for this workflow or commit machine-specific links.
 
 For an isolated load smoke test that does not use the current session or global links:
 
@@ -103,7 +101,7 @@ done
 - `themes/README.md`: global palette installation, activation lifecycle, semantic roles, and extension integration contract.
 - `*/package.json`: Pi entry metadata, Node requirement, scripts, and package-local dependencies.
 - `*/tsconfig.json`: shared strict `NodeNext`, `noEmit` TypeScript contract covering `src/**/*.ts` and `test/**/*.ts`.
-- `.github/workflows/ci.yml`: standalone theme validation plus a five-package Node 22.19 matrix running clean install, typecheck, and tests.
+- `.github/workflows/ci.yml`: dependency-free theme validation and global-link-manager tests plus a five-package Node 22.19 matrix running clean install, typecheck, and tests.
 - `plan/src/index.ts`, `plan/src/command.ts`, `plan/src/tools.ts`, `plan/src/state.ts`, `plan/src/tool-lease.ts`: Plan lifecycle wiring, user/tool boundaries, state machine, and coexistence-safe active-tool leasing.
 - `goal/src/index.ts`, `goal/src/command.ts`, `goal/src/tools.ts`, `goal/src/state.ts`: Goal lifecycle wiring, user/tool boundaries, persistence, continuation, and accounting rules.
 - `lsp/src/index.ts`, `lsp/src/config.ts`, `lsp/src/server-manager.ts`, `lsp/src/lsp-client.ts`: LSP API boundary, layered configuration, routing/lifecycle, and protocol transport.
@@ -111,6 +109,7 @@ done
 - `rg/src/index.ts`: complete RG extension and exported priority helper.
 - `request/src/index.ts`, `request/src/component.ts`, `request/src/adapters.ts`, `request/src/protocol.ts`: Request lifecycle wiring, responsive renderer, native UI compatibility layer, and shared request channel.
 - `themes/pi-extensions-*.json`, `themes/validate.mjs`: standalone global Pi palettes and the role-aware schema/contrast gate.
+- `Makefile`, `scripts/pi-global-links.sh`, `scripts/pi-global-links.test.mjs`: conflict-safe global extension/theme link controls and isolated behavior tests.
 - `plan/test/harness.ts`, `plan/test/coexistence.test.ts`: in-process Pi test double and the main cross-extension behavioral suite.
 
 ## Runtime/Tooling Preferences
@@ -119,7 +118,7 @@ done
 - Package manager: npm, evidenced by one lockfile v3 per package. No exact npm version or `packageManager` field is pinned; update the affected package's lockfile when dependencies change.
 - Pi compatibility: common host packages and TypeBox are peer dependencies at `>=0.81.0` and development dependencies for local checking. Keep Pi host libraries as peers rather than ordinary bundled runtime dependencies.
 - `lsp` alone ships runtime dependencies (`vscode-jsonrpc` and `vscode-languageserver-protocol`). New third-party code needed at runtime belongs in that package's `dependencies`; test/type tooling belongs in `devDependencies`.
-- CI contains a dependency-free theme validation job plus a five-package matrix in `.github/workflows/ci.yml`. There is still no repository-level npm package, formatter, linter, bundler, or generated-output workflow; do not invent root scripts or shared dependency resolution unless deliberately converting to a workspace.
+- CI contains a dependency-free resource job plus a five-package matrix in `.github/workflows/ci.yml`. There is still no repository-level npm package, formatter, linter, bundler, or generated-output workflow; do not invent shared dependency resolution unless deliberately converting to a workspace.
 
 ## Testing & QA
 
@@ -129,5 +128,5 @@ Tests use Node's built-in `node:test` runner, `node:assert/strict`, and `tsx`. T
 - Use `plan/test/coexistence.test.ts` for observable Goal/Plan lifecycle behavior; it imports Goal directly and exercises commands, tools, events, UI state, abort/wait ordering, persistence, and continuation.
 - LSP tests use isolated temporary workspaces and a deterministic child-process fake server. Cover initialization failure, request cancellation/timeout, process crashes, diagnostic settling, partial multi-server failure, idle cleanup, and bounded shutdown; always remove temporary files in cleanup hooks.
 - Request tests drive the real component through tool, native UI, external event, and Goal confirmation paths. Cover single/multi/Other/Review behavior, serialization, abort/timeout/shutdown, headless rejection, fallback semantics, and bounded narrow-terminal rendering.
-- Run `node themes/validate.mjs` for any palette change. Run `npm run check` and `npm test` in every affected package. For Plan/Goal protocol changes, run both packages and the Plan coexistence suite; CI repeats the theme gate and all five package checks from clean installs.
+- Run `node themes/validate.mjs` for any palette change and `make pi-links-test` for global-link-manager changes. Run `npm run check` and `npm test` in every affected package. For Plan/Goal protocol changes, run both packages and the Plan coexistence suite; CI repeats the resource gates and all five package checks from clean installs.
 - No coverage tool, threshold, skipped-test convention, or focused-test script is configured. Add tests for new observable contracts and plausible regressions; do not assert incidental implementation details merely to increase coverage.

@@ -7,11 +7,11 @@
 从仓库根目录执行：
 
 ```bash
-mkdir -p "$HOME/.pi/agent/themes"
-for theme in "$PWD"/themes/pi-extensions-*.json; do
-  ln -sfn "$theme" "$HOME/.pi/agent/themes/$(basename "$theme")"
-done
+make pi-themes-on
+make pi-themes-status
 ```
+
+`make pi-themes-off` 只移除仍指向当前仓库的主题链接，`make pi-themes-toggle` 可切换整组链接。若 `settings.json` 当前选择了 `pi-extensions-*` 主题或自动 pair，关闭操作会在修改前拒绝；先通过 `/settings` 选择内置主题再重试，脚本不会用文本替换改写 JSON。冲突的文件、目录和外部软链接也不会被覆盖或删除。
 
 安装只完成“发现”。要在当前会话立即切换，打开 `/settings` 并选择对应 Theme。也可在 `~/.pi/agent/settings.json` 配置自动浅/深切换：
 
