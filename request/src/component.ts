@@ -16,6 +16,7 @@ import {
   type NormalizedRequestQuestion,
   type RequestAnswer,
   type RequestDialogResult,
+  sanitizeTerminalText,
   unansweredRequestResult,
 } from "./request.ts";
 
@@ -199,17 +200,18 @@ export function createRequestComponent({
   editor.onSubmit = (value) => {
     const answer = currentAnswer();
     if (editing === "text") {
-      answer.customInput = value.slice(0, MAX_REQUEST_ANSWER_CHARS);
+      answer.customInput = sanitizeTerminalText(value).slice(0, MAX_REQUEST_ANSWER_CHARS);
       editor.setText("");
       editing = null;
       advance();
       return;
     }
-    const trimmed = value.trim();
+    const trimmed = sanitizeTerminalText(value).trim();
     if (!trimmed) return;
+    const question = currentQuestion();
+    if (question.kind === "choice" && !question.multi) answer.selectedOptions.clear();
     answer.customInput = trimmed.slice(0, MAX_REQUEST_ANSWER_CHARS);
     editor.setText("");
-    const question = currentQuestion();
     if (question.kind === "choice" && !question.multi) {
       editing = null;
       advance();
@@ -243,15 +245,16 @@ export function createRequestComponent({
         (keybindings.matches(data, "tui.select.confirm") || matchesKey(data, Key.enter))
       ) {
         const answer = currentAnswer();
-        answer.customInput = editor.getText().slice(0, MAX_REQUEST_ANSWER_CHARS);
+        answer.customInput = sanitizeTerminalText(editor.getText()).slice(0, MAX_REQUEST_ANSWER_CHARS);
         editor.setText("");
         editing = null;
         advance();
         return;
       }
       editor.handleInput(data);
-      const editorText = editor.getText();
-      if (editorText.length > MAX_REQUEST_ANSWER_CHARS) editor.setText(editorText.slice(0, MAX_REQUEST_ANSWER_CHARS));
+      const rawEditorText = editor.getText();
+      const editorText = sanitizeTerminalText(rawEditorText).slice(0, MAX_REQUEST_ANSWER_CHARS);
+      if (editorText !== rawEditorText) editor.setText(editorText);
       refresh();
       return;
     }

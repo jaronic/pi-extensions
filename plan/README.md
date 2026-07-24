@@ -137,7 +137,7 @@ status 可为 `pending`、`inProgress`、`completed`、`blocked`。最后一个�
 
 | Phase | 可用工具 | 写入能力 |
 | --- | --- | --- |
-| `planning` | `read`、`rg`、`grep`、`find`、`ls`、`lsp`、`questionnaire`、`ask`、`create_goal`、`get_goal`、`submit_plan`、`request_plan_choice` | 禁止工作区修改和任意 shell。 |
+| `planning` | `read`、`rg` 或 `grep`（同时存在时仅 `rg`）、`find`、`ls`、`lsp`、`questionnaire`、`ask`、`create_goal`、`get_goal`、`submit_plan`、`request_plan_choice` | 禁止工作区修改和任意 shell。 |
 | `awaitingClarification` | 同一只读集合，但无提交或新选择；额外启用 `answer_plan_choice` | 等待明确选择或 cancel。 |
 | `awaitingApproval` | 同一只读集合，但无 `submit_plan` 或选择工具 | 等待用户批准、refine 或 cancel。 |
 | `executing` | 进入 Plan 前的有效工具集，加 `update_plan_step` | 按原工具能力执行。 |
@@ -148,7 +148,7 @@ status 可为 `pending`、`inProgress`、`completed`、`blocked`。最后一个�
 1. `setActiveTools` 只向 agent 暴露当前 phase 允许的工具。
 2. `tool_call` hook 再次检查 `isPlanToolAllowed`；即使其他扩展误把写工具重新启用，调用仍会被 block。
 
-`PlanToolLease` 不是简单保存/覆盖数组：它在 Plan 活跃期间观察其他扩展新增或移除的工具，退出时合并这些外部变化，避免把并发的工具配置回滚。`rg` 与 `grep` 同时存在时保持 `rg` 优先。
+`PlanToolLease` 不是简单保存/覆盖数组：它在 Plan 活跃期间观察其他扩展新增或移除的工具，退出时合并这些外部变化，避免把并发的工具配置回滚。`rg` 与 `grep` 同时存在时只暴露 `rg`；只有一个搜索别名时保留现有名称。
 
 注意：只读判定按工具名白名单执行。新增真正只读的工具不会自动获准；应先审查语义，再更新 `src/tool-policy.ts` 和测试。
 

@@ -4,6 +4,7 @@ import {
   MAX_REQUEST_PAYLOAD_BYTES,
   MAX_REQUEST_QUESTIONS,
   normalizeRequestQuestions,
+  sanitizeTerminalText,
   type RequestQuestion,
   unansweredRequestResult,
 } from "../src/request.ts";
@@ -97,4 +98,20 @@ test("request validation rejects ambiguous and oversized payloads", () => {
   }));
   assert.ok(Buffer.byteLength(JSON.stringify(oversized), "utf8") > MAX_REQUEST_PAYLOAD_BYTES);
   assert.throws(() => normalizeRequestQuestions(oversized), /payload exceeds/);
+});
+
+test("request text rejects terminal controls and ambiguous single-line fields", () => {
+  const osc = "\u001b]52;c;UkVQUk9fT0s=\u0007";
+  const base: RequestQuestion = {
+    id: "choice",
+    question: "Choose",
+    options: [{ label: "A" }],
+  };
+
+  assert.throws(() => normalizeRequestQuestions([{ ...base, header: osc }]), /terminal control/);
+  assert.throws(() => normalizeRequestQuestions([{ ...base, question: `Choose ${osc}` }]), /terminal control/);
+  assert.throws(() => normalizeRequestQuestions([{ ...base, options: [{ label: "A\u202eB" }] }]), /bidirectional/);
+  assert.throws(() => normalizeRequestQuestions([{ ...base, header: "Two\nlines" }]), /single line/);
+  assert.equal(normalizeRequestQuestions([{ ...base, question: "Choose\r\ncarefully" }])[0]?.question, "Choose\ncarefully");
+  assert.equal(sanitizeTerminalText(`safe${osc}\u202etail`), "safe�]52;c;UkVQUk9fT0s=��tail");
 });

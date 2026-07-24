@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,6 +36,15 @@ async function waitForStderr(client: LspClient, pattern: RegExp): Promise<void> 
     await delay(10);
   }
   assert.fail(`Expected LSP stderr to match ${pattern}`);
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 test("LspClient initializes, syncs, queries, receives diagnostics, and shuts down", async (context) => {
@@ -181,4 +190,27 @@ test("LspClient shutdown is bounded and idempotent when shutdown is ignored", as
   await Promise.all([client.shutdown(), client.shutdown()]);
   assert.equal(client.state, "closed");
   assert.ok(Date.now() - startedAt < 2_000);
+});
+
+test("LspClient terminates a stubborn server process tree before shutdown resolves", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "pi-lsp-process-tree-"));
+  const pidPath = join(root, "pids.json");
+  context.after(async () => await rm(root, { recursive: true, force: true }));
+  const client = await LspClient.start(fakeServerConfig("stubborn-tree", {
+    command: [process.execPath, fakeServer, "stubborn-tree", pidPath],
+  }), root, 3_000, () => {});
+  const pids = JSON.parse(await readFile(pidPath, "utf8")) as { parent: number; grandchild: number };
+  context.after(() => {
+    for (const pid of [pids.parent, pids.grandchild]) {
+      try { process.kill(pid, "SIGKILL"); } catch {}
+    }
+  });
+
+  const startedAt = Date.now();
+  await client.shutdown();
+
+  assert.equal(client.state, "closed");
+  assert.ok(Date.now() - startedAt < 2_500);
+  assert.equal(processIsAlive(pids.parent), false);
+  assert.equal(processIsAlive(pids.grandchild), false);
 });

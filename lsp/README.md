@@ -13,7 +13,7 @@
 - diagnostics 对所有匹配服务器并行请求，保留成功结果并单独报告局部失败。
 - `edit`/`write` 工具成功后，已启动且覆盖该文件的 client 会同步最新磁盘内容。
 - 工具运行时 TUI status 显示当前 action；`/lsp` 显示已配置和活跃的 client。
-- 输出受 Pi 的 2,000 行/50 KiB 上限约束；截断时完整格式化结果写入权限为 `0600` 的临时文件，并在 session reload/shutdown 时清理。
+- 输出受 Pi 的 2,000 行/50 KiB 上限约束；formatter 在全局限额前保留每个原始 replacement，截断时完整格式化结果写入权限为 `0600` 的临时文件，并在 session reload/shutdown 时清理。
 - 所有 file action 都将 realpath 限制在当前 workspace 内，符号链接不能绕过边界。
 
 该插件是 LSP client，不包含 language server 本身。对应可执行文件必须在 `PATH` 中；server 仅在第一次实际请求时启动，因此 `/lsp` 显示“configured”不代表二进制已安装。
@@ -83,7 +83,7 @@ agent 也可调用：
 | `references` | `file` + position | `includeDeclaration` 默认 `true`。 |
 | `symbols` | `file` | 当前文档符号，不需要 position。 |
 | `workspace_symbols` | 无 | 可传 `query`、`server`；没有活跃兼容 client 时必须显式给 `server`。 |
-| `rename_preview` | `file` + position + `newName` | 仅格式化 `WorkspaceEdit`，不落盘。 |
+| `rename_preview` | `file` + position + `newName` | 仅格式化 `WorkspaceEdit`，不落盘；`resultCount` 统计实际 text edits 与 resource operations。 |
 | `code_actions` | `file` + start position | 可用 `endLine`、`endColumn` 指定 range；仅预览。 |
 
 position 有两种写法：
@@ -123,6 +123,8 @@ position 有两种写法：
 
 项目配置只有在 Pi 信任该项目时才加载。后加载的项目配置覆盖全局配置；两者都在内置配置之上打 patch。配置在 manager 创建时读取，不热更新；修改后执行 `/reload` 或新建 session。
 
+每个配置文件在参与 merge 前严格解码：顶层、server 和 `readyNotification` 的未知字段会报出来源文件；错误的 boolean、array、record、priority 或 timeout 类型不会被 truthy coercion 或默认值静默吞掉。一个配置源无效时，该次 manager 创建整体失败。
+
 示例：
 
 ```json
@@ -161,10 +163,10 @@ position 有两种写法：
 
 | 字段 | 默认值 | 语义 |
 | --- | --- | --- |
-| `idleTimeoutMs` | `300000` | client 空闲关闭时间；`0` 禁用 idle shutdown。 |
-| `requestTimeoutMs` | `15000` | 全局请求超时，必须为正整数。 |
-| `diagnosticsSettleMs` | `500` | 打开/更新文档后等待 diagnostics 稳定的时间；可为 `0`。 |
-| `maxResults` | `100` | 默认格式化结果数，必须为正整数。 |
+| `idleTimeoutMs` | `300000` | client 空闲关闭时间；`0` 禁用 idle shutdown；最大 `2147483647`。 |
+| `requestTimeoutMs` | `15000` | 全局请求超时，必须为正整数且不超过 `2147483647`。 |
+| `diagnosticsSettleMs` | `500` | 打开/更新文档后等待 diagnostics 稳定的时间；可为 `0`，最大 `2147483647`。 |
+| `maxResults` | `100` | 默认格式化结果数，必须为 `1..500` 的整数。 |
 | `servers` | 内置集合 | 以 server ID 为 key 的新增配置或 patch。 |
 
 ### Server 字段
@@ -204,7 +206,7 @@ Server patch 除 `initOptions` 外是浅合并。修改嵌套对象时应提供�
 1. `src/config.ts` 合并内置、全局、可信项目配置，并按 priority 排序。
 2. file action 先 realpath 校验 workspace 边界，再根据 suffix + role 选候选 server。
 3. `src/server-manager.ts` 为候选计算 workspace root，按需启动 `LspClient`；启动失败或未声明 capability 时尝试下一候选。显式指定 `server` 时不 fallback 到其他 ID。
-4. `src/lsp-client.ts` 用 stdio JSON-RPC initialize，跟踪 document version/position encoding，转发取消信号、收集有限 stderr，并在超时、进程退出或 shutdown 时清理 pending request。
+4. `src/lsp-client.ts` 用 stdio JSON-RPC initialize，跟踪 document version/position encoding，转发取消信号并收集有限 stderr。正常 shutdown 先发送协议 `shutdown`/`exit`；仍存活时 Unix 对独立 process group 依次发送 TERM/KILL，Windows 使用 `taskkill /t /f`，等待父进程与后代结束后才完成 cleanup。
 5. diagnostics 是例外：所有匹配 diagnostics server 并行运行；只有全部失败时工具整体失败。
 
 ## 安全与限制
@@ -213,19 +215,19 @@ Server patch 除 `initOptions` 外是浅合并。修改嵌套对象时应提供�
 - server command 直接 spawn，不经 shell；配置仍属于可执行代码边界，因此项目级配置必须经过 Pi trust。
 - workspace root 搜索不会越过当前 Pi workspace，外部文件和指向外部的 symlink 会被拒绝。
 - `workspace_symbols` 未显式指定 server 时只查询已经活跃且支持该 capability 的 client，避免无目标地启动所有 server。
-- 临时完整输出只存于当前 session 生命周期；不要把其路径当持久 artifact。
+- 临时完整输出只存于当前 session 生命周期；内容是未做逐 edit 截断的完整格式化结果，但路径不是持久 artifact。
 
 ## 实现原理与关键节点
 
 - `src/index.ts`：`lsp` 工具 schema、action dispatch、`/lsp`、状态 UI、edit/write 后同步和 shutdown。
-- `src/config.ts`：内置服务器、配置路径、分层 patch、schema normalization、后缀/role 路由。
+- `src/config.ts`：内置服务器、配置路径、严格 decoder、分层 patch、schema normalization、后缀/role 路由。
 - `src/server-manager.ts`：client 缓存、候选 fallback、并行 diagnostics、idle timer 和有界 shutdown。
-- `src/lsp-client.ts`：子进程、JSON-RPC、initialize/capability、文档同步、position encoding、timeout/cancel、ready notification。
+- `src/lsp-client.ts`：子进程组、JSON-RPC、initialize/capability、文档同步、position encoding、timeout/cancel、ready notification 和升级式进程树回收。
 - `src/roots.ts`：realpath workspace confinement 与 root marker 选择。
 - `src/positions.ts`：1-based Unicode 输入到 LSP position 的转换及唯一 symbol 解析。
-- `src/format.ts`：诊断、位置、符号、hover、WorkspaceEdit 和 code action 的稳定文本格式。
+- `src/format.ts`：诊断、去重位置、符号、hover、忠实 WorkspaceEdit、准确 edit 计数和 code action 的稳定文本格式。
 - `src/output.ts`：输出截断、私有临时 artifact 与清理。
-- `test/fake-server.mjs`：确定性的测试 LSP 子进程；`test/*.test.ts` 覆盖配置、路由、协议、失败、取消、settle 和清理。
+- `test/fake-server.mjs`：确定性的测试 LSP 子进程；`test/*.test.ts` 覆盖严格配置、路由、协议、完整 artifact、准确计数、失败、取消、settle、顽固进程树和清理。
 
 ## 开发与验证
 

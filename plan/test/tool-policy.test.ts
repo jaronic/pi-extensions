@@ -7,7 +7,7 @@ test("planning exposes only explicit read-only tools and Plan submission choices
     ["read", "grep", "bash", "edit", "write", "lsp", "rg", "get_goal", "update_goal", "unknown_writer"],
     "planning",
   );
-  assert.deepEqual(active, ["read", "rg", "grep", "lsp", "get_goal", "submit_plan", "request_plan_choice"]);
+  assert.deepEqual(active, ["read", "rg", "lsp", "get_goal", "submit_plan", "request_plan_choice"]);
 });
 
 test("awaiting approval removes submission and keeps workspace read-only", () => {

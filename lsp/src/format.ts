@@ -82,16 +82,17 @@ export function formatLocations(value: unknown, cwd: string, maxResults: number)
   if (locations.length === 0) return "No locations.";
   const lines: string[] = [];
   const seen = new Set<string>();
+  let hidden = 0;
   for (const location of locations) {
     const uri = "targetUri" in location ? location.targetUri : location.uri;
     const range = "targetSelectionRange" in location ? location.targetSelectionRange : location.range;
     const line = `${displayUri(uri, cwd)}:${range.start.line + 1}:${range.start.character + 1}`;
     if (seen.has(line)) continue;
     seen.add(line);
-    lines.push(line);
-    if (lines.length >= maxResults) break;
+    if (lines.length < maxResults) lines.push(line);
+    else hidden += 1;
   }
-  if (locations.length > lines.length) lines.push(`… ${locations.length - lines.length} more location(s) omitted`);
+  if (hidden > 0) lines.push(`… ${hidden} more location(s) omitted`);
   return lines.join("\n");
 }
 
@@ -106,9 +107,10 @@ export function formatDocumentSymbols(value: unknown, cwd: string, maxResults: n
   const symbols = normalizeArray(value) as Array<DocumentSymbol | SymbolInformation>;
   if (symbols.length === 0) return "No symbols.";
   const lines: string[] = [];
-  for (const symbol of symbols) appendSymbol(symbol, 0, lines, cwd, maxResults);
-  if (lines.length >= maxResults) lines.push("… additional symbols omitted");
-  return lines.slice(0, maxResults + 1).join("\n");
+  let total = 0;
+  for (const symbol of symbols) total += appendSymbol(symbol, 0, lines, cwd, maxResults);
+  if (total > lines.length) lines.push(`… ${total - lines.length} more symbol(s) omitted`);
+  return lines.join("\n");
 }
 
 export function formatWorkspaceSymbols(value: unknown, cwd: string, maxResults: number): string {
@@ -128,27 +130,40 @@ export function formatWorkspaceSymbols(value: unknown, cwd: string, maxResults: 
 export function formatWorkspaceEdit(edit: WorkspaceEdit | null, cwd: string, maxResults: number): string {
   if (!edit) return "No workspace edit.";
   const lines: string[] = [];
+  let total = 0;
+  const append = (line: string): void => {
+    total += 1;
+    if (lines.length < maxResults) lines.push(line);
+  };
   for (const [uri, edits] of Object.entries(edit.changes ?? {})) {
     for (const textEdit of edits) {
-      lines.push(formatTextEdit(uri, textEdit.range.start.line, textEdit.range.start.character, textEdit.range.end.line, textEdit.range.end.character, textEdit.newText, cwd));
-      if (lines.length >= maxResults) return finishLimited(lines);
+      append(formatTextEdit(uri, textEdit.range.start.line, textEdit.range.start.character, textEdit.range.end.line, textEdit.range.end.character, textEdit.newText, cwd));
     }
   }
   for (const change of edit.documentChanges ?? []) {
     if ("textDocument" in change) {
       for (const textEdit of change.edits) {
         const replacement = "newText" in textEdit ? textEdit.newText : textEdit.snippet.value;
-        lines.push(formatTextEdit(change.textDocument.uri, textEdit.range.start.line, textEdit.range.start.character, textEdit.range.end.line, textEdit.range.end.character, replacement, cwd));
-        if (lines.length >= maxResults) return finishLimited(lines);
+        append(formatTextEdit(change.textDocument.uri, textEdit.range.start.line, textEdit.range.start.character, textEdit.range.end.line, textEdit.range.end.character, replacement, cwd));
       }
       continue;
     }
-    if (change.kind === "create") lines.push(`create ${displayUri(change.uri, cwd)}`);
-    else if (change.kind === "rename") lines.push(`rename ${displayUri(change.oldUri, cwd)} -> ${displayUri(change.newUri, cwd)}`);
-    else if (change.kind === "delete") lines.push(`delete ${displayUri(change.uri, cwd)}`);
-    if (lines.length >= maxResults) return finishLimited(lines);
+    if (change.kind === "create") append(`create ${displayUri(change.uri, cwd)}`);
+    else if (change.kind === "rename") append(`rename ${displayUri(change.oldUri, cwd)} -> ${displayUri(change.newUri, cwd)}`);
+    else if (change.kind === "delete") append(`delete ${displayUri(change.uri, cwd)}`);
   }
+  if (total > lines.length) lines.push(`… ${total - lines.length} more edit(s) omitted`);
   return lines.length > 0 ? lines.join("\n") : "No workspace edit.";
+}
+
+export function workspaceEditCount(edit: WorkspaceEdit | null): number {
+  if (!edit) return 0;
+  let count = 0;
+  for (const edits of Object.values(edit.changes ?? {})) count += edits.length;
+  for (const change of edit.documentChanges ?? []) {
+    count += "textDocument" in change ? change.edits.length : 1;
+  }
+  return count;
 }
 
 export function formatCodeActions(value: unknown, cwd: string, maxResults: number): string {
@@ -169,15 +184,20 @@ export function formatCodeActions(value: unknown, cwd: string, maxResults: numbe
   return lines.join("\n");
 }
 
-function appendSymbol(symbol: DocumentSymbol | SymbolInformation, depth: number, lines: string[], cwd: string, maxResults: number): void {
-  if (lines.length >= maxResults) return;
+function appendSymbol(symbol: DocumentSymbol | SymbolInformation, depth: number, lines: string[], cwd: string, maxResults: number): number {
   const indentation = "  ".repeat(depth);
   if ("location" in symbol) {
-    lines.push(`${indentation}${symbol.name} [${kindName(symbol.kind)}] ${displayUri(symbol.location.uri, cwd)}:${symbol.location.range.start.line + 1}:${symbol.location.range.start.character + 1}`);
-    return;
+    if (lines.length < maxResults) {
+      lines.push(`${indentation}${symbol.name} [${kindName(symbol.kind)}] ${displayUri(symbol.location.uri, cwd)}:${symbol.location.range.start.line + 1}:${symbol.location.range.start.character + 1}`);
+    }
+    return 1;
   }
-  lines.push(`${indentation}${symbol.name} [${kindName(symbol.kind)}] ${symbol.selectionRange.start.line + 1}:${symbol.selectionRange.start.character + 1}`);
-  for (const child of symbol.children ?? []) appendSymbol(child, depth + 1, lines, cwd, maxResults);
+  if (lines.length < maxResults) {
+    lines.push(`${indentation}${symbol.name} [${kindName(symbol.kind)}] ${symbol.selectionRange.start.line + 1}:${symbol.selectionRange.start.character + 1}`);
+  }
+  let count = 1;
+  for (const child of symbol.children ?? []) count += appendSymbol(child, depth + 1, lines, cwd, maxResults);
+  return count;
 }
 
 function formatMarkedContent(content: MarkedString | MarkupContent): string {
@@ -187,13 +207,9 @@ function formatMarkedContent(content: MarkedString | MarkupContent): string {
 }
 
 function formatTextEdit(uri: string, startLine: number, startCharacter: number, endLine: number, endCharacter: number, newText: string, cwd: string): string {
-  const replacement = singleLine(newText).slice(0, 180);
-  return `${displayUri(uri, cwd)}:${startLine + 1}:${startCharacter + 1}-${endLine + 1}:${endCharacter + 1} => ${JSON.stringify(replacement)}`;
+  return `${displayUri(uri, cwd)}:${startLine + 1}:${startCharacter + 1}-${endLine + 1}:${endCharacter + 1} => ${JSON.stringify(newText)}`;
 }
 
-function finishLimited(lines: string[]): string {
-  return `${lines.join("\n")}\n… additional edit(s) omitted`;
-}
 
 function kindName(kind: number): string {
   return SYMBOL_KIND[kind] ?? `kind-${kind}`;
