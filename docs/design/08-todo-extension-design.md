@@ -1,6 +1,6 @@
 # 08 · Todo 扩展实现：分支可恢复的任务执行账本
 
-> 文档状态：当前实现已验证，包含模型工具/用户命令、Todo service v1、custom journal v2 和 Plan managed provider v1。实现位于 `todo/`，研究与验收日期为 2026-07-24；运行 API 基线为 `@earendil-works/pi-coding-agent 0.81.1`，扩展兼容下限 `>=0.81.0`。第 2–14 节是当前实现合同，第 15–17 节记录测试证据与完成状态；外部产品行为按“参考资料”中的版本或当日源码快照描述。
+> 文档状态：当前实现已验证，包含模型工具/用户命令、Todo service v1、custom journal v2、Plan managed provider v1，以及 Plan blocked phase / journal v3 协作。实现位于 `todo/`，研究与验收更新至 2026-07-25；运行 API 基线为 `@earendil-works/pi-coding-agent 0.81.1`，扩展兼容下限 `>=0.81.0`。第 2–14 节是当前实现合同，第 15–17 节记录测试证据与完成状态；外部产品行为按“参考资料”中的版本或当日源码快照描述。
 
 ## 1. 结论先行
 
@@ -148,7 +148,7 @@ flowchart TB
 
 - 普通 board 的持久事实源：扫描当前 branch 得到最高有效 `sequence` 的 `TodoSnapshot`；候选来自成功 `todo` tool result details v1、legacy `todo-state-v1` command entry 或当前 `todo-state-v2` command/service entry，同 sequence 必须指向相同 state。
 - Managed Plan progress 的持久事实源：`todo-managed-progress-v1` custom entry 中当前 session/execution 的最后一个严格有效 state；它保存 approved step definitions、mutable status、revision 和最后 request ID，不使用普通 board 的 sequence、boardId 或数字 task ID。
-- Plan v2 state 只持久化 immutable step definitions 与外部 owner/execution 引用；外部 mutable snapshot 由选中的 provider 持久化。两边不会同时写同一 status。
+- Plan v3 state 只持久化 immutable step definitions 与外部 owner/execution 引用；外部 mutable snapshot 由选中的 provider 持久化。两边不会同时写同一 status。
 - 运行时分别保有不可变 `TodoSnapshot` 与 `ManagedProgressState | null`；phase/owner 决定哪一个投影到 `setStatus("todo")`、`setWidget("todo")` 和 `before_agent_start`。
 - 普通 board 的 agent tool 由 Pi 持久化成功 `TodoToolDetails.state`；用户命令与 service mutation 在返回成功前由 `pi.appendEntry()` 写 v2 state entry。Managed provider 同样先 append 自己的 custom entry，再切换 closure state。
 - UI、prompt、renderer 和 service response 都不是独立状态存储；外部文件仍不写入。
@@ -588,7 +588,7 @@ interface TodoServiceEnvelope {
 }
 ```
 
-`TodoServiceOperation` 是 §7.2 每个 op 的 tagged object union，支持除用户确认专属 `clear` 外的全部模型 op。`requestTodoService()` 对 caller 输入做 snapshot/freeze，通过 `accept()` 确保最多一个 provider，严格解码返回的 bounded content/details，并把同步验证、取消和 emit 错误统一为 rejected promise。没有 receiver 时立即拒绝，不悬挂调用方。
+`TodoServiceOperation` 是 §7.2 每个 op 的 tagged object union，支持除用户确认专属 `clear` 外的全部模型 op。`requestTodoService()` 对 caller 输入做 snapshot/freeze，通过 `accept()` 确保最多一个 provider，严格解码返回的 bounded content/details，并把同步验证、取消和 emit 错误统一为 rejected promise。没有 receiver 时立即拒绝，不悬挂调用方。通用 envelope 为什么必须同步 accept、与 Request UI/provider discovery/state broadcast 有何区别，详见 [09 · 跨扩展通用协议](09-cross-extension-protocols.md)。
 
 Provider 只接受 active session 的精确 `sessionId`；`session_start/session_tree` 更新目标 branch，`session_shutdown` 清除 context 并注销 listener。请求复用 `executeTodoOperation()`，所以 raw event consumer 也不能绕过未知字段、领域上限、Plan mutation gate、abort checks 或 output/details decoder。`get/view` 只读；真实 mutation 在返回前先 append `todo-state-v2`，append 失败不更新 closure/UI。Service response 不是第三份事实源。
 
@@ -790,7 +790,7 @@ export const TODO_MANAGED_PROGRESS_TYPE = "todo-managed-progress-v1";
 - `close` 对当前 execution append `{ state: null }`，再清除 managed closure；重复或 foreign close 是 no-op。
 - `session_start/session_tree` 在普通 board replay 之外独立扫描 managed custom entries；只恢复当前 session。Invalid record 不部分载入，若它是最后一条则 managed state 为 null 并警告。
 
-Provider `update` 可以 `await` journal append，且没有 ordinary tool 的 sibling-call 并发：Plan 的 `update_plan_step` facade 顺序发起请求，并以 Pi tool-call ID 作为幂等键。Update append 失败时内存不前进，Plan 收到 failed tool call且不得退回本地 owner。Plan terminal 则先 append 自身 v2 tombstone、恢复工具并广播 `off`，再 best-effort `close`；close append 失败只警告，不能回滚已提交终态，残留 managed state 在 `off` 时不投影并可被下一 execution 替换。
+Provider `update` 可以 `await` journal append，且没有 ordinary tool 的 sibling-call 并发：Plan 的 `update_plan_step` facade 顺序发起请求，并以 Pi tool-call ID 作为幂等键。Update append 失败时内存不前进，Plan 收到 failed tool call且不得退回本地 owner。Plan terminal 则先 append 自身 v3 tombstone、恢复工具并广播 `off`，再 best-effort `close`；close append 失败只警告，不能回滚已提交终态，残留 managed state 在 `off` 时不投影并可被下一 execution 替换。
 
 ## 10. 模型上下文与 compaction
 
@@ -834,12 +834,13 @@ Phase channel 保存当前 session 的最后信号并控制普通 board gate。P
 | `planning` | `view/get` 可读，mutation 拒绝；隐藏 prompt/UI | 不创建 |
 | `awaitingClarification` | 同上 | 不创建 |
 | `awaitingApproval` | 同上 | `open` 可在显式批准事务中创建，但在 phase 变为 executing 前不投影 |
+| `blocked` | `view/get` 可读，mutation 拒绝；隐藏 prompt/UI，等待用户补充前提或替代方向 | 不创建 |
 | `executing`，Todo 未被选中 | `view/get` 可读，mutation 拒绝；隐藏 prompt/UI | 不创建/不投影 |
 | `executing`，Todo 是 owner | `view/get` 可读，mutation 拒绝；普通 state 保持冻结 | provider read/update；投影 managed prompt/footer/widget |
 
 Runtime gate 与 Plan tool lease 是两层独立保护；agent 和 `/todos clear|reopen` mutation 都必须拒绝。`/todos status` 仍只读展示冻结的普通 board；`show/hide/toggle` 的进程内偏好同时控制 managed widget 可见性，但不改变 owner/state。
 
-所有 mutable status 只存在 provider ledger；Plan v2 state 保存 immutable definitions 和 owner reference。Agent 的唯一 API 是 `update_plan_step`，Plan 转发并严格验证完整 snapshot。Plan footer 显示 owner 且关闭本地步骤 widget；Todo 使用自己的 UI key。完成或取消时 Plan 先持久化 terminal tombstone并广播 `off`，Todo 立即恢复普通 board；随后 best-effort `close` append null。Provider read/update unavailable 或返回坏 snapshot 必须显式失败，不能静默创建本地副本；terminal close 失败只警告且残留 state 不投影。
+所有 mutable status 只存在 provider ledger；Plan v3 state 保存 immutable definitions 和 owner reference。Agent 的唯一 API 是 `update_plan_step`，Plan 转发并严格验证完整 snapshot。Plan footer 显示 owner 且关闭本地步骤 widget；Todo 使用自己的 UI key。完成或取消时 Plan 先持久化 terminal tombstone并广播 `off`，Todo 立即恢复普通 board；随后 best-effort `close` append null。Provider read/update unavailable 或返回坏 snapshot 必须显式失败，不能静默创建本地副本；terminal close 失败只警告且残留 state 不投影。
 
 这是已落地的单向所有权转移，不是把 Plan steps 复制到普通 Todo board。若普通 board 有“执行经批准方案”父任务，Plan 退出后 agent 再依据整体结果更新该普通任务。
 
@@ -908,6 +909,7 @@ todo/
     ├── progress-provider.test.ts
     ├── integration.test.ts
     └── coexistence.test.ts
+```
 
 职责边界：
 
@@ -933,9 +935,9 @@ todo/
 
 实现已同步以下仓库级入口：
 
-- `.github/workflows/ci.yml` 的六 package matrix 包含 `todo`；
+- `.github/workflows/ci.yml` 的七 package matrix 包含 `todo`；
 - `scripts/pi-global-links.sh` 与测试把 `todo` 纳入 `make pi-on|off|toggle|status`；
-- `AGENTS.md`、`docs/pi-extension-development.md` 与设计索引描述六个 package；
+- `AGENTS.md`、`docs/pi-extension-development.md` 与设计索引描述七个 package；
 - `todo/README.md` 记录安装、工具 schema、命令、状态、持久化、Plan/Goal/Request 协作和限制；
 - `plan/README.md`、`goal/README.md` 与 `request/README.md` 记录各自可观察的 Todo 共存语义；
 - 测试使用 Todo 自有 harness；生产代码没有跨 package import。
@@ -1039,7 +1041,7 @@ Runtime 能强制“只有活动项可完成”和“状态被持久化”，不
 
 - 五种状态计数、board 派生状态和 dropped 分母语义；
 - footer active/blocked/settled/empty；
-- widget ���示当前 phase，按 active → pending → blocked 排序，行数不超过 12、长文本截断并使用 semantic token；输入换行、ESC/C1 与 bidi formatting 控制符在进入 renderer 前已被拒绝；
+- widget 显示当前 phase，按 active → pending → blocked 排序，行数不超过 12、长文本截断并使用 semantic token；输入换行、ESC/C1 与 bidi formatting 控制符在进入 renderer 前已被拒绝；
 - tool content 变更项、自动推进项和下一步正确；
 - UTF-8 byte/line 双上限、完整行边界与 truncation details；
 - `view` phase/includeClosed filter、查询元数据自洽校验、offset/limit 分页、bytes 提前截页、revision 漂移提示与 `get`。
@@ -1136,7 +1138,7 @@ pi --no-session -p --mode json --thinking off \
 
 ### 工程证据
 
-- [x] `todo/npm run check` 与 59 个 package tests 通过；`plan/npm run check` 与 60 个 package tests 通过；
+- [x] `todo/npm run check` 与 59 个 package tests 通过；`plan/npm run check` 与 66 个 package tests 通过；
 - [x] Plan/Goal/Request coexistence suite 覆盖双加载顺序、各 Plan phase、provider selection、exact decoding、managed update/reload/restore/close、provider outage 与 terminal cleanup failure；Todo integration suite 覆盖 service/tool 同 board、v2 persistence/restart、validation、abort、Plan gate 与 future-version barrier；
 - [x] CI matrix 和全局链接管理器包含 Todo；
 - [x] 真实 Pi + OpenAI strict-schema isolated JSON lifecycle 完成 init → read → 三次 done → nullable 全字段 view → settled；5 次 Todo tool execution 均成功、未使用字段实际为 `null`、最终 counts 为 3 completed / 0 open / 0 blocked / 0 dropped，模型只输出 `REAL_TODO_SERVICE_OK`；第二轮未点名 `todo`，模型仅凭 tool metadata 主动建立并完成三项 board，输出 `GLOBAL_TODO_AWARE_OK`；TUI/reload/branch/compact/Plan gate 由 extension harness 验证；
@@ -1169,6 +1171,7 @@ pi --no-session -p --mode json --thinking off \
 - [上下文、会话与记忆](03-context-and-sessions.md)
 - [扩展系统设计](04-extension-system.md)
 - [生产级最佳实践](07-production-checklist.md)
+- [跨扩展通用协议](09-cross-extension-protocols.md)
 - [Plan README](../../plan/README.md)
 - [Goal README](../../goal/README.md)
 - [Request README](../../request/README.md)

@@ -397,7 +397,10 @@ flowchart LR
 | Active tools | snapshot 写回误删他人 | Set merge；暂时接管用 lease |
 | System prompt | 顺序覆盖 | 局部、幂等、有标记的链式修改 |
 | `context` Hook | 双方裁剪同一消息 | 小范围变换、记录顺序假设、集成测试 |
-| Event channel | payload 漂移 | 版本名 + unknown parser |
+| Event channel | payload 漂移、误把瞬时事件当 durable state | 版本名 + unknown parser；持久事实另写 journal |
+| 单接收者 service | provider 缺失/重复、已接受请求悬挂 | 同步 `accept()` + 一次性 `resolve/reject()` + timeout/abort |
+| Provider discovery | duplicate ID、加载顺序决定 owner、执行中换主 | 同步 `offer()` + ID/priority 确定性选择 + 持久 owner |
+| State broadcast | foreign session、晚 ready、EventBus 不 replay | sessionId + lifecycle 重发 + receiver cache/reconcile |
 | UI status/widget | key 冲突 | package 前缀 key |
 | UI method wrapper | shutdown 恢复错误 | identity check，only restore what you own |
 | 外部进程 | 同服务重复启动 | shared manager/port ownership/lock |
@@ -414,10 +417,22 @@ flowchart TB
     B --> Ownership --> Shared
 ```
 
+### 协议模式
+
+- [ ] 已明确选择 request/response、provider discovery 或 state broadcast，没有用一个万能 envelope 混合不同 owner 语义。
+- [ ] `pi.events.emit()` 返回前需要完成的 `accept()`/`offer()` 位于 listener 同步路径，不在第一次 `await` 之后。
+- [ ] Caller 不依赖 listener `throw` 穿透 EventBus；异步成功/失败由显式 completion callback 结算。
+- [ ] 单接收者协议在 missing receiver 时立即失败，在 accepted-but-never-settled 时有 timeout/AbortSignal。
+- [ ] 会驱动持久 mutation、权限或 ownership 的 response 经过 caller-side exact decoder，并关联原 request/session/execution。
+- [ ] Broadcast 不被当作事实源；sender 在 branch restore 后重发 snapshot，receiver 能处理自己尚未 session-ready 时的早到信号。
+- [ ] Provider 首次缺失时的 fallback 与 owner 选定后的 outage 分开定义，不能在执行中静默换主。
+
+完整模式、Todo/Request 实现与 EventBus 同步边界见 [09 · 跨扩展通用协议](09-cross-extension-protocols.md)。
+
 ### 加载顺序
 
 - [ ] 若行为依赖顺序，在文档和测试中明确；能消除则消除。
-- [ ] Handler 对其他扩展缺失、晚加载、reload 都安全。
+- [ ] Handler 对其他扩展缺失、尚未 session-ready、reload 都安全。
 - [ ] 不使用跨目录生产 import 强迫两个独立 package 耦合。
 - [ ] 协议改变同时更新所有发送方/接收方和 coexistence suite。
 - [ ] Extension 卸载后不留下 active tool、listener、widget 或进程。

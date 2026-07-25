@@ -3,7 +3,30 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadConfig, lspConfigPaths } from "../src/config.ts";
+import { loadConfig, lspConfigPaths, matchingServers } from "../src/config.ts";
+import type { LspConfig, ServerConfig } from "../src/types.ts";
+
+function configuredServer(id: string, extensions: Record<string, string>): ServerConfig {
+  return {
+    id,
+    command: ["fake-lsp"],
+    extensions,
+    rootMarkers: [],
+    roles: ["navigation", "diagnostics", "actions"],
+    priority: 1,
+  };
+}
+
+function testConfig(servers: ServerConfig[]): LspConfig {
+  return {
+    idleTimeoutMs: 0,
+    requestTimeoutMs: 1_000,
+    diagnosticsSettleMs: 0,
+    maxResults: 100,
+    servers,
+    loadedFrom: [],
+  };
+}
 
 test("lspConfigPaths uses injected Pi global and project directory names", () => {
   assert.deepEqual(
@@ -60,4 +83,40 @@ test("loadConfig reports the malformed config source", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("matchingServers accepts a unique language ID as a server selector", () => {
+  const servers = matchingServers(
+    testConfig([configuredServer("jdtls", { ".java": "java" })]),
+    "/workspace/Main.java",
+    "navigation",
+    "java",
+  );
+  assert.deepEqual(servers.map((server) => server.id), ["jdtls"]);
+});
+
+test("matchingServers prioritizes exact IDs and rejects ambiguous language IDs", () => {
+  const exact = matchingServers(
+    testConfig([
+      configuredServer("jdtls", { ".java": "java" }),
+      configuredServer("java", { ".java": "java" }),
+    ]),
+    "/workspace/Main.java",
+    "navigation",
+    "java",
+  );
+  assert.deepEqual(exact.map((server) => server.id), ["java"]);
+
+  assert.throws(
+    () => matchingServers(
+      testConfig([
+        configuredServer("jdtls", { ".java": "java" }),
+        configuredServer("eclipse-jdt", { ".java": "java" }),
+      ]),
+      "/workspace/Main.java",
+      "navigation",
+      "java",
+    ),
+    /LSP language id java is ambiguous.*(?:jdtls, eclipse-jdt|eclipse-jdt, jdtls)/,
+  );
 });

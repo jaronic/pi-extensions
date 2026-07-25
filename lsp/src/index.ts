@@ -59,7 +59,7 @@ const Parameters = Type.Object({
   symbol: Type.Optional(Type.String({ minLength: 1, description: "Exact symbol used to resolve a position when line is omitted" })),
   query: Type.Optional(Type.String({ description: "Workspace symbol query" })),
   newName: Type.Optional(Type.String({ minLength: 1, description: "New symbol name for rename_preview" })),
-  server: Type.Optional(Type.String({ minLength: 1, description: "Configured server id" })),
+  server: Type.Optional(Type.String({ minLength: 1, description: "Configured server ID or unique language ID (for example, java selects jdtls)" })),
   severity: Type.Optional(StringEnum(SEVERITIES)),
   includeDeclaration: Type.Optional(Type.Boolean({ description: "Include declarations in references; defaults to true" })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, description: "Maximum formatted results" })),
@@ -108,6 +108,7 @@ export default function lspExtension(pi: ExtensionAPI): void {
     promptGuidelines: [
       "Use lsp for semantic definitions, references, type information, diagnostics, and symbol-aware rename previews.",
       "Use lsp action=diagnostics after meaningful edits when a matching language server is installed.",
+      "Usually omit server. When selecting one, use its configured ID or a unique language ID such as java for jdtls.",
       "lsp line and column inputs are 1-based; use symbol only when it has one unambiguous occurrence in the file.",
     ],
     parameters: Parameters,

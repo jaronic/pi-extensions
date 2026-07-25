@@ -114,3 +114,13 @@ test("ServerManager falls through unsupported capabilities", async (context) => 
   const routed = await manager.clientForAction(file, "hover");
   assert.equal(routed.server.id, "working");
 });
+
+test("ServerManager accepts a unique language ID for workspace symbols", async (context) => {
+  const { root } = await workspace(context);
+  const javaServer = { ...server("jdtls", "normal"), extensions: { ".java": "java" } };
+  const manager = new ServerManager(root, config([javaServer]));
+  context.after(async () => await manager.shutdown());
+  const clients = await manager.workspaceClients("java");
+  assert.equal(clients.length, 1);
+  assert.equal(clients[0].server.id, "jdtls");
+});

@@ -220,10 +220,10 @@ export function registerTodoTool(pi: ExtensionAPI, runtime: TodoToolRuntime): vo
     name: "todo",
     label: "Todo",
     description:
-      "Use the globally available Todo execution ledger for non-trivial work on the current session branch. It exposes stable task IDs to the model and a versioned service to other extensions; it is not Plan approval, Goal completion, or a project backlog.",
-    promptSnippet: "Use the global Todo tool to track a non-trivial branch-local checklist with one active task",
+      "Use the globally available Todo execution ledger only for branch-local work that has entered execution after scope is understood, or when the user explicitly asks to track a checklist. It exposes stable task IDs to the model and a versioned service to other extensions; it is not Plan approval, Goal completion, or a project backlog.",
+    promptSnippet: "Track an execution-ready branch-local checklist with one active task",
     promptGuidelines: [
-      "The todo tool is globally available for branch-local execution tracking whenever no stricter tool lease hides it.",
+      "Use the todo tool for branch-local execution tracking only after work has entered execution or the user explicitly requests Todo tracking.",
       ...TODO_PROMPT_GUIDELINES,
     ],
     parameters: TodoParams,

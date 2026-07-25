@@ -203,16 +203,32 @@ export async function loadConfig(
 }
 
 export function matchingServers(config: LspConfig, file: string, role: ServerRole, requestedId?: string): ServerConfig[] {
+  const selectedId = requestedId ? serverIdForSelector(config, requestedId, role, file) : undefined;
   const candidates = config.servers.filter((server) => {
-    if (requestedId && server.id !== requestedId) return false;
+    if (selectedId && server.id !== selectedId) return false;
     return server.roles.includes(role) && languageIdForFile(server, file) !== undefined;
   });
-  if (requestedId && candidates.length === 0) {
-    const known = config.servers.find((server) => server.id === requestedId);
+  if (selectedId && candidates.length === 0) {
+    const known = config.servers.find((server) => server.id === selectedId);
     if (!known) throw new Error(`Unknown LSP server: ${requestedId}`);
-    throw new Error(`LSP server ${requestedId} does not handle ${file} for role ${role}`);
+    throw new Error(`LSP server ${selectedId} does not handle ${file} for role ${role}`);
   }
   return candidates;
+}
+
+export function serverIdForSelector(config: LspConfig, selector: string, role: ServerRole, file?: string): string {
+  if (config.servers.some((server) => server.id === selector)) return selector;
+  const candidates = config.servers.filter((server) => {
+    if (!server.roles.includes(role)) return false;
+    return file
+      ? languageIdForFile(server, file) === selector
+      : Object.values(server.extensions).includes(selector);
+  });
+  if (candidates.length === 1) return candidates[0].id;
+  if (candidates.length > 1) {
+    throw new Error(`LSP language id ${selector} is ambiguous for role ${role}; use one of: ${candidates.map((server) => server.id).join(", ")}`);
+  }
+  return selector;
 }
 
 export function languageIdForFile(server: ServerConfig, file: string): string | undefined {

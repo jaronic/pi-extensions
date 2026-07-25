@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  TODO_PROMPT_GUIDELINES,
   todoPromptContainsClosedText,
   todoSystemPrompt,
 } from "../src/prompts.ts";
@@ -20,6 +21,15 @@ test("prompt is absent without an active or blocked board", () => {
   const settled = transitionTodo(initial, { op: "done", id: 1 }, 11, () => BOARD).state;
   assert.ok(settled);
   assert.equal(todoSystemPrompt(settled), undefined);
+});
+
+test("static guidance defers board creation until execution is justified", () => {
+  const guidance = TODO_PROMPT_GUIDELINES.join("\n");
+  assert.match(guidance, /only once work has entered execution/);
+  assert.match(guidance, /after investigation has established three or more independent, verifiable execution steps/);
+  assert.match(guidance, /Do not create a board solely because a request contains a list/);
+  assert.match(guidance, /Initialize only before the first tracked execution step/);
+  assert.doesNotMatch(guidance, /whenever the user provides a list/);
 });
 
 test("active prompt contains bounded open state, exact counts, and no closed task text", () => {

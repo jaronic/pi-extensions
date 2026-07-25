@@ -328,28 +328,39 @@ Tradeoff：共享集合没有事务和所有权元数据，租约只能通过“
 
 ## 8. 跨扩展通信：版本化事件，不偷渡生产依赖
 
-Plan 和 Goal 独立安装，因此生产代码不应 `import ../../plan/src/...`。它们通过进程内事件总线通信：
+Plan、Goal、Todo、Request 都可独立安装，因此生产代码不应通过 `../../other-extension/src/...` 获得可选能力。它们共享的是同一个进程内 `pi.events`，并在其上定义三种不同协议：
+
+| 模式 | 当前实例 | 关键握手 |
+| --- | --- | --- |
+| 单接收者 request/response | Todo service、Request UI | listener 同步 `accept()`；完成时 `resolve/reject()` |
+| 多 provider discovery | Plan execution progress | provider 同步 `offer()`；consumer 校验、去重、排序和选主 |
+| 单向 state broadcast | Plan phase → Goal/Todo | sender 发 immutable snapshot；consumer 按 session 校验和 reconcile |
+
+Plan phase 广播是第三种模式：
 
 ```mermaid
 flowchart LR
     Plan[Plan extension]
     Channel[pi-extensions:plan-state:v1]
     Goal[Goal extension]
+    Todo[Todo extension]
 
-    Plan -->|emit snapshot| Channel -->|unknown → validate| Goal
-    Goal -->|控制消息/状态| Channel -->|unknown → validate| Plan
+    Plan -->|emit snapshot| Channel
+    Channel -->|unknown → validate| Goal
+    Channel -->|unknown → validate| Todo
 ```
 
 协议字段包含 `version`、`sessionId`、phase、readOnly、awaitingApproval、是否会触发 turn 与 reason。设计规则：
 
-1. channel 名带 owner/capability/version，例如 `<owner>:<capability>:vN`；
-2. 接收 payload 一律视为 `unknown`，严格校验；
-3. 发送不可变 snapshot，不暴露内部可变对象；
-4. 接收方缺失或加载顺序不同必须安全；
-5. `session_start` / `session_tree` 重新广播，使晚到者恢复；
-6. 协议变化同时更新两端和 coexistence test。
+1. channel 名带 namespace/capability/version，例如 `pi-extensions:<capability>:vN`；
+2. 接收 payload 一律视为 `unknown`，验证 discriminant、字段、上限与 session identity；
+3. 发送 immutable snapshot，不暴露内部可变状态；
+4. EventBus `emit()` 不等待异步 listener，因此 `accept()`/`offer()` 必须同步完成，异步结果走显式 completion callback；
+5. 接收方缺失或加载顺序不同必须有明确 fail/fallback 语义；
+6. Bus 不 replay；当前状态要在 `session_start` / `session_tree` 重发，早到信号要按 session 缓存后 reconcile；
+7. 协议变化同时更新所有发送方、接收方和 coexistence tests。
 
-Tradeoff：事件总线保持包独立，却没有编译期跨包契约。复制两份协议定义是有意的隔离，也意味着测试是防漂移的必要成本。
+Tradeoff：事件总线保持包独立，却没有编译期跨包契约，也不是持久 service registry。复制最小 wire type 是有意隔离；runtime decoder 与跨包测试是防漂移成本。Todo/Request 的完整 request envelope、provider 选择与加载顺序分析见 [09 · 跨扩展通用协议](09-cross-extension-protocols.md)。
 
 ## 9. 长生命周期资源：懒加载、去重、按 cwd 轮换、有界关闭
 
@@ -453,7 +464,7 @@ Extension 作者至少要保证：
 - 无 UI 时危险动作 fail closed；
 - 真正不可信工作放在外部 sandbox，最小化挂载、凭据和网络。
 
-## 12. 六个本仓库扩展如何对应控制面
+## 12. 七个本仓库扩展如何对应控制面
 
 ```mermaid
 flowchart TB
@@ -463,6 +474,7 @@ flowchart TB
     LSP[lsp<br/>配置路由 + 子进程 + 有界输出]
     Request[request<br/>共享 UI adapter + 串行 dialog + 协议]
     Todo[todo<br/>branch 执行账本 + bounded snapshot + Plan gate]
+    Promptline[promptline-editor<br/>自定义 editor + 状态条 + Git watcher]
 
     RG --> Tools[工具控制]
     Plan --> Tools
@@ -471,21 +483,26 @@ flowchart TB
     Plan --> UI[交互]
     Goal --> UI
     Request --> UI
+    Promptline --> UI
     LSP --> Resource[长生命周期资源]
-    Plan <--> Protocol[跨扩展协议] <--> Goal
+    Promptline --> Resource
+    Plan --> Protocol[跨扩展协议]
+    Goal --> Protocol
+    Request --> Protocol
+    Todo --> Protocol
     Todo --> State
     Todo --> UI
-    Todo --> Protocol
 ```
 
 | 扩展 | 最值得学习的设计点 | 容易抄错的地方 |
 | --- | --- | --- |
 | RG | 基于当前 active set 重排，不重建全局集合 | 把 `grep` 永久删除而不尊重其他扩展 |
-| Plan | planning/approval/executing 状态机与 tool gate | 只靠 prompt 声称“只读” |
+| Plan | planning/blocked/approval/executing 状态机与 tool gate | 只靠 prompt 声称“只读” |
 | Goal | `agent_settled` continuation 与空转保护 | 在 `agent_end` 重入新 run |
 | LSP | lazy manager、cwd 路由、取消/超时/清理 | factory 启进程或无限返回 diagnostics |
 | Request | UI method 适配、串行协调、headless 语义 | 并发 overlay、shutdown 恢复他人 wrapper |
 | Todo | 稳定 ID、纯 reducer、mixed-carrier branch replay 与单一活动项 | 用 prompt 代替状态机、复制 Plan steps 或把项目文件当事实源 |
+| Promptline Editor | 用 host theme/status/footer data 组合 editor，并监视 linked-worktree `HEAD` | 硬编码 palette、覆盖 footer 状态源或忘记关闭 watcher |
 
 ## 13. Extension 的主要 Tradeoff
 
@@ -523,4 +540,6 @@ Extension API 的本质是一个**进程内 Harness 控制平面**。它强大�
 - [本仓库 LSP README](../../lsp/README.md)
 - [本仓库 Request README](../../request/README.md)
 - [本仓库 Todo README](../../todo/README.md)
+- [本仓库 Promptline Editor README](../../promptline-editor/README.md)
+- [跨扩展通用协议](09-cross-extension-protocols.md)
 - [上一篇：上下文、会话与记忆](03-context-and-sessions.md) · [下一篇：社区生态与衍生 Agent](05-ecosystem-and-agents.md)

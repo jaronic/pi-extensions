@@ -13,6 +13,7 @@
 - diagnostics 对所有匹配服务器并行请求，保留成功结果并单独报告局部失败。
 - `edit`/`write` 工具成功后，已启动且覆盖该文件的 client 会同步最新磁盘内容。
 - 工具运行时 TUI status 显示当前 action；`/lsp` 显示已配置和活跃的 client。
+- `server` 通常应省略；指定时优先按配置的 server ID 路由。若没有同名 ID，唯一的 LSP language ID 也可作为别名，例如 `java` 解析为 `jdtls`；多个候选会明确报歧义，不会任意选择。
 - 输出受 Pi 的 2,000 行/50 KiB 上限约束；截断时完整格式化结果写入权限为 `0600` 的临时文件，并在 session reload/shutdown 时清理。
 - 所有 file action 都将 realpath 限制在当前 workspace 内，符号链接不能绕过边界。
 
@@ -202,7 +203,7 @@ Server patch 除 `initOptions` 外是浅合并。修改嵌套对象时应提供�
 ## 路由与进程生命周期
 
 1. `src/config.ts` 合并内置、全局、可信项目配置，并按 priority 排序。
-2. file action 先 realpath 校验 workspace 边界，再根据 suffix + role 选候选 server。
+2. file action 先 realpath 校验 workspace 边界，再根据 suffix + role 选候选 server。`server` 参数优先匹配配置 ID；没有同名 ID 时，可用唯一 language ID（如 `java`）选择其对应 server。
 3. `src/server-manager.ts` 为候选计算 workspace root，按需启动 `LspClient`；启动失败或未声明 capability 时尝试下一候选。显式指定 `server` 时不 fallback 到其他 ID。
 4. `src/lsp-client.ts` 用 stdio JSON-RPC initialize，跟踪 document version/position encoding，转发取消信号、收集有限 stderr，并在超时、进程退出或 shutdown 时清理 pending request。
 5. diagnostics 是例外：所有匹配 diagnostics server 并行运行；只有全部失败时工具整体失败。

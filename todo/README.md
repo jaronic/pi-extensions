@@ -10,12 +10,12 @@
 
 Todo 适合以下工作：
 
-- 用户明确给出多个待办事项；
-- 一项工作包含三个以上独立步骤；
+- 已经过调查确认范围，并能列出三个以上彼此独立、可验证的执行步骤；
+- 用户明确要求 Todo 跟踪，或明确给出至少三个需要完成的执行事项；
 - 执行中需要跨 turn、compaction、reload 或 branch navigation 保留精确进度；
 - 用户希望在 TUI 中持续看到当前项、剩余项和 blocker。
 
-单步修改和纯问答不应创建看板。Todo 也不替代团队 backlog、长期项目管理或跨 session 同步。
+仅包含需求、示例、问题、选项或假设的列表不应触发看板；先调查或澄清，确定进入执行后再创建。单步修改和纯问答不应创建看板。Todo 也不替代团队 backlog、长期项目管理或跨 session 同步。
 
 启用后：
 
@@ -61,6 +61,8 @@ pi --no-session --extension ./src/index.ts
 插件注册一个 `todo` 工具，以 `op` 区分操作：
 
 `pi.registerTool()` 使当前 active tool schema、description、`promptSnippet` 和 `promptGuidelines` 进入模型边界；Todo 不额外调用 `setActiveTools()`，因此不会覆盖其他扩展的工具集合。Plan 等显式 lease 仍可按自身安全阶段暂时隐藏 `todo`：Plan 的只读 planning/approval 阶段不暴露 mutation-capable Todo，执行期由 `update_plan_step` 更新唯一 managed owner。退出 lease 后由所有者恢复原工具集。
+
+普通 Todo 只应在工作已进入执行、用户明确要求追踪，或用户明确给出至少三个执行事项时初始化；列表本身不是充分条件。对需求、示例、问题、选项或假设先调查或澄清，确认可执行范围后再建板。
 
 | `op` | 必填字段 | 行为 |
 | --- | --- | --- |

@@ -72,6 +72,7 @@ flowchart TB
 | [06 · 扩展可玩性攻略](06-extension-playbook.md) | 从零配置到领域 Agent 应该按什么顺序玩；有哪些可复用配方 | 选型决策树、能力阶梯、组合玩法、代码骨架 |
 | [07 · 生产级最佳实践](07-production-checklist.md) | 状态、并发、取消、安全、输出、UI、测试和发布有哪些硬约束 | 威胁模型、测试分层、反模式对照、检查表 |
 | [08 · Todo 扩展实现](08-todo-extension-design.md) | Pi 怎样用 branch-aware 状态机可靠追踪拆分任务、进度、阻塞与完成 | 状态机、原子提交、Plan 共存、验证矩阵 |
+| [09 · 跨扩展通用协议](09-cross-extension-protocols.md) | Todo、Request 等通用能力怎样被其他 extension 调用、发现和感知；EventBus 的同步边界是什么 | Request/response、provider discovery、state broadcast、UI adapter |
 
 已有的 [Pi 插件开发参考与最佳实践](../pi-extension-development.md) 是 API/工程速查；本系列专注设计原理和选择依据，两者互补。
 
@@ -81,15 +82,15 @@ flowchart TB
 flowchart LR
     Start{你想解决什么?}
     Start -->|理解 Pi| A[01 哲学] --> B[02 运行时] --> C[03 上下文与会话]
-    Start -->|开发扩展| D[04 扩展系统] --> E[06 玩法] --> F[07 生产检查]
+    Start -->|开发扩展| D[04 扩展系统] --> P[09 跨扩展协议] --> E[06 玩法] --> F[07 生产检查]
     Start -->|构建新 Agent 产品| B --> G[05 生态与衍生 Agent] --> E
 ```
 
 - 第一次接触 Pi：按 `01 → 02 → 03 → 04` 阅读。
-- 已经会写 extension：先看 `04 → 06 → 07`，再用 `02/03` 解释边界问题。
+- 已经会写 extension：先看 `04 → 09 → 06 → 07`，再用 `02/03` 解释边界问题。
 - 在评估 Agent 基座：重点看 `01 → 02 → 05`，尤其是 extension、SDK、fork 的分界。
 
-## 先记住的七个结论
+## 先记住的八个结论
 
 1. **Pi 的核心产品是控制权。** 最小 prompt 和默认四工具不是为了炫耀代码少，而是减少隐藏上下文和行为漂移。
 2. **Agent 的主循环很小，复杂度主要在边界。** Provider 差异、消息转换、工具错误、取消、会话恢复、UI 与扩展协作远比 `while (toolCalls)` 难。
@@ -98,6 +99,7 @@ flowchart LR
 5. **进程内扩展是高能力、低隔离的交换。** 它能修改工具、prompt、Provider、会话和 UI，也与 Pi 进程拥有相同权限和故障域。
 6. **权限提示不是沙箱。** Project trust 只保护动态资源加载；真正隔离必须由容器、VM、micro-VM 或 OS policy 提供。
 7. **Pi 的最小主义不是功能冻结。** 早期没有 compaction 和工具结果流；0.81.1 已有压缩、并行工具、settled 生命周期和更强 Harness 语义，但 plan/sub-agent/MCP 仍留给扩展生态。
+8. **跨扩展“感知”不是自动依赖注入。** `pi.events` 只是同进程 EventBus；request 仲裁、provider 发现、状态重发、版本校验和持久恢复都必须由协议显式实现。
 
 ## 证据与解读约定
 
@@ -123,6 +125,9 @@ flowchart LR
 | Skill | 按需加载的工作说明，可带参考文件、脚本和资产，不常驻执行 |
 | `content` | Tool result 中送入 LLM 上下文的有界内容 |
 | `details` | Tool result 中供 UI、状态恢复或机器消费的结构化数据 |
+| Event channel | `pi.events` 上带 namespace/version 的进程内通信名称；Bus 本身不持久、不 replay |
+| Envelope | 在裸事件 payload 上补充 version、kind、仲裁和 completion callback 的 wire object |
+| Provider | 经 discovery offer 能力并由 consumer 确定性选择的同进程实现 |
 
 ## 主要一手资料
 

@@ -1,5 +1,5 @@
 import { relative } from "node:path";
-import { languageIdForFile, matchingServers } from "./config.ts";
+import { languageIdForFile, matchingServers, serverIdForSelector } from "./config.ts";
 import { LspClient } from "./lsp-client.ts";
 import { findWorkspaceRoot, isWithin } from "./roots.ts";
 import type { ClientStatus, LspAction, LspConfig, ServerConfig, ServerRole } from "./types.ts";
@@ -94,11 +94,12 @@ export class ServerManager {
 
   async workspaceClients(requestedServer?: string): Promise<LspClient[]> {
     if (requestedServer) {
-      const server = this.config.servers.find((candidate) => candidate.id === requestedServer);
+      const selectedId = serverIdForSelector(this.config, requestedServer, "navigation");
+      const server = this.config.servers.find((candidate) => candidate.id === selectedId);
       if (!server) throw new Error(`Unknown LSP server: ${requestedServer}`);
-      if (!server.roles.includes("navigation")) throw new Error(`LSP server ${requestedServer} is not configured for navigation`);
+      if (!server.roles.includes("navigation")) throw new Error(`LSP server ${server.id} is not configured for navigation`);
       const client = await this.getOrStart(server, this.cwd);
-      if (!client.supports("workspace_symbols")) throw new Error(`LSP server ${requestedServer} does not advertise workspace symbols`);
+      if (!client.supports("workspace_symbols")) throw new Error(`LSP server ${server.id} does not advertise workspace symbols`);
       return [client];
     }
     const active = [...this.clients.entries()]
