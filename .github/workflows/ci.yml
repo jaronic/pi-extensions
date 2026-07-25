@@ -27,7 +27,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        extension: [goal, plan, lsp, request, rg, todo]
+        include:
+          - extension: goal
+            testDependencies: ""
+          - extension: plan
+            testDependencies: goal
+          - extension: lsp
+            testDependencies: ""
+          - extension: request
+            testDependencies: goal
+          - extension: rg
+            testDependencies: ""
+          - extension: todo
+            testDependencies: "goal plan request"
     defaults:
       run:
         working-directory: ${{ matrix.extension }}
@@ -39,5 +51,10 @@ jobs:
           cache: npm
           cache-dependency-path: ${{ matrix.extension }}/package-lock.json
       - run: npm ci
+      - if: matrix.testDependencies != ''
+        run: |
+          for dependency in ${{ matrix.testDependencies }}; do
+            (cd "../$dependency" && npm ci)
+          done
       - run: npm run check
       - run: npm test
