@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createGrepToolDefinition } from "@earendil-works/pi-coding-agent";
+import { renderGrepOutput } from "./result-renderer.ts";
 
 const grepDefinition = createGrepToolDefinition(process.cwd());
 
@@ -30,6 +31,13 @@ export default function rgExtension(pi: ExtensionAPI): void {
       const definition = createGrepToolDefinition(ctx.cwd);
       return definition.execute(toolCallId, params, signal, onUpdate, ctx);
     },
+    renderResult(result, { expanded }, theme, context) {
+      const output = result.content
+        .filter((content) => content.type === "text")
+        .map((content) => content.text)
+        .join("");
+      return renderGrepOutput(output, { expanded, isError: context.isError }, theme);
+    }
   });
 
   const applyPriority = (): void => {
