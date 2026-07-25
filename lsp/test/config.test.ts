@@ -120,3 +120,24 @@ test("matchingServers prioritizes exact IDs and rejects ambiguous language IDs",
     /LSP language id java is ambiguous.*(?:jdtls, eclipse-jdt|eclipse-jdt, jdtls)/,
   );
 });
+test("loadConfig rejects unknown properties, wrong types, and unsafe bounds", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-lsp-config-strict-"));
+  const path = join(root, "lsp.json");
+  const cases: Array<[unknown, RegExp]> = [
+    [{ maxReslts: 1 }, /unknown property maxReslts/],
+    [{ idleTimeoutMs: 2_147_483_648 }, /no greater than 2147483647/],
+    [{ maxResults: 501 }, /no greater than 500/],
+    [{ servers: { bad: { disabled: "false" } } }, /disabled must be a boolean/],
+    [{ servers: { bad: { env: ["TOKEN"] } } }, /env must be an object with string values/],
+    [{ servers: { bad: { priority: "high" } } }, /priority must be a finite number/],
+    [{ servers: { bad: { readyNotification: { method: "ready", typo: true } } } }, /unknown property typo/],
+  ];
+  try {
+    for (const [value, pattern] of cases) {
+      await writeFile(path, JSON.stringify(value));
+      await assert.rejects(loadConfig(join(root, "workspace"), false, { agentDir: root }), pattern);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -57,6 +57,9 @@ interface SyncOptions {
 const STDERR_LINES = 40;
 const SHUTDOWN_TIMEOUT_MS = 1_000;
 
+const EXIT_GRACE_MS = 250;
+const TERMINATE_GRACE_MS = 250;
+const KILL_GRACE_MS = 500;
 export class LspClient {
   readonly server: ServerConfig;
   readonly root: string;
@@ -97,18 +100,20 @@ export class LspClient {
     this.exited = exited;
     child.once("error", (error) => {
       this.exitDescription = error.message;
-      this.markClosed();
       markExited();
+      this.beginUnexpectedCleanup();
+      this.markClosed();
     });
     child.once("exit", (code, signal) => {
       this.exitDescription = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`;
-      this.markClosed();
       markExited();
+      this.beginUnexpectedCleanup();
+      this.markClosed();
     });
     child.stderr.on("data", (chunk: Buffer | string) => this.captureStderr(String(chunk)));
     this.registerServerHandlers();
     this.connection.onClose(() => {
-      if (!this.closing && child.exitCode === null && child.signalCode === null) child.kill();
+      this.beginUnexpectedCleanup();
       this.markClosed();
     });
     this.connection.onError(([error]) => {
@@ -124,6 +129,7 @@ export class LspClient {
       cwd: root,
       env: { ...process.env, ...server.env },
       stdio: ["pipe", "pipe", "pipe"],
+      detached: process.platform !== "win32",
     });
     const client = new LspClient(server, root, child, onClosed);
     try {
@@ -478,39 +484,90 @@ export class LspClient {
   }
 
   private async shutdownInternal(): Promise<void> {
-    if (this.stateValue !== "closed") {
-      for (const document of this.documents.values()) {
-        if (!document.opened) continue;
+    try {
+      if (this.stateValue !== "closed") {
+        for (const document of this.documents.values()) {
+          if (!document.opened) continue;
+          try {
+            await this.connection.sendNotification(DidCloseTextDocumentNotification.type, {
+              textDocument: { uri: document.uri },
+            });
+          } catch {
+            break;
+          }
+        }
         try {
-          await this.connection.sendNotification(DidCloseTextDocumentNotification.type, {
-            textDocument: { uri: document.uri },
-          });
+          await this.request<void>("shutdown", undefined, undefined, SHUTDOWN_TIMEOUT_MS);
         } catch {
-          break;
+          // The process may already be exiting.
+        }
+        try {
+          await this.connection.sendNotification(ExitNotification.type);
+        } catch {
+          // The connection may already be closed.
         }
       }
-      try {
-        await this.request<void>("shutdown", undefined, undefined, SHUTDOWN_TIMEOUT_MS);
-      } catch {
-        // The process may already be exiting.
-      }
-      try {
-        await this.connection.sendNotification(ExitNotification.type);
-      } catch {
-        // The connection may already be closed.
-      }
+      try { this.connection.end(); } catch {}
+      await Promise.race([this.exited, delay(EXIT_GRACE_MS)]);
+      await this.terminateProcessTree();
+    } finally {
+      this.markClosed();
     }
-    try { this.connection.end(); } catch {}
-    await Promise.race([this.exited, delay(500)]);
-    if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill();
-    this.markClosed();
   }
 
   private async forceClose(): Promise<void> {
-    try { this.connection.end(); } catch {}
-    if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill();
-    await Promise.race([this.exited, delay(250)]);
-    this.markClosed();
+    if (this.closing) return await this.closing;
+    this.closing = this.forceCloseInternal();
+    return await this.closing;
+  }
+
+  private async forceCloseInternal(): Promise<void> {
+    try {
+      try { this.connection.end(); } catch {}
+      await this.terminateProcessTree();
+    } finally {
+      this.markClosed();
+    }
+  }
+
+  private beginUnexpectedCleanup(): void {
+    if (this.closing || !processTreeIsRunning(this.child)) return;
+    this.closing = this.terminateProcessTree();
+    void this.closing.catch((error: unknown) => this.captureStderr(`Process cleanup: ${messageOf(error)}`));
+  }
+
+  private async terminateProcessTree(): Promise<void> {
+    const pid = this.child.pid;
+    if (pid === undefined) {
+      await this.waitForChildExit(TERMINATE_GRACE_MS);
+      return;
+    }
+    if (process.platform === "win32") {
+      if (childIsRunning(this.child)) {
+        try { this.child.kill(); } catch {}
+        await Promise.race([this.exited, delay(TERMINATE_GRACE_MS)]);
+      }
+      if (childIsRunning(this.child)) await killWindowsProcessTree(pid);
+      await this.waitForChildExit(KILL_GRACE_MS);
+      return;
+    }
+
+    signalUnixProcessGroup(pid, "SIGTERM");
+    await Promise.race([this.exited, delay(TERMINATE_GRACE_MS)]);
+    if (!unixProcessGroupExists(pid)) {
+      await this.waitForChildExit(EXIT_GRACE_MS);
+      return;
+    }
+    signalUnixProcessGroup(pid, "SIGKILL");
+    const deadline = Date.now() + KILL_GRACE_MS;
+    while (unixProcessGroupExists(pid) && Date.now() < deadline) await delay(25);
+    if (unixProcessGroupExists(pid)) throw new Error(`LSP server ${this.server.id} process group did not terminate`);
+    await this.waitForChildExit(EXIT_GRACE_MS);
+  }
+
+  private async waitForChildExit(timeoutMs: number): Promise<void> {
+    await Promise.race([this.exited, delay(timeoutMs)]);
+    if (childIsRunning(this.child)) throw new Error(`LSP server ${this.server.id} did not terminate`);
   }
 
   private markClosed(): void {
@@ -620,9 +677,50 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function childIsRunning(child: ChildProcessWithoutNullStreams): boolean {
+  return child.exitCode === null && child.signalCode === null;
+}
+
+function processTreeIsRunning(child: ChildProcessWithoutNullStreams): boolean {
+  const pid = child.pid;
+  if (process.platform === "win32" || pid === undefined) return childIsRunning(child);
+  return unixProcessGroupExists(pid);
+}
+
+function unixProcessGroupExists(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") return false;
+    if (code === "EPERM") return true;
+    throw error;
+  }
+}
+
+function signalUnixProcessGroup(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pid, signal);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ESRCH" && code !== "EPERM") throw error;
+  }
+}
+
+async function killWindowsProcessTree(pid: number): Promise<void> {
+  const killer = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  const { promise, resolve } = Promise.withResolvers<void>();
+  killer.once("error", () => resolve());
+  killer.once("exit", () => resolve());
+  await Promise.race([promise, delay(KILL_GRACE_MS)]);
+}
+
 function delay(ms: number): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
-  const timer = setTimeout(resolve, ms);
-  timer.unref();
+  setTimeout(resolve, ms);
   return promise;
 }

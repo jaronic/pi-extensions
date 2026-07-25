@@ -24,6 +24,7 @@ import {
   formatHover,
   formatLocations,
   formatWorkspaceEdit,
+  workspaceEditCount,
   formatWorkspaceSymbols,
   type SeverityFilter,
 } from "./format.ts";
@@ -327,12 +328,6 @@ function resultCount(value: unknown): number {
   return Array.isArray(value) ? value.length : 1;
 }
 
-function workspaceEditCount(edit: WorkspaceEdit | null): number {
-  if (!edit) return 0;
-  let count = edit.documentChanges?.length ?? 0;
-  for (const edits of Object.values(edit.changes ?? {})) count += edits.length;
-  return count;
-}
 
 function formatStatus(status: ReturnType<ServerManager["status"]>): string {
   const lines = [

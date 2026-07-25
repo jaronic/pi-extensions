@@ -20,6 +20,7 @@ export type {
   RequestQuestion,
   RequestTextQuestion,
 } from "./request.ts";
+export type { AskAnswerDetails, AskToolDetails } from "./tool.ts";
 
 export default function requestUIExtension(pi: ExtensionAPI): void {
   const coordinator = new RequestCoordinator();

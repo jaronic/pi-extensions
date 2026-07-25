@@ -4,13 +4,13 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import goalExtension from "../../goal/src/index.ts";
 import requestUIExtension from "../src/index.ts";
 import { requestFromUser } from "../src/protocol.ts";
-import type { RequestAnswer } from "../src/request.ts";
+import type { AskAnswerDetails } from "../src/tool.ts";
 import { requestFromExternalFixture } from "./external-fixture.ts";
 import { RequestHarness } from "./harness.ts";
 
 interface ToolResult {
   content: Array<{ type: string; text: string }>;
-  details: RequestAnswer | { results: RequestAnswer[] };
+  details: AskAnswerDetails | { results: AskAnswerDetails[] };
 }
 
 const YES_NO = [
@@ -40,7 +40,7 @@ test("ask tool matches the single-choice, multi-select, and Other interaction mo
     }],
   }) as ToolResult;
   assert.equal(single.content[0]?.text, "User selected: No");
-  assert.deepEqual((single.details as RequestAnswer).selectedOptions, ["No"]);
+  assert.deepEqual((single.details as AskAnswerDetails).selectedOptions, ["No"]);
   const firstFrame = harness.customFrames[0];
   assert.ok(firstFrame);
   assert.match(firstFrame.join("\n"), /Ask · SELECT ONE/);
@@ -62,7 +62,7 @@ test("ask tool matches the single-choice, multi-select, and Other interaction mo
       recommended: 0,
     }],
   }) as ToolResult;
-  assert.deepEqual((multiple.details as RequestAnswer).selectedOptions, ["Typecheck", "Tests"]);
+  assert.deepEqual((multiple.details as AskAnswerDetails).selectedOptions, ["Typecheck", "Tests"]);
 
   harness.queueDialog("\x1b[B", "\x1b[B", "\r", "c", "u", "s", "t", "o", "m", "\r");
   const custom = await harness.tool("ask", {
@@ -77,8 +77,6 @@ test("ask tool matches the single-choice, multi-select, and Other interaction mo
   }) as ToolResult;
   assert.deepEqual(custom.details, {
     id: "alternative",
-    question: "Choose an implementation.",
-    options: ["A", "B"],
     multi: false,
     selectedOptions: [],
     customInput: "custom",
@@ -92,6 +90,52 @@ test("ask tool matches the single-choice, multi-select, and Other interaction mo
   assert.match(renderedCall ?? "", /Ask 1 question/);
   assert.match(renderedCall ?? "", /\[deploy\]/);
   assert.match(renderedCall ?? "", /Proceed with the proposed behavior/);
+});
+
+test("single-choice Review replaces an option with Other instead of returning both", async () => {
+  const harness = new RequestHarness();
+  await startRequestExtension(harness);
+  harness.queueDialog(
+    "\r",
+    "\r",
+    "\x1b[A",
+    "\x1b[A",
+    "\r",
+    "\x1b[B",
+    "\x1b[B",
+    "\r",
+    "x",
+    "\r",
+    "\r",
+    "\r",
+  );
+
+  const result = await harness.tool("ask", {
+    questions: [
+      { id: "first", question: "First?", options: [{ label: "A" }, { label: "B" }], recommended: 0 },
+      { id: "second", question: "Second?", options: YES_NO, recommended: 0 },
+    ],
+  }) as ToolResult;
+
+  const details = result.details as { results: AskAnswerDetails[] };
+  assert.deepEqual(details.results[0], {
+    id: "first",
+    multi: false,
+    selectedOptions: [],
+    customInput: "x",
+  });
+});
+
+test("ask renderers neutralize unvalidated terminal control sequences", () => {
+  const harness = new RequestHarness();
+  requestUIExtension(harness.api);
+  const osc = "\u001b]52;c;UkVQUk9fT0s=\u0007";
+  const rendered = harness.getTool("ask").renderCall?.({
+    questions: [{ id: "unsafe", question: osc, options: [{ label: "Yes" }] }],
+  }, harness.ui.theme, { expanded: true }).render(80).join("\n") ?? "";
+
+  assert.equal(rendered.includes(osc), false);
+  assert.match(rendered, /�/);
 });
 
 test("multi-question requests navigate through Review and allow unanswered submission", async () => {

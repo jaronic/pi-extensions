@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import { appendFileSync, writeFileSync } from "node:fs";
 import {
   createMessageConnection,
   StreamMessageReader,
@@ -5,6 +7,22 @@ import {
 } from "vscode-jsonrpc/node";
 
 const mode = process.argv[2] ?? "normal";
+
+if (mode === "stubborn-tree") {
+  const pidPath = process.argv[3];
+  const heartbeatPath = process.argv[4];
+  if (!pidPath || !heartbeatPath) throw new Error("stubborn-tree mode requires PID and heartbeat paths");
+  const heartbeat = () => appendFileSync(heartbeatPath, `${process.pid}\n`);
+  process.on("SIGTERM", () => {});
+  const grandchild = spawn(process.execPath, [
+    "-e",
+    "const { appendFileSync } = require('node:fs'); const heartbeatPath = process.argv[1]; const heartbeat = () => appendFileSync(heartbeatPath, `${process.pid}\\n`); heartbeat(); setInterval(heartbeat, 10); process.on('SIGTERM', () => {});",
+    heartbeatPath,
+  ], { stdio: "ignore" });
+  heartbeat();
+  writeFileSync(pidPath, JSON.stringify({ parent: process.pid, grandchild: grandchild.pid }));
+  setInterval(heartbeat, 10);
+}
 const connection = createMessageConnection(
   new StreamMessageReader(process.stdin),
   new StreamMessageWriter(process.stdout),
@@ -115,14 +133,29 @@ connection.onRequest("textDocument/documentSymbol", ({ textDocument }) => [{
 }]);
 connection.onRequest("workspace/symbol", () => []);
 connection.onRequest("textDocument/codeAction", () => [{ title: "Synthetic action", kind: "quickfix" }]);
-connection.onRequest("textDocument/rename", ({ textDocument, newName }) => ({
-  changes: {
-    [textDocument.uri]: [
-      { range: { start: { line: 0, character: 4 }, end: { line: 0, character: 9 } }, newText: newName },
-      { range: { start: { line: 1, character: 0 }, end: { line: 1, character: 5 } }, newText: newName },
-    ],
-  },
-}));
-connection.onRequest("shutdown", () => mode === "ignore-shutdown" ? new Promise(() => {}) : null);
-connection.onNotification("exit", () => setImmediate(() => process.exit(0)));
+connection.onRequest("textDocument/rename", ({ textDocument, newName }) => {
+  if (mode === "many-rename") {
+    return {
+      documentChanges: [{
+        textDocument: { uri: textDocument.uri, version: 1 },
+        edits: Array.from({ length: 300 }, (_, index) => ({
+          range: { start: { line: index, character: 0 }, end: { line: index, character: 1 } },
+          newText: `${newName}${"x".repeat(220)}__TAIL_MARKER_${index}`,
+        })),
+      }],
+    };
+  }
+  return {
+    changes: {
+      [textDocument.uri]: [
+        { range: { start: { line: 0, character: 4 }, end: { line: 0, character: 9 } }, newText: newName },
+        { range: { start: { line: 1, character: 0 }, end: { line: 1, character: 5 } }, newText: newName },
+      ],
+    },
+  };
+});
+connection.onRequest("shutdown", () => mode === "ignore-shutdown" || mode === "stubborn-tree" ? new Promise(() => {}) : null);
+connection.onNotification("exit", () => {
+  if (mode !== "stubborn-tree") setImmediate(() => process.exit(0));
+});
 connection.listen();

@@ -143,6 +143,39 @@ const VALID_ROLES: Record<ServerRole, true> = {
   actions: true,
 };
 
+const MAX_TIMER_MS = 2_147_483_647;
+const MAX_CONFIG_RESULTS = 500;
+const RAW_CONFIG_KEYS = {
+  idleTimeoutMs: true,
+  requestTimeoutMs: true,
+  diagnosticsSettleMs: true,
+  maxResults: true,
+  servers: true,
+} satisfies Record<keyof RawLspConfig, true>;
+const SERVER_CONFIG_KEYS = {
+  command: true,
+  args: true,
+  fileTypes: true,
+  languageId: true,
+  extensions: true,
+  workspaceStorage: true,
+  rootMarkers: true,
+  roles: true,
+  priority: true,
+  env: true,
+  initOptions: true,
+  settings: true,
+  requestTimeoutMs: true,
+  diagnosticsSettleMs: true,
+  readyNotification: true,
+  disabled: true,
+} satisfies Record<keyof ServerConfigInput, true>;
+const READY_NOTIFICATION_KEYS: Record<string, true> = {
+  method: true,
+  field: true,
+  value: true,
+};
+
 export interface LspConfigPathOptions {
   agentDir?: string;
   projectConfigDirName?: string;
@@ -179,10 +212,10 @@ export async function loadConfig(
     if (raw.idleTimeoutMs !== undefined) idleTimeoutMs = nonNegativeInt(raw.idleTimeoutMs, `${path}: idleTimeoutMs`);
     if (raw.requestTimeoutMs !== undefined) requestTimeoutMs = positiveInt(raw.requestTimeoutMs, `${path}: requestTimeoutMs`);
     if (raw.diagnosticsSettleMs !== undefined) diagnosticsSettleMs = nonNegativeInt(raw.diagnosticsSettleMs, `${path}: diagnosticsSettleMs`);
-    if (raw.maxResults !== undefined) maxResults = positiveInt(raw.maxResults, `${path}: maxResults`);
+    if (raw.maxResults !== undefined) maxResults = positiveInt(raw.maxResults, `${path}: maxResults`, MAX_CONFIG_RESULTS);
     for (const [id, patch] of Object.entries(raw.servers ?? {})) {
       if (!patch || typeof patch !== "object") throw new Error(`${path}: server ${id} must be an object`);
-      if (patch.disabled) {
+      if (patch.disabled === true) {
         mergedServers.delete(id);
         continue;
       }
@@ -249,8 +282,7 @@ async function readConfig(path: string): Promise<RawLspConfig | undefined> {
   }
   try {
     const parsed: unknown = JSON.parse(text);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("root must be an object");
-    return parsed as RawLspConfig;
+    return decodeRawConfig(parsed);
   } catch (error) {
     throw new Error(`Invalid LSP config ${path}: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -326,8 +358,8 @@ function normalizeServer(id: string, value: ServerConfigInput): ServerConfig {
     extensions,
     rootMarkers: [...rootMarkers],
     roles: [...new Set(roles)],
-    priority: Number.isFinite(value.priority) ? Number(value.priority) : 0,
-    env: value.env ? { ...value.env } : undefined,
+    priority: value.priority ?? 0,
+    env: value.env === undefined ? undefined : { ...value.env },
     initializationOptions: value.initOptions,
     settings,
     requestTimeoutMs: value.requestTimeoutMs === undefined ? undefined : positiveInt(value.requestTimeoutMs, `LSP server ${id}: requestTimeoutMs`),
@@ -336,16 +368,84 @@ function normalizeServer(id: string, value: ServerConfigInput): ServerConfig {
   };
 }
 
+function decodeRawConfig(value: unknown): RawLspConfig {
+  if (!isRecord(value)) throw new Error("root must be an object");
+  assertKnownKeys(value, RAW_CONFIG_KEYS, "root");
+  if (value.servers !== undefined) {
+    if (!isRecord(value.servers)) throw new Error("servers must be an object");
+    for (const [id, patch] of Object.entries(value.servers)) validateServerPatch(patch, `server ${id}`);
+  }
+  return value as RawLspConfig;
+}
+
+function validateServerPatch(value: unknown, label: string): asserts value is ServerConfigInput {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  assertKnownKeys(value, SERVER_CONFIG_KEYS, label);
+  if (value.command !== undefined && typeof value.command !== "string") throw new Error(`${label}: command must be a string`);
+  validateStringArray(value.args, `${label}: args`);
+  validateStringArray(value.fileTypes, `${label}: fileTypes`);
+  validateStringArray(value.rootMarkers, `${label}: rootMarkers`);
+  if (value.languageId !== undefined && typeof value.languageId !== "string") throw new Error(`${label}: languageId must be a string`);
+  if (value.workspaceStorage !== undefined && typeof value.workspaceStorage !== "string") throw new Error(`${label}: workspaceStorage must be a string`);
+  validateStringRecord(value.extensions, `${label}: extensions`);
+  validateStringRecord(value.env, `${label}: env`);
+  if (value.settings !== undefined && !isRecord(value.settings)) throw new Error(`${label}: settings must be an object`);
+  if (value.roles !== undefined) {
+    if (!Array.isArray(value.roles) || value.roles.some((role) => typeof role !== "string" || !Object.hasOwn(VALID_ROLES, role))) {
+      throw new Error(`${label}: roles must contain only navigation, diagnostics, or actions`);
+    }
+  }
+  if (value.priority !== undefined && (typeof value.priority !== "number" || !Number.isFinite(value.priority))) {
+    throw new Error(`${label}: priority must be a finite number`);
+  }
+  if (value.disabled !== undefined && typeof value.disabled !== "boolean") throw new Error(`${label}: disabled must be a boolean`);
+  if (value.readyNotification !== undefined) validateReadyNotification(value.readyNotification, `${label}: readyNotification`);
+}
+
+function validateReadyNotification(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  assertKnownKeys(value, READY_NOTIFICATION_KEYS, label);
+  if (typeof value.method !== "string") throw new Error(`${label}.method must be a string`);
+  if (value.field !== undefined && typeof value.field !== "string") throw new Error(`${label}.field must be a string`);
+  const valueType = typeof value.value;
+  if (value.value !== undefined && value.value !== null && valueType !== "string" && valueType !== "number" && valueType !== "boolean") {
+    throw new Error(`${label}.value must be a JSON scalar`);
+  }
+}
+
+function validateStringArray(value: unknown, label: string): void {
+  if (value !== undefined && (!Array.isArray(value) || value.some((entry) => typeof entry !== "string"))) {
+    throw new Error(`${label} must be an array of strings`);
+  }
+}
+
+function validateStringRecord(value: unknown, label: string): void {
+  if (value === undefined) return;
+  if (!isRecord(value) || Object.values(value).some((entry) => typeof entry !== "string")) {
+    throw new Error(`${label} must be an object with string values`);
+  }
+}
+
+function assertKnownKeys(value: Record<string, unknown>, allowed: Record<string, true>, label: string): void {
+  for (const key of Object.keys(value)) {
+    if (!Object.hasOwn(allowed, key)) throw new Error(`${label} contains unknown property ${key}`);
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function positiveInt(value: unknown, label: string): number {
-  if (!Number.isInteger(value) || Number(value) <= 0) throw new Error(`${label} must be a positive integer`);
+function positiveInt(value: unknown, label: string, maximum = MAX_TIMER_MS): number {
+  if (!Number.isInteger(value) || Number(value) <= 0 || Number(value) > maximum) {
+    throw new Error(`${label} must be a positive integer no greater than ${maximum}`);
+  }
   return Number(value);
 }
 
-function nonNegativeInt(value: unknown, label: string): number {
-  if (!Number.isInteger(value) || Number(value) < 0) throw new Error(`${label} must be a non-negative integer`);
+function nonNegativeInt(value: unknown, label: string, maximum = MAX_TIMER_MS): number {
+  if (!Number.isInteger(value) || Number(value) < 0 || Number(value) > maximum) {
+    throw new Error(`${label} must be a non-negative integer no greater than ${maximum}`);
+  }
   return Number(value);
 }

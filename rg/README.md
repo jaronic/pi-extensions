@@ -1,18 +1,18 @@
 # RG 插件
 
-`rg` 为 Pi 注册一个 ripgrep 驱动的 `rg` 工具，并在 Pi 内建 `grep` 同时启用时把 `rg` 放到 `grep` 之前，明确引导 agent 优先使用更快的内容搜索入口。
+`rg` 为 Pi 注册一个 ripgrep 驱动的 `rg` 工具。它是 Pi 内建 `grep` execution path 的显式别名；两者同时启用时，扩展只向 agent 暴露 `rg`，避免重复 tool schema 和虚假的 fallback。
 
-它不会删除或替换 `grep`：`grep` 保留为 `rg` 不可用或调用失败时的 fallback。
+session shutdown 时扩展把自己占用的 active-tool 槽位恢复为 `grep`，因此 `/reload` 或卸载不会永久隐藏内建工具。
 
 > 维护约束：凡是改变 RG 的参数、搜索行为、工具优先级、事件接入、Pi 内建 grep 依赖、与其他扩展的工具协作或安装方式，都必须在同一改动中同步本 README。
 
 ## 效果
 
-- 注册名为 `rg` 的 Pi tool，schema 和执行语义直接复用当前 Pi 的 `createGrepToolDefinition`。
+- 注册名为 `rg` 的 Pi tool，schema、执行语义和 result renderer 直接复用当前 Pi 的 `createGrepToolDefinition`；call renderer 使用正确的 `rg` 标题。
 - 每次执行时用 `ctx.cwd` 重新创建 definition，搜索根目录始终跟随当前 Pi workspace，而不是启动扩展时的进程目录。
-- 在 `session_start` 与 `session_tree` 后调整 active tools：只有 `rg` 和 `grep` 都存在且顺序错误时才移动 `rg`。
-- 去除重复工具名，但保持所有无关工具的相对顺序。
-- prompt 明确要求“先 rg，rg 不可用或失败时才 grep”。
+- 在 `session_start` 与 `session_tree` 后折叠 active tools：`rg` 和 `grep` 同时存在时只保留一个 `rg`，且所有无关工具保持原相对顺序。
+- 在 `session_shutdown` 恢复被替换的 `grep`；若扩展没有执行过替换，或外部已恢复/移除相关工具，则不覆盖外部状态。
+- prompt 明确说明两者共享执行路径，同一失败请求不能通过改名为 `grep` 获得独立 fallback。
 - 搜索尊重 `.gitignore`，返回文件路径、行号和可选上下文；hidden 文件由底层 ripgrep 搜索规则处理。
 - 仅 TUI 与 HTML export 会将可识别的 `path:line: text` 和 `path-line- text` 结果按文件路径分组：每个文件路径显示一次，匹配行和 context 行缩进列在其下。
 - 模型可见的 tool result content、session 中持久化的 `GrepToolDetails` 与内建 grep 执行格式保持原样，仍是 Pi 提供的逐行 `path:line: text` 输出。
@@ -92,10 +92,10 @@ read, grep, lsp, rg, write
 扩展调整为：
 
 ```text
-read, rg, grep, lsp, write
+read, rg, lsp, write
 ```
 
-它只改变 `rg` 相对 `grep` 的位置。缺少任一工具时不插入新副本，也不移动 `lsp`、`todo`、`ask` 或其他工具。Plan 插件的 `planning`、`awaitingClarification`、`awaitingApproval` 只读 allowlist 同时允许 `rg` 和 `grep`，并维持 `rg` 优先，因此 Plan 调研阶段可继续使用该搜索工具。
+`replaceGrepWithRg()` 只在两个名称同时存在时折叠别名；只有 `grep` 或只有 `rg` 时保持该工具。Plan 的只读策略执行相同折叠，所以进入 planning/approval phase 不会重新引入重复 schema。扩展 shutdown 后，上例恢复为 `read, grep, lsp, write`。
 
 Goal、Todo 和 Request 不拥有或调用 RG；RG 也不调用 `pi-extensions:todo-service:v1`，不会根据搜索结果创建、完成或修改 Todo task。Goal continuation 及普通执行轮只在 `rg` 当前可见时使用它，任务进度与完成证据仍由对应 Goal/Plan/Todo 状态机显式提交。
 
@@ -109,13 +109,11 @@ RG 没有独立配置文件。可调行为全部来自每次 tool call 的参数
 
 运行时代码位于 `src/index.ts` 和 `src/result-renderer.ts`：
 
-- 模块加载时从 Pi factory 取得参数 schema，用于注册独立的 `rg` 工具。
+- 模块加载时从 Pi factory 取得参数 schema，用于注册 `rg` 工具。
 - `execute` 使用 `ctx.cwd` 创建新的内建 grep definition，并原样转发 `toolCallId`、参数、`AbortSignal`、update callback 与 context。
-- `renderResult` 仅连接 text content 并交给 `result-renderer.ts`；它不会改写 `execute()` 返回的内容或 details。
-- `formatGrepOutputForDisplay()` 只解析 Pi 当前的匹配/context 记录，按首次出现的文件路径分组；不认识的宿主输出直接回退原文。`renderGrepOutput()` 使用 host Theme token 着色，并按最终显示行应用 15 行 collapsed 上限。
-- `prioritizeRgOverGrep()` 是纯函数：Set 去重、条件移动 `rg`、不修改调用方数组。
-- `session_start` 和 `session_tree` 复用同一 `applyPriority`，保证新 session 和分支切换后顺序稳定。
-- `test/priority.test.ts` 验证顺序、不变性、fallback prompt、renderer 注册和 lifecycle hook；`test/result-renderer.test.ts` 验证分组、context、notice、raw/error fallback 与 collapsed/expanded 边界。真实搜索执行仍继承 Pi 内建 grep definition。
+- `replaceGrepWithRg()` 是纯函数：Set 去重、别名折叠、不修改调用方数组，且不重排无关工具。
+- `session_start` 和 `session_tree` 应用替换，`session_shutdown` 只恢复本扩展实际替换过的内建 `grep`。
+- `test/priority.test.ts` 验证折叠、不变性、真实 prompt、call/result renderer 和 lifecycle 恢复。真实搜索执行继承 Pi 内建 grep definition，升级 Pi host 后仍需执行 live smoke。
 
 ## 开发与验证
 

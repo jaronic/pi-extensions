@@ -60,20 +60,18 @@ Request 本身不分发、不选择、也不写入任何 theme；所有颜色只
 
 `i` 是可选的简短调用意图，只显示在 tool call 上下文中。`recommended` 只设置初始焦点并显示 `(Recommended)`，不会在用户确认前生成答案。
 
-单题成功时，tool `details` 直接返回一个 answer：
+单题成功时，tool `details` 直接返回一个紧凑 answer：
 
 ```ts
-interface RequestAnswer {
+interface AskAnswerDetails {
   id: string;
-  question: string;
-  options: string[];
   multi: boolean;
   selectedOptions: string[];
   customInput?: string;
 }
 ```
 
-多题成功时返回 `{ results: RequestAnswer[] }`，顺序与 questions 相同；Review 允许显式提交未回答问题，此时 `selectedOptions` 为空且没有 `customInput`。Esc、Ctrl+C、AbortSignal 或 timeout 取消 `ask` 时，tool call 以错误结束，不伪造用户选择。
+多题成功时返回 `{ results: AskAnswerDetails[] }`，顺序与 questions 相同。tool details 不重复保存原 question/options，并受 50 KiB 独立上限约束。版本化事件 API 的 `RequestDialogResult` 为兼容 v1 仍返回完整 `RequestAnswer`（包含 `question` 与 `options`）。Review 允许显式提交未回答问题，此时 `selectedOptions` 为空且没有 `customInput`。Esc、Ctrl+C、AbortSignal 或 timeout 取消 `ask` 时，tool call 以错误结束，不伪造用户选择。
 
 ## 交互模型
 
@@ -82,7 +80,7 @@ interface RequestAnswer {
 - `↑`/`↓` 移动选项；`Home`/`End` 跳到首尾。
 - 单选题用 `Enter` 确认当前项；多选题用 `Space` 切换当前项、`Enter` 进入下一题或 Review。
 - 聚焦选项时显示 description；有 preview 时只展开当前选项的 preview。
-- `Other` 用 `Enter` 打开文本编辑器；`Enter` 保存，Esc 返回选项列表。自定义答案最多 1,000 字符。
+- `Other` 用 `Enter` 打开文本编辑器；`Enter` 保存，Esc 返回选项列表。自定义答案最多 1,000 字符；单选题保存 Other 时会原子替换旧选项，不会同时返回两种互斥答案。
 - 多题用 `Tab`/`→` 前进、`Shift+Tab`/`←` 后退；顶部导航显示 active、answered 和 unanswered 状态。
 - Review 用 `↑`/`↓` 选择题目或 Submit；`Enter` 返回所选题编辑或提交整组答案。
 - 一般状态下 Esc/Ctrl+C 取消整次请求；文本型 native input 中也保持这一取消语义。
@@ -156,9 +154,10 @@ const result = await requestFromUser(pi, questions, {
 
 ## 输入边界与生命周期
 
-- request：最多 10 题、16 KiB 规范化 payload。
+- request：最多 10 题、16 KiB 规范化 payload；tool details 最多 50 KiB。
 - question：id 最多 64 字符，只接受字母数字开头及 `._-`；header 最多 80 字符；正文最多 1,000 字符。
 - option：每题最多 10 项；label 最多 160 字符且规范化后不得重复；description 最多 500 字符；preview 最多 4,000 字符。
+- header、id、label、placeholder 与 tool intent 必须为单行。所有外部展示文本拒绝终端控制字符和 Unicode 双向格式控制；Editor 自由文本在存储和渲染前把这些字符替换为可见的 `�`，不会原样写入终端。
 - answer：文本和 Other 最多 1,000 字符。
 - 非 TUI 模式下 `ask` 明确失败；native UI 不会在该模式安装 adapter；事件请求在没有 ready TUI session 时 reject。
 - 所有异步请求支持 abort 和 timeout；session shutdown 会 abort 当前及排队请求、清除 timer/listener，并注销事件 channel。
@@ -172,7 +171,7 @@ const result = await requestFromUser(pi, questions, {
 - `src/adapters.ts`：`select`/`confirm`/`input` 的兼容 adapter 与保守 fallback。
 - `src/protocol.ts`：`pi-extensions:request-ui:v1` client/helper 和 listener arbitration。
 - `src/tool.ts`：TypeBox `ask` schema、tool execution、call/result renderer。
-- `test/integration.test.ts`：tool、native API、真实 Goal 共存、外部 fixture、并发、取消、超时、headless 和 terminal fallback 行为。
+- `test/integration.test.ts`：tool、native API、真实 Goal 共存、外部 fixture、单选/Other 不变量、控制字符、并发、取消、超时、headless 和 terminal fallback 行为。
 
 ## 开发与验证
 

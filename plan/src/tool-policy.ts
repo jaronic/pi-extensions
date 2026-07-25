@@ -13,13 +13,19 @@ const READ_ONLY_PLAN_TOOLS: Record<string, true> = {
   get_goal: true,
 };
 
-function prioritizeRgOverGrep(toolNames: string[]): string[] {
-  const rgIndex = toolNames.indexOf("rg");
-  const grepIndex = toolNames.indexOf("grep");
-  if (rgIndex < 0 || grepIndex < 0 || rgIndex < grepIndex) return toolNames;
-  toolNames.splice(rgIndex, 1);
-  toolNames.splice(toolNames.indexOf("grep"), 0, "rg");
-  return toolNames;
+function replaceGrepWithRg(toolNames: string[]): string[] {
+  if (!toolNames.includes("rg") || !toolNames.includes("grep")) return toolNames;
+  const replacement: string[] = [];
+  let inserted = false;
+  for (const name of toolNames) {
+    if (name === "rg" || name === "grep") {
+      if (!inserted) replacement.push("rg");
+      inserted = true;
+    } else {
+      replacement.push(name);
+    }
+  }
+  return replacement;
 }
 
 export function isPlanToolAllowed(toolName: string, phase: PlanPhase): boolean {
@@ -34,5 +40,5 @@ export function selectPlanTools(toolNames: string[], phase: PlanPhase): string[]
   const selected = toolNames.filter((toolName) => isPlanToolAllowed(toolName, phase));
   if (phase === "planning") selected.push("submit_plan", "report_plan_blocked", "request_plan_choice");
   if (phase === "awaitingClarification") selected.push("answer_plan_choice");
-  return prioritizeRgOverGrep([...new Set(selected)]);
+  return replaceGrepWithRg([...new Set(selected)]);
 }

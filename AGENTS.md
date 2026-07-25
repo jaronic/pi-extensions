@@ -4,7 +4,7 @@
 
 This repository contains seven independent, private TypeScript extensions for `@earendil-works/pi-coding-agent`:
 
-- `rg`: registers a ripgrep-backed `rg` tool and prioritizes it over Pi's built-in `grep`.
+- `rg`: registers a ripgrep-backed `rg` alias and replaces duplicate active `grep` exposure while loaded.
 - `plan`: implements a planning/approval/execution state machine with tool restrictions.
 - `goal`: tracks a persistent objective and optional token budget, then coordinates automatic continuation with Plan.
 - `lsp`: exposes language-server navigation, diagnostics, symbols, rename previews, and code actions through one `lsp` tool.
@@ -23,9 +23,9 @@ Each `<extension>/package.json` declares `pi.extensions: ["./src/index.ts"]`. Pi
 - Todo keeps its immutable board snapshot in `src/index.ts`; pure transitions and strict decoding live in `state.ts`, while tool results and command custom entries share a versioned sequence/replay protocol in `persistence.ts`.
 - Plan moves through `planning -> awaitingApproval -> executing`, leases the active tool set without losing external changes, and injects phase-specific context before agent turns. Goal injects objective context, accounts tokens/time, and queues continuation turns until completion or a terminal status.
 - Plan broadcasts `pi-extensions:plan-state:v1`; Goal and Todo independently define and validate the same versioned payload without production cross-imports. Keep all three protocol modules plus `plan/test/coexistence.test.ts` and `todo/test/coexistence.test.ts` synchronized.
-- LSP resolves and confines a requested file to the workspace, chooses a configured server by action and file type, reuses one client per server/workspace root, synchronizes the document, sends JSON-RPC, and formats bounded results. `tool_result` performs best-effort sync after `edit`/`write`; `session_shutdown` closes clients and child processes.
-- RG delegates execution to Pi's grep definition using `ctx.cwd`, then reorders active tools on session lifecycle events.
-- Request normalizes and serializes interactive questions through one responsive Question/Review component. It installs session-scoped adapters over the shared `ExtensionUIContext` `select`/`confirm`/`input` methods and exposes `pi-extensions:request-ui:v1` for richer independent callers; shutdown aborts pending dialogs and restores only wrappers it still owns.
+- LSP strictly decodes configuration, confines files to the workspace, routes by action/file type, reuses one client per server/workspace root, synchronizes documents, formats faithful bounded output, and terminates server process trees during shutdown. `tool_result` performs best-effort sync after `edit`/`write`.
+- RG delegates execution and result rendering to Pi's grep definition using `ctx.cwd`, collapses simultaneous `rg`/`grep` active entries to `rg`, and restores `grep` on shutdown.
+- Request validates and serializes interactive questions through one responsive Question/Review component. It rejects terminal/bidirectional controls at external display boundaries, neutralizes them in free text, installs session-scoped adapters over the shared `ExtensionUIContext` `select`/`confirm`/`input` methods and exposes `pi-extensions:request-ui:v1` for richer independent callers; shutdown aborts pending dialogs and restores only wrappers it still owns.
 
 ## Key Directories
 
@@ -34,7 +34,7 @@ Each `<extension>/package.json` declares `pi.extensions: ["./src/index.ts"]`. Pi
 | `goal/src/`, `goal/test/` | Goal lifecycle plus focused command, tool, prompt, protocol, persistence, accounting, and state modules. |
 | `plan/src/`, `plan/test/` | Plan lifecycle plus focused command, tool, prompt, protocol, output, tool-lease, and state-machine modules. |
 | `lsp/src/`, `lsp/test/` | LSP configuration, routing, JSON-RPC clients, formatting, and fake-server tests. |
-| `rg/src/`, `rg/test/` | Ripgrep tool registration, priority logic, and focused tests. |
+| `rg/src/`, `rg/test/` | Ripgrep alias registration, active-tool replacement/restoration, and focused tests. |
 | `request/src/`, `request/test/` | Request schemas, responsive TUI, native adapters, event protocol, serialized coordinator, and tests. |
 | `todo/src/`, `todo/test/` | Todo state machine, bounded output, mixed-carrier branch persistence, TUI/command surfaces, and cross-extension coexistence tests. |
 | `promptline-editor/src/`, `promptline-editor/test/` | Promptline TUI renderer plus Git `HEAD` branch monitor and linked-worktree regression test. |
@@ -111,7 +111,7 @@ done
 - `goal/src/index.ts`, `goal/src/command.ts`, `goal/src/tools.ts`, `goal/src/state.ts`: Goal lifecycle wiring, user/tool boundaries, persistence, continuation, and accounting rules.
 - `lsp/src/index.ts`, `lsp/src/config.ts`, `lsp/src/server-manager.ts`, `lsp/src/lsp-client.ts`: LSP API boundary, layered configuration, routing/lifecycle, and protocol transport.
 - `lsp/src/roots.ts`, `lsp/src/positions.ts`, `lsp/src/format.ts`: workspace confinement, position conversion, and bounded output formatting.
-- `rg/src/index.ts`: complete RG extension and exported priority helper.
+- `rg/src/index.ts`: complete RG extension and exported active-alias replacement helper.
 - `request/src/index.ts`, `request/src/component.ts`, `request/src/adapters.ts`, `request/src/protocol.ts`: Request lifecycle wiring, responsive renderer, native UI compatibility layer, and shared request channel.
 - `todo/src/index.ts`, `todo/src/state.ts`, `todo/src/tools.ts`, `todo/src/persistence.ts`, `todo/src/output.ts`: Todo lifecycle wiring, immutable transitions, bounded tool contract, branch replay, and TUI/model projections.
 - `promptline-editor/src/index.ts`, `promptline-editor/src/branch.ts`: custom editor composition plus live Git `HEAD` monitoring for normal and linked worktrees.

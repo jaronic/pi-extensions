@@ -10,19 +10,24 @@ import {
   MAX_REQUEST_PREVIEW_CHARS,
   MAX_REQUEST_QUESTION_CHARS,
   MAX_REQUEST_QUESTIONS,
+  sanitizeTerminalText,
   type RequestAnswer,
   type RequestDialogResult,
   type RequestQuestion,
 } from "./request.ts";
 
+const SAFE_MULTILINE_PATTERN = "^[^\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f-\\u009f\\u061c\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069]*$";
+const SAFE_SINGLE_LINE_PATTERN = "^[^\\u0000-\\u001f\\u007f-\\u009f\\u061c\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069]*$";
+export const MAX_ASK_DETAILS_BYTES = 50 * 1024;
+
 const AskOptionParams = Type.Object({
-  label: Type.String({ minLength: 1, maxLength: MAX_REQUEST_LABEL_CHARS, description: "Short option label" }),
-  description: Type.Optional(Type.String({ maxLength: MAX_REQUEST_DESCRIPTION_CHARS, description: "Tradeoff or consequence shown below the label" })),
-  preview: Type.Optional(Type.String({ maxLength: MAX_REQUEST_PREVIEW_CHARS, description: "Optional expanded preview for this option" })),
+  label: Type.String({ minLength: 1, maxLength: MAX_REQUEST_LABEL_CHARS, pattern: SAFE_SINGLE_LINE_PATTERN, description: "Short option label" }),
+  description: Type.Optional(Type.String({ maxLength: MAX_REQUEST_DESCRIPTION_CHARS, pattern: SAFE_MULTILINE_PATTERN, description: "Tradeoff or consequence shown below the label" })),
+  preview: Type.Optional(Type.String({ maxLength: MAX_REQUEST_PREVIEW_CHARS, pattern: SAFE_MULTILINE_PATTERN, description: "Optional expanded preview for this option" })),
 });
 
 const AskQuestionParams = Type.Object({
-  header: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_REQUEST_HEADER_CHARS, description: "Short navigation label" })),
+  header: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_REQUEST_HEADER_CHARS, pattern: SAFE_SINGLE_LINE_PATTERN, description: "Short navigation label" })),
   id: Type.String({ minLength: 1, maxLength: MAX_REQUEST_ID_CHARS, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$", description: "Unique result identifier" }),
   multi: Type.Optional(Type.Boolean({ description: "Allow selecting multiple options" })),
   options: Type.Array(AskOptionParams, {
@@ -30,12 +35,12 @@ const AskQuestionParams = Type.Object({
     maxItems: MAX_REQUEST_OPTIONS,
     description: "Distinct options in display order; Other is added automatically",
   }),
-  question: Type.String({ minLength: 1, maxLength: MAX_REQUEST_QUESTION_CHARS, description: "Question shown to the user" }),
+  question: Type.String({ minLength: 1, maxLength: MAX_REQUEST_QUESTION_CHARS, pattern: SAFE_MULTILINE_PATTERN, description: "Question shown to the user" }),
   recommended: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_REQUEST_OPTIONS - 1, description: "Zero-based recommended option index" })),
 });
 
 export const AskParams = Type.Object({
-  i: Type.Optional(Type.String({ minLength: 1, maxLength: 120, description: "Concise intent for the request" })),
+  i: Type.Optional(Type.String({ minLength: 1, maxLength: 120, pattern: SAFE_SINGLE_LINE_PATTERN, description: "Concise intent for the request" })),
   questions: Type.Array(AskQuestionParams, {
     minItems: 1,
     maxItems: MAX_REQUEST_QUESTIONS,
@@ -51,12 +56,19 @@ export interface AskToolRuntime {
   ): Promise<RequestDialogResult>;
 }
 
-export type AskToolDetails = RequestAnswer | { results: RequestAnswer[] };
+export interface AskAnswerDetails {
+  id: string;
+  multi: boolean;
+  selectedOptions: string[];
+  customInput?: string;
+}
 
-function answerText(answer: RequestAnswer): string {
+export type AskToolDetails = AskAnswerDetails | { results: AskAnswerDetails[] };
+
+function answerText(answer: AskAnswerDetails): string {
   const parts: string[] = [];
-  if (answer.selectedOptions.length > 0) parts.push(answer.selectedOptions.join(", "));
-  if (answer.customInput) parts.push(answer.customInput);
+  if (answer.selectedOptions.length > 0) parts.push(answer.selectedOptions.map(sanitizeTerminalText).join(", "));
+  if (answer.customInput) parts.push(sanitizeTerminalText(answer.customInput));
   return parts.join("; ") || "unanswered";
 }
 
@@ -64,19 +76,31 @@ function modelVisibleResult(result: RequestDialogResult): string {
   if (result.results.length === 1) {
     const answer = result.results[0];
     if (!answer) return "User submitted no answer.";
-    if (answer.customInput && answer.selectedOptions.length === 0) {
-      return `User provided custom input: ${answer.customInput}`;
-    }
-    if (answer.selectedOptions.length > 0 && !answer.customInput) {
-      return `User selected: ${answer.selectedOptions.join(", ")}`;
-    }
-    return `User answered: ${answerText(answer)}`;
+    const customInput = answer.customInput === undefined ? undefined : sanitizeTerminalText(answer.customInput);
+    const selectedOptions = answer.selectedOptions.map(sanitizeTerminalText);
+    if (customInput && selectedOptions.length === 0) return `User provided custom input: ${customInput}`;
+    if (selectedOptions.length > 0 && !customInput) return `User selected: ${selectedOptions.join(", ")}`;
+    return `User answered: ${answerText({ ...answer, selectedOptions, customInput })}`;
   }
-  return result.results.map((answer) => `${answer.id}: ${answerText(answer)}`).join("\n");
+  return result.results.map((answer) => `${sanitizeTerminalText(answer.id)}: ${answerText(answer)}`).join("\n");
+}
+
+function compactAnswer(answer: RequestAnswer): AskAnswerDetails {
+  return {
+    id: sanitizeTerminalText(answer.id),
+    multi: answer.multi,
+    selectedOptions: answer.selectedOptions.map(sanitizeTerminalText),
+    ...(answer.customInput === undefined ? {} : { customInput: sanitizeTerminalText(answer.customInput) }),
+  };
 }
 
 function toolDetails(result: RequestDialogResult): AskToolDetails {
-  return result.results.length === 1 ? result.results[0]! : { results: result.results };
+  const answers = result.results.map(compactAnswer);
+  const details: AskToolDetails = answers.length === 1 ? answers[0]! : { results: answers };
+  if (Buffer.byteLength(JSON.stringify(details), "utf8") > MAX_ASK_DETAILS_BYTES) {
+    throw new Error(`Ask result details exceed the ${MAX_ASK_DETAILS_BYTES.toLocaleString()} byte limit.`);
+  }
+  return details;
 }
 
 export function registerAskTool(pi: ExtensionAPI, runtime: AskToolRuntime): void {
@@ -118,13 +142,13 @@ export function registerAskTool(pi: ExtensionAPI, runtime: AskToolRuntime): void
       const lines = [theme.fg("toolTitle", theme.bold(`Ask ${count} question${count === 1 ? "" : "s"}`))];
       if (context.expanded) {
         for (const question of args.questions) {
-          lines.push(theme.fg("accent", `[${question.id}]`) + theme.fg("muted", ` · options:${question.options.length}`));
-          lines.push(theme.fg("text", question.question));
+          lines.push(theme.fg("accent", `[${sanitizeTerminalText(question.id)}]`) + theme.fg("muted", ` · options:${question.options.length}`));
+          lines.push(theme.fg("text", sanitizeTerminalText(question.question)));
           for (let index = 0; index < question.options.length; index++) {
             const option = question.options[index];
             const recommended = index === (question.recommended ?? 0) ? theme.fg("accent", " (Recommended)") : "";
-            lines.push(`  ${theme.fg("muted", "○")} ${option.label}${recommended}`);
-            if (option.description) lines.push(`    ${theme.fg("dim", option.description)}`);
+            lines.push(`  ${theme.fg("muted", "○")} ${sanitizeTerminalText(option.label)}${recommended}`);
+            if (option.description) lines.push(`    ${theme.fg("dim", sanitizeTerminalText(option.description))}`);
           }
         }
       }
@@ -134,13 +158,13 @@ export function registerAskTool(pi: ExtensionAPI, runtime: AskToolRuntime): void
       const details = result.details as AskToolDetails | undefined;
       if (!details) {
         const first = result.content[0];
-        return new Text(first?.type === "text" ? first.text : "", 0, 0);
+        return new Text(first?.type === "text" ? sanitizeTerminalText(first.text) : "", 0, 0);
       }
       const answers = "results" in details ? details.results : [details];
       const lines = answers.map((answer) => {
         const value = answerText(answer);
         const glyph = value === "unanswered" ? theme.fg("warning", "○") : theme.fg("success", "✓");
-        return `${glyph} ${theme.fg("accent", answer.id)}: ${theme.fg("text", value)}`;
+        return `${glyph} ${theme.fg("accent", sanitizeTerminalText(answer.id))}: ${theme.fg("text", value)}`;
       });
       return new Text(lines.join("\n"), 0, 0);
     },

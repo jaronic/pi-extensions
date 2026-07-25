@@ -10,6 +10,14 @@ export const MAX_REQUEST_PLACEHOLDER_CHARS = 500;
 export const MAX_REQUEST_ANSWER_CHARS = 1_000;
 export const MAX_REQUEST_PAYLOAD_BYTES = 16 * 1024;
 
+const UNSAFE_TERMINAL_TEXT = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
+const UNSAFE_TERMINAL_TEXT_GLOBAL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
+const SINGLE_LINE_SEPARATOR = /[\n\t]/u;
+
+export function sanitizeTerminalText(value: string): string {
+  return value.replace(/\r\n?/g, "\n").replace(UNSAFE_TERMINAL_TEXT_GLOBAL, "�");
+}
+
 export interface RequestOption {
   label: string;
   description?: string;
@@ -73,18 +81,32 @@ export interface RequestDialogOptions {
   timeout?: number;
 }
 
-function requiredText(value: unknown, label: string, maximum: number): string {
+function requiredText(value: unknown, label: string, maximum: number, multiline = false): string {
   if (typeof value !== "string") throw new Error(`${label} must be a string.`);
-  const normalized = value.trim();
+  const normalizedNewlines = value.replace(/\r\n?/g, "\n");
+  if (UNSAFE_TERMINAL_TEXT.test(normalizedNewlines)) {
+    throw new Error(`${label} must not contain terminal control or bidirectional formatting characters.`);
+  }
+  if (!multiline && SINGLE_LINE_SEPARATOR.test(normalizedNewlines)) {
+    throw new Error(`${label} must be a single line.`);
+  }
+  const normalized = normalizedNewlines.trim();
   if (!normalized) throw new Error(`${label} must not be empty.`);
   if (normalized.length > maximum) throw new Error(`${label} must not exceed ${maximum} characters.`);
   return normalized;
 }
 
-function optionalText(value: unknown, label: string, maximum: number): string | undefined {
+function optionalText(value: unknown, label: string, maximum: number, multiline = false): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string") throw new Error(`${label} must be a string.`);
-  const normalized = value.trim();
+  const normalizedNewlines = value.replace(/\r\n?/g, "\n");
+  if (UNSAFE_TERMINAL_TEXT.test(normalizedNewlines)) {
+    throw new Error(`${label} must not contain terminal control or bidirectional formatting characters.`);
+  }
+  if (!multiline && SINGLE_LINE_SEPARATOR.test(normalizedNewlines)) {
+    throw new Error(`${label} must be a single line.`);
+  }
+  const normalized = normalizedNewlines.trim();
   if (!normalized) return undefined;
   if (normalized.length > maximum) throw new Error(`${label} must not exceed ${maximum} characters.`);
   return normalized;
@@ -100,11 +122,13 @@ function normalizeOption(value: RequestOption, questionIndex: number, optionInde
       value.description,
       `Question ${questionIndex + 1} option ${optionIndex + 1} description`,
       MAX_REQUEST_DESCRIPTION_CHARS,
+      true,
     ),
     preview: optionalText(
       value.preview,
       `Question ${questionIndex + 1} option ${optionIndex + 1} preview`,
       MAX_REQUEST_PREVIEW_CHARS,
+      true,
     ),
   };
 }
@@ -132,7 +156,7 @@ export function normalizeRequestQuestions(questions: readonly RequestQuestion[])
     const header = question.header === undefined
       ? `Question ${questionIndex + 1}`
       : requiredText(question.header, `Question ${questionIndex + 1} header`, MAX_REQUEST_HEADER_CHARS);
-    const prompt = requiredText(question.question, `Question ${questionIndex + 1} prompt`, MAX_REQUEST_QUESTION_CHARS);
+    const prompt = requiredText(question.question, `Question ${questionIndex + 1} prompt`, MAX_REQUEST_QUESTION_CHARS, true);
 
     if (question.kind === "text") {
       return {

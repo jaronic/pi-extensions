@@ -1,18 +1,29 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createGrepToolDefinition } from "@earendil-works/pi-coding-agent";
-import { renderGrepOutput } from "./result-renderer.ts";
+import { Text } from "@earendil-works/pi-tui";
 
 const grepDefinition = createGrepToolDefinition(process.cwd());
+type GrepRenderResult = Parameters<NonNullable<typeof grepDefinition.renderResult>>[0];
 
-export function prioritizeRgOverGrep(toolNames: readonly string[]): string[] {
-  const prioritized = [...new Set(toolNames)];
-  const rgIndex = prioritized.indexOf("rg");
-  const grepIndex = prioritized.indexOf("grep");
-  if (rgIndex < 0 || grepIndex < 0 || rgIndex < grepIndex) return prioritized;
+export function replaceGrepWithRg(toolNames: readonly string[]): string[] {
+  const unique = [...new Set(toolNames)];
+  if (!unique.includes("rg") || !unique.includes("grep")) return unique;
+  const replacement: string[] = [];
+  let inserted = false;
+  for (const name of unique) {
+    if (name === "rg" || name === "grep") {
+      if (!inserted) replacement.push("rg");
+      inserted = true;
+    } else {
+      replacement.push(name);
+    }
+  }
+  return replacement;
+}
 
-  prioritized.splice(rgIndex, 1);
-  prioritized.splice(prioritized.indexOf("grep"), 0, "rg");
-  return prioritized;
+function displayValue(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  return JSON.stringify(value).slice(1, -1);
 }
 
 export default function rgExtension(pi: ExtensionAPI): void {
@@ -20,32 +31,57 @@ export default function rgExtension(pi: ExtensionAPI): void {
     name: "rg",
     label: "rg",
     description:
-      "Primary file-content search powered by ripgrep. Returns matching lines with file paths and line numbers, respects .gitignore, and supports regex, literal, glob, case, context, and result-limit controls.",
-    promptSnippet: "Primary ripgrep file-content search; use before grep",
+      "File-content search alias for Pi's ripgrep-backed grep engine. Returns matching lines with paths and line numbers, respects .gitignore, and supports regex, literal, glob, case, context, and result-limit controls.",
+    promptSnippet: "Ripgrep-backed file-content search",
     promptGuidelines: [
-      "When both rg and grep are active, use rg first for file-content searches.",
-      "Use grep only when rg is unavailable or an rg call fails.",
+      "Use rg for file-content searches. It shares Pi's grep execution path, so retrying the same request as grep is not a fallback.",
     ],
     parameters: grepDefinition.parameters,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const definition = createGrepToolDefinition(ctx.cwd);
       return definition.execute(toolCallId, params, signal, onUpdate, ctx);
     },
-    renderResult(result, { expanded }, theme, context) {
-      const output = result.content
-        .filter((content) => content.type === "text")
-        .map((content) => content.text)
-        .join("");
-      return renderGrepOutput(output, { expanded, isError: context.isError }, theme);
-    }
+    renderCall(args, theme, context) {
+      const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
+      const pattern = displayValue(args.pattern, "?");
+      const path = displayValue(args.path, ".");
+      const glob = args.glob === undefined ? "" : ` (${displayValue(args.glob, "?")})`;
+      const limit = args.limit === undefined ? "" : ` limit ${String(args.limit)}`;
+      text.setText(
+        theme.fg("toolTitle", theme.bold("rg")) +
+        " " +
+        theme.fg("accent", `/${pattern}/`) +
+        theme.fg("toolOutput", ` in ${path}${glob}${limit}`),
+      );
+      return text;
+    },
+    renderResult(result, options, theme, context) {
+      // Execution delegates to this same definition, so its result details have the renderer's contract.
+      const grepResult = result as GrepRenderResult;
+      return grepDefinition.renderResult!(grepResult, options, theme, context);
+    },
   });
 
-  const applyPriority = (): void => {
+  let replacementActive = false;
+  const applyReplacement = (): void => {
     const current = pi.getActiveTools();
-    const prioritized = prioritizeRgOverGrep(current);
-    if (prioritized.some((name, index) => name !== current[index])) pi.setActiveTools(prioritized);
+    const replacement = replaceGrepWithRg(current);
+    if (current.includes("rg") && current.includes("grep")) replacementActive = true;
+    if (replacement.length !== current.length || replacement.some((name, index) => name !== current[index])) {
+      pi.setActiveTools(replacement);
+    }
+  };
+  const restoreGrep = (): void => {
+    if (!replacementActive) return;
+    replacementActive = false;
+    const current = [...new Set(pi.getActiveTools())];
+    const rgIndex = current.indexOf("rg");
+    if (rgIndex < 0 || current.includes("grep")) return;
+    current.splice(rgIndex, 1, "grep");
+    pi.setActiveTools(current);
   };
 
-  pi.on("session_start", applyPriority);
-  pi.on("session_tree", applyPriority);
+  pi.on("session_start", applyReplacement);
+  pi.on("session_tree", applyReplacement);
+  pi.on("session_shutdown", restoreGrep);
 }
