@@ -71,7 +71,7 @@ flowchart TB
 | [05 · 社区生态与衍生 Agent](05-ecosystem-and-agents.md) | 社区怎样填补 Pi 刻意留下的空白；怎样沿源码责任链判断 Extension、Core、Port 或 Internalize | 生态地图、源码责任链、产品化责任账本 |
 | [06 · 扩展可玩性攻略](06-extension-playbook.md) | 从零配置到领域 Agent 应该按什么顺序玩；有哪些可复用配方 | 选型决策树、能力阶梯、组合玩法、代码骨架 |
 | [07 · 生产级最佳实践](07-production-checklist.md) | 状态、并发、取消、安全、输出、UI、测试和发布有哪些硬约束 | 威胁模型、测试分层、反模式对照、检查表 |
-| [08 · TODO 扩展设计](08-todo-extension-design.md) | Pi 怎样用 branch-aware 状态机可靠追踪拆分任务、进度、阻塞与完成 | 状态机、原子提交、Plan 共存、测试矩阵 |
+| [08 · Todo 扩展实现](08-todo-extension-design.md) | Pi 怎样用 branch-aware 状态机可靠追踪拆分任务、进度、阻塞与完成 | 状态机、原子提交、Plan 共存、验证矩阵 |
 
 已有的 [Pi 插件开发参考与最佳实践](../pi-extension-development.md) 是 API/工程速查；本系列专注设计原理和选择依据，两者互补。
 

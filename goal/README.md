@@ -2,7 +2,7 @@
 
 `goal` 为 Pi 增加可持久化的长程目标：它保存用户明确指定的目标，在每轮结束后自动继续工作，并记录累计时间与 token 使用量，直到目标完成、暂停、受限或真正阻塞。
 
-> 维护约束：凡是改变 Goal 的行为、命令、工具 schema、状态、配置、与 Plan 的协作协议或安装方式，都必须在同一改动中同步本 README。
+> 维护约束：凡是改变 Goal 的行为、命令、工具 schema、状态、配置、与 Plan/Todo/Request 的协作协议或安装方式，都必须在同一改动中同步本 README。
 
 ## 适用场景与效果
 
@@ -100,18 +100,28 @@ stateDiagram-v2
 
 Goal 通过 `pi.events` 监听 Plan 的版本化协调信号：
 
-- Plan 处于 `planning` 或 `awaitingApproval` 时，Goal 保持状态但不自动执行，也不暴露 `update_goal`。
+- Plan 处于 `planning`、`awaitingClarification` 或 `awaitingApproval` 时，Goal 保持状态但不自动执行，也不暴露 `update_goal`。
 - `/plan approve` 恢复执行工具并由 Plan 排队执行轮，Goal 不额外重复排队。
 - `/plan cancel` 保持 Goal active；Plan 不再阻塞且无需发起 Plan turn 时，Goal 依既有门控规则续跑。
 - Goal 与 Plan 通过 session ID 隔离信号，避免其他 session 的 Plan 状态污染当前目标。
 
-协议定义在 `goal/src/protocol.ts` 与 `plan/src/protocol.ts`。修改 channel、payload 或协作语义时必须同时更新两个插件及 `plan/test/coexistence.test.ts`。
+协议定义在 `goal/src/protocol.ts`、`plan/src/protocol.ts` 与 `todo/src/protocol.ts`。修改 channel、payload 或协作语义时必须同步三个插件、`plan/test/coexistence.test.ts` 和 `todo/test/coexistence.test.ts`。
 
 ## 与 Request UI 插件协作
 
 Goal 的未完成目标替换确认继续调用标准 `ctx.ui.confirm()`。同时加载 `request` 时，共享 UI adapter 会把 “Replace active goal?” 自动渲染为统一 Request 单选界面；未加载 `request`、非 TUI 或 Request 对输入采取保守 fallback 时，Goal 仍使用 Pi 原生确认语义。Goal 不导入 Request package，也不依赖其事件 channel，因此两者可独立安装。
 
 Request 在 session shutdown 时只恢复自己仍持有的 `confirm` wrapper，不覆盖其他 extension 后续安装的 adapter。真实 Goal/Request 共存路径由 `request/test/integration.test.ts` 覆盖。
+
+## 与 Todo 插件协作
+
+Goal 定义完整 objective 和自动 continuation；Todo 的普通 board 记录当前 branch 上拆出的执行项，Todo 的 managed ledger 只投影已批准 Plan 的步骤进度。三者是独立状态域：各自追加 system prompt，不覆盖对方；Goal continuation 能看到当前 Todo 工作集和 managed Plan progress，但 Todo settled 或 Plan steps completed 都不会自动调用 `update_goal(complete)`，Goal complete 也不会清空任一 Todo 状态。若 Goal 尝试完成时仍有 open/blocked Todo，应把它当作需要解释的证据不一致，而不是自动状态转换。
+
+Goal 不调用 `pi-extensions:todo-service:v1`，不根据 Todo sequence/revision 推导目标状态，也不为这项协作新增 production cross-import。组合 prompt、独立终态和双加载顺序由 `todo/test/coexistence.test.ts` 覆盖。
+
+## 与 RG 和 LSP 插件协作
+
+Goal 不接管 active tools。`rg`、`lsp` 若在当前工具集中可用，普通用户轮和 Goal continuation 都可照常使用；Plan 活跃时则由 Plan 的只读 allowlist 与 tool lease 决定可见性。搜索结果、diagnostics 或 refactor preview 都只是 agent 可引用的执行证据，不会自动完成 Goal、改变 Todo board 或写入 Goal journal。
 
 ## 配置
 

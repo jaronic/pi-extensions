@@ -4,6 +4,8 @@
 
 该插件只处理当前进程中的短生命周期交互，不持久化答案、不访问网络，也不改变非 TUI 模式的行为。
 
+> 维护约束：凡是改变 Request 的工具 schema、native adapter、事件协议、协调器、输入边界、生命周期、与 Goal/Plan/Todo 的协作或安装方式，都必须在同一改动中同步本 README。
+
 ## 安装
 
 要求 Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.81.0` 的 Pi。
@@ -97,7 +99,13 @@ TUI `session_start` 时，Request 在共享 `ExtensionUIContext` 实例上安装
 
 `timeout` 与 `signal` 会继续生效。Request 在 session 切换或 shutdown 时中止未完成 dialog 并恢复原方法；恢复前会确认当前方法仍是自己的 wrapper，不覆盖其他 extension 后续安装的 adapter。空选项、首尾空格 option、重复 option 或超出 Request 边界的 native payload 会安全回退 Pi 原生方法，以保持原返回值语义。
 
-例如 Goal 的 “Replace active goal?” 使用 `ctx.ui.confirm()`，因此同时加载 Request 后会自动采用统一 renderer；没有加载 Request 时仍使用 Pi 原生确认框。专用的 Plan Review 等 `ctx.ui.custom()` 组件仍保留自己的领域界面。
+例如 Goal 的 “Replace active goal?” 和 Todo 的 `/todos clear` 都使用 `ctx.ui.confirm()`，因此同时加载 Request 后会自动采用统一 renderer；没有加载 Request 时仍使用 Pi 原生确认框。专用的 Plan Review 等 `ctx.ui.custom()` 组件仍保留自己的领域界面。
+
+### 与 Goal、Plan 和 Todo 的边界
+
+- Goal 的 active-objective replacement 与 Todo 的 `/todos clear` 通过标准 `ctx.ui.confirm()` 自动获得 Request renderer；调用方仍拥有确认后的状态转换与 journal 写入。
+- Plan Review、Plan clarification 和 Todo managed Plan progress 都有各自的领域状态机与组件，不经 Request coordinator，也不会被 native adapter 替换。Plan 只读阶段若暴露 `ask`，它仍是一次性用户问答，不会写入 Plan clarification state。
+- Request 不调用 `pi-extensions:todo-service:v1`，不创建普通 Todo task，也不读取或更新 managed Plan ledger。它只负责交互结果；Goal、Plan、Todo 分别校验结果并提交自己的状态。
 
 ### 版本化事件协议
 

@@ -453,7 +453,7 @@ Extension 作者至少要保证：
 - 无 UI 时危险动作 fail closed；
 - 真正不可信工作放在外部 sandbox，最小化挂载、凭据和网络。
 
-## 12. 五个本仓库扩展如何对应控制面
+## 12. 六个本仓库扩展如何对应控制面
 
 ```mermaid
 flowchart TB
@@ -462,6 +462,7 @@ flowchart TB
     Goal[goal<br/>持久目标 + token/time accounting + continuation]
     LSP[lsp<br/>配置路由 + 子进程 + 有界输出]
     Request[request<br/>共享 UI adapter + 串行 dialog + 协议]
+    Todo[todo<br/>branch 执行账本 + bounded snapshot + Plan gate]
 
     RG --> Tools[工具控制]
     Plan --> Tools
@@ -472,6 +473,9 @@ flowchart TB
     Request --> UI
     LSP --> Resource[长生命周期资源]
     Plan <--> Protocol[跨扩展协议] <--> Goal
+    Todo --> State
+    Todo --> UI
+    Todo --> Protocol
 ```
 
 | 扩展 | 最值得学习的设计点 | 容易抄错的地方 |
@@ -481,6 +485,7 @@ flowchart TB
 | Goal | `agent_settled` continuation 与空转保护 | 在 `agent_end` 重入新 run |
 | LSP | lazy manager、cwd 路由、取消/超时/清理 | factory 启进程或无限返回 diagnostics |
 | Request | UI method 适配、串行协调、headless 语义 | 并发 overlay、shutdown 恢复他人 wrapper |
+| Todo | 稳定 ID、纯 reducer、mixed-carrier branch replay 与单一活动项 | 用 prompt 代替状态机、复制 Plan steps 或把项目文件当事实源 |
 
 ## 13. Extension 的主要 Tradeoff
 
@@ -501,7 +506,7 @@ Extension API 的本质是一个**进程内 Harness 控制平面**。它强大�
 可靠扩展应遵守四个不变量：
 
 1. factory 只注册，资源随 session/调用懒启动并有界关闭；
-2. 状态写入 versioned branch journal，内存与 UI都由 replay 重建；
+2. 状态写入 versioned branch journal，内存与 UI 都由 replay 重建；
 3. 引导与强制分开：active tools/prompt 做引导，runtime gate 做保证；
 4. 共享面不覆盖全局：工具用 merge/lease，事件用版本协议，UI 用唯一所有权。
 
@@ -517,4 +522,5 @@ Extension API 的本质是一个**进程内 Harness 控制平面**。它强大�
 - [本仓库 Goal README](../../goal/README.md)
 - [本仓库 LSP README](../../lsp/README.md)
 - [本仓库 Request README](../../request/README.md)
+- [本仓库 Todo README](../../todo/README.md)
 - [上一篇：上下文、会话与记忆](03-context-and-sessions.md) · [下一篇：社区生态与衍生 Agent](05-ecosystem-and-agents.md)

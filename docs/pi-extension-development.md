@@ -106,8 +106,9 @@ flowchart LR
 先复制最接近的现有插件，而不是从空白重新发明结构：
 
 - 简单工具包装：`rg/`
-- 状态机、持久化和跨插件协议：`plan/`、`goal/`
+- 状态机、持久化和跨插件协议：`plan/`、`goal/`、`todo/`
 - 子进程、协议客户端、配置路由和清理：`lsp/`
+- 响应式共享 UI 与 native adapter：`request/`
 
 ### 4.2 最小 package manifest
 
@@ -210,22 +211,22 @@ make pi-extensions-on
 make pi-extensions-status
 ```
 
-`make pi-extensions-off` 只删除仍指向当前仓库的五个链接；`make pi-extensions-toggle` 在全部启用时关闭，否则补齐缺失链接。冲突的普通文件、目录和外部软链接会导致操作在修改前失败。
+`make pi-extensions-off` 只删除仍指向当前仓库的六个链接；`make pi-extensions-toggle` 在全部启用时关闭，否则补齐缺失链接。冲突的普通文件、目录和外部软链接会导致操作在修改前失败。
 
 然后在 Pi 中执行 `/reload`。只链接 package，不链接仓库根目录；根目录没有 `package.json`。完整的扩展与主题开关可使用 `make pi-on|off|toggle|status`，临时试运行单文件可使用 `pi -e ./path/to/extension.ts`。
 
 ### 4.5 开发命令
 
 ```sh
-cd goal  # or plan, lsp, rg, or the new package
+cd goal  # or plan, lsp, request, rg, or todo
 npm ci
 npm run check
 npm test
 ```
 
-涉及多个插件协议时，运行所有受影响 package；Plan/Goal 协议变更至少运行 `goal` 与 `plan`，并覆盖 `plan/test/coexistence.test.ts`。
+涉及多个插件协议时，运行所有受影响 package；Plan coordination 协议变更至少运行 `goal`、`plan` 与 `todo`，并覆盖 `plan/test/coexistence.test.ts` 和 `todo/test/coexistence.test.ts`。
 
-`.github/workflows/ci.yml` 在 Node 22.19 上对 `goal`、`plan`、`lsp`、`rg` 分别执行 clean install、typecheck 和完整 package 测试。新增顶层 package 时必须同步扩展 CI matrix。
+`.github/workflows/ci.yml` 在 Node 22.19 上对 `goal`、`plan`、`lsp`、`request`、`rg`、`todo` 分别执行 clean install、typecheck 和完整 package 测试。新增顶层 package 时必须同步扩展 CI matrix 与全局链接管理器。
 
 ## 5. API 速查与选择
 
@@ -324,7 +325,7 @@ npm test
 - 接收方把 payload 当 `unknown` 并验证；发送方不要暴露可变内部对象。
 - handler 应对加载顺序和接收方缺失保持安全。需要恢复协作状态时，在 `session_start`/`session_tree` 重新广播快照。
 - 修改 active tools 时必须同时保留其他插件在 Plan 期间新增和移除的工具；`plan/src/tool-lease.ts` 展示了 snapshot、reconcile、restore 的完整租约模式。简单的只追加场景才可直接基于 `pi.getActiveTools()` 去重更新。
-- 跨插件协议变更同时更新两端和 coexistence test；不要用生产源码跨目录 import 偷渡耦合。
+- 跨插件协议变更同步更新每个生产者/消费者及对应 coexistence tests；不要用生产源码跨目录 import 偷渡耦合。
 
 ## 7. 测试与质量门槛
 
@@ -332,8 +333,8 @@ npm test
 
 | 层次 | 应覆盖的契约 | 本仓库/社区参考 |
 | --- | --- | --- |
-| 纯单元 | schema、parser、状态转换、不变量、格式化、路径/URL 判定 | `goal/test/state.test.ts`、`plan/test/state.test.ts`、Web Access SSRF tests |
-| Extension harness | 注册内容、事件顺序、UI/headless 行为、持久化恢复、active tools | `plan/test/harness.ts`、`plan/test/coexistence.test.ts` |
+| 纯单元 | schema、parser、状态转换、不变量、格式化、路径/URL 判定 | `goal/test/state.test.ts`、`plan/test/state.test.ts`、`todo/test/state.test.ts`、Web Access SSRF tests |
+| Extension harness | 注册内容、事件顺序、UI/headless 行为、持久化恢复、active tools | `plan/test/coexistence.test.ts`、`todo/test/integration.test.ts`、`todo/test/coexistence.test.ts` |
 | 协议/子进程 | 初始化失败、取消、timeout、crash、诊断 settle、部分失败、idle/shutdown | `lsp/test/lsp-client.test.ts`、`lsp/test/server-manager.test.ts`、`lsp/test/fake-server.mjs` |
 | 安全回归 | symlink escape、外部 cwd、私网/DNS redirect、shell indirection、fail-closed | `lsp/test/roots.test.ts`、Permission System test matrix、Web Access SSRF tests |
 | 安装 smoke | manifest entry、fresh no-session load、全局软链接、reload、退出 | 本节命令、Pi Lens install/compat smoke workflow |
@@ -353,7 +354,7 @@ npm test
 ### 7.3 当前仓库验证命令
 
 ```sh
-for dir in goal plan lsp rg; do
+for dir in goal plan lsp request rg todo; do
   (cd "$dir" && npm run check && npm test) || exit 1
 done
 ```
@@ -361,7 +362,7 @@ done
 CI 会执行上述 package matrix。提交前还要从仓库根目录执行隔离加载 smoke，不读取当前 session 或全局链接：
 
 ```sh
-for name in goal plan lsp rg; do
+for name in goal plan lsp request rg todo; do
   pi --no-session -p --extension "$PWD/$name" "Reply with exactly: SMOKE_OK"
 done
 ```
@@ -389,7 +390,7 @@ done
 
 ### 合并前
 
-- [ ] 受影响 package 的 `npm run check`、`npm test` 通过，四包 CI matrix 配置仍覆盖全部顶层插件。
+- [ ] 受影响 package 的 `npm run check`、`npm test` 通过，六包 CI matrix 配置仍覆盖全部顶层插件。
 - [ ] 新可观察契约有回归测试，跨插件协议有 coexistence test。
 - [ ] 真实 Pi 完成主路径、失败路径、`/reload` 和退出 smoke test。
 - [ ] package manifest、runtime dependencies、lockfile 和全局软链接说明一致。

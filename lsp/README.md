@@ -4,7 +4,7 @@
 
 重命名和 code action 始终只返回预览，不修改文件；实际改动仍应交给 Pi 的编辑工具。
 
-> 维护约束：凡是改变 LSP action、参数、默认服务器、配置 schema/合并顺序、路由、进程生命周期、输出格式或安装方式，都必须在同一改动中同步本 README。
+> 维护约束：凡是改变 LSP action、参数、默认服务器、配置 schema/合并顺序、路由、进程生命周期、输出格式、与 Plan 的工具策略或安装方式，都必须在同一改动中同步本 README。
 
 ## 效果与边界
 
@@ -214,6 +214,12 @@ Server patch 除 `initOptions` 外是浅合并。修改嵌套对象时应提供�
 - workspace root 搜索不会越过当前 Pi workspace，外部文件和指向外部的 symlink 会被拒绝。
 - `workspace_symbols` 未显式指定 server 时只查询已经活跃且支持该 capability 的 client，避免无目标地启动所有 server。
 - 临时完整输出只存于当前 session 生命周期；不要把其路径当持久 artifact。
+
+## 与 Plan、Goal 和 Todo 的关系
+
+- Plan 的 `planning`、`awaitingClarification`、`awaitingApproval` 只读 allowlist 显式允许 `lsp`。Navigation、diagnostics、symbols、rename preview 和 code-action preview 不写工作区；批准进入执行期后，`lsp` 是否继续可用取决于进入 Plan 前的有效工具集。
+- LSP 不监听 Plan/Goal/Todo channel，也不调用 `pi-extensions:todo-service:v1`。Goal continuation 和普通 Todo 工作流可以使用模型当前可见的 `lsp` 工具，但 diagnostics、references 或 preview 结果不会自动改变 Goal、Plan step 或 Todo task 状态。
+- Todo 不接管 LSP client 生命周期；Plan 的 tool lease 只影响工具可见性，Todo 的 progress provider 只影响进度投影，已启动 client 仍由 LSP 自己在 idle、session reload 和 shutdown 时清理。
 
 ## 实现原理与关键节点
 

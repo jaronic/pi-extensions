@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        extension: [goal, plan, lsp, request, rg]
+        extension: [goal, plan, lsp, request, rg, todo]
     defaults:
       run:
         working-directory: ${{ matrix.extension }}

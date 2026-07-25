@@ -10,7 +10,7 @@ case "$AGENT_DIRECTORY" in
   *) AGENT_DIRECTORY="$PWD/$AGENT_DIRECTORY" ;;
 esac
 
-EXTENSION_NAMES="goal plan lsp request rg"
+EXTENSION_NAMES="goal plan lsp request rg todo"
 
 usage() {
   cat <<'EOF'
@@ -25,8 +25,8 @@ Actions:
   status            Show link and active-theme state (default)
 
 Scopes:
-  all               Five extensions and every pi-extensions-*.json theme (default)
-  extensions        goal, plan, lsp, request, and rg
+  all               Six extensions and every pi-extensions-*.json theme (default)
+  extensions        goal, plan, lsp, request, rg, and todo
   themes            Repository-owned global themes
 
 Conflicting files, directories, and foreign symlinks are never overwritten or
