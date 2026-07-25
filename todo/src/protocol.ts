@@ -5,6 +5,7 @@ export type CoordinatedPlanPhase =
   | "planning"
   | "awaitingClarification"
   | "awaitingApproval"
+  | "blocked"
   | "executing";
 
 export interface PlanCoordinationSignal {
@@ -22,6 +23,7 @@ const PLAN_PHASES: readonly CoordinatedPlanPhase[] = [
   "planning",
   "awaitingClarification",
   "awaitingApproval",
+  "blocked",
   "executing",
 ];
 

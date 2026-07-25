@@ -209,11 +209,11 @@ Service v1 支持 `init/append/start/done/block/drop/reopen/edit/get/view`，故
 
 Todo 独立验证两个 channel，不从 `plan/` 做 production import：
 
-- `pi-extensions:plan-state:v1` 对齐 session 与 phase。Plan 在 `planning`、`awaitingClarification`、`awaitingApproval` 或 `executing` 时，普通 Todo 的所有 mutation 都在 runtime fail closed；`view/get` 和 `/todos status` 仍可只读检查冻结 board。
+- `pi-extensions:plan-state:v1` 对齐 session 与 phase。Plan 在 `planning`、`awaitingClarification`、`awaitingApproval`、`blocked` 或 `executing` 时，普通 Todo 的所有 mutation 都在 runtime fail closed；`view/get` 和 `/todos status` 仍可只读检查冻结 board。
 - `pi-extensions:execution-progress:v1` 用同步 discover envelope 收集 provider。Todo 提供 ID `todo`、priority `100` 的 open/read/update/close 实现；Plan 只在 `/plan approve` 时选择一次 owner，没有选择 Todo 时它不会建立 managed ledger。
 - Todo 被选中后，`open` 原子写入完整 approved step definitions 和全 pending snapshot；`update` 以 Plan 传入的 tool-call request ID 幂等提交 status，保证最多一个 `inProgress`；`read` 返回有 revision 的完整 snapshot；`close` 清除 ledger。
 - Agent 始终调用 `update_plan_step`。普通 `todo` mutation 仍被冻结，且不能寻址 managed step；这是一份单向 ownership transfer，不是 Plan state 与普通 Todo board 的双写同步。
-- planning/clarification/approval 阶段隐藏普通 Todo prompt/footer/widget。执行期若 Todo 是 owner，则 `todo` key 显示 managed footer/widget，并注入唯一的 `<untrusted_execution_progress>`；否则继续隐藏。Plan 只显示 provider owner，不再显示第二份步骤 widget。
+- planning/clarification/approval/blocked 阶段隐藏普通 Todo prompt/footer/widget。执行期若 Todo 是 owner，则 `todo` key 显示 managed footer/widget，并注入唯一的 `<untrusted_execution_progress>`；否则继续隐藏。Plan 只显示 provider owner，不再显示第二份步骤 widget。
 - Plan complete/cancel 先持久化自身 terminal tombstone、恢复工具并广播 `off`，再 best-effort `close` managed ledger。Todo 立即恢复原 branch board 和 widget 偏好；close 成功会 append null，失败时残留 ledger 不投影且下一次非 executing approval 可原子替换。已选 provider 的 read/update 不可用时显式失败，不创建本地 fallback，也不改普通 board。
 - `/plan cancel` 在 Plan 已为 `off` 时仍广播同 session 的 `off`，使陈旧普通投影可幂等解冻。
 

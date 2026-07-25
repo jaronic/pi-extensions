@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { boundPlanText, renderPlan, summarizePlanState } from "./output.ts";
 import {
   requestPlanChoice,
+  reportPlanBlocked,
   submitPlan,
   type PlanJournalEntry,
   type PlanState,
@@ -12,6 +13,7 @@ import {
   AnswerPlanChoiceParams,
   RequestPlanChoiceParams,
   SubmitPlanParams,
+  ReportPlanBlockedParams,
   UpdatePlanStepParams,
 } from "./tool-schema.ts";
 
@@ -24,6 +26,7 @@ export interface PlanToolRuntime {
     ctx: ExtensionContext,
     signal?: AbortSignal,
   ): Promise<PlanState>;
+  commitPlanBlocker(current: PlanState, candidate: PlanState, ctx: ExtensionContext): PlanState;
   persistActive(
     action: PlanJournalEntry["action"],
     ctx: ExtensionContext,
@@ -61,6 +64,33 @@ export function registerPlanTools(pi: ExtensionAPI, runtime: PlanToolRuntime): v
       const responseState = await runtime.commitSubmittedPlan(current, submitPlan(current, params), ctx, signal);
       const text = `Plan submitted: ${responseState.summary ?? "draft"}. Review opens automatically after this turn settles. Use /plan review to reopen it, or /plan approve, /plan refine, or /plan cancel directly.`;
       const bounded = boundPlanText(text);
+      return {
+        content: [{ type: "text", text: bounded.text }],
+        details: summarizePlanState(responseState, false, bounded.truncation),
+        terminate: true,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "report_plan_blocked",
+    label: "Report Plan Blocked",
+    description: "Record evidence that no approvable implementation plan can yet be formed and state the user prerequisites or viable alternatives.",
+    promptSnippet: "Report that an approvable Plan cannot yet be formed",
+    promptGuidelines: [
+      "Call report_plan_blocked exactly once only when proportionate read-only investigation proves that an approvable implementation plan cannot yet be formed.",
+      "Include verified blocking facts, the evidence sources consulted, and concrete prerequisite or alternative paths for the user.",
+      "Do not submit an executable plan when the required preconditions remain unavailable.",
+    ],
+    parameters: ReportPlanBlockedParams,
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      signal?.throwIfAborted();
+      const current = runtime.getState();
+      if (!current || current.phase !== "planning") {
+        throw new Error("Plan mode is not in its planning phase.");
+      }
+      const responseState = runtime.commitPlanBlocker(current, reportPlanBlocked(current, params), ctx);
+      const bounded = boundPlanText(renderPlan(responseState));
       return {
         content: [{ type: "text", text: bounded.text }],
         details: summarizePlanState(responseState, false, bounded.truncation),

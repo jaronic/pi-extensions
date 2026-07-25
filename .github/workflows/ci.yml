@@ -40,6 +40,8 @@ jobs:
             testDependencies: ""
           - extension: todo
             testDependencies: "goal plan request"
+          - extension: promptline-editor
+            testDependencies: ""
     defaults:
       run:
         working-directory: ${{ matrix.extension }}

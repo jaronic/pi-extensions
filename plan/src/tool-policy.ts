@@ -24,7 +24,7 @@ function prioritizeRgOverGrep(toolNames: string[]): string[] {
 
 export function isPlanToolAllowed(toolName: string, phase: PlanPhase): boolean {
   if (phase === "off" || phase === "executing") return true;
-  if (toolName === "submit_plan" || toolName === "request_plan_choice") return phase === "planning";
+  if (toolName === "submit_plan" || toolName === "report_plan_blocked" || toolName === "request_plan_choice") return phase === "planning";
   if (toolName === "answer_plan_choice") return phase === "awaitingClarification";
   return Object.hasOwn(READ_ONLY_PLAN_TOOLS, toolName);
 }
@@ -32,7 +32,7 @@ export function isPlanToolAllowed(toolName: string, phase: PlanPhase): boolean {
 export function selectPlanTools(toolNames: string[], phase: PlanPhase): string[] {
   if (phase === "off" || phase === "executing") return [...new Set(toolNames)];
   const selected = toolNames.filter((toolName) => isPlanToolAllowed(toolName, phase));
-  if (phase === "planning") selected.push("submit_plan", "request_plan_choice");
+  if (phase === "planning") selected.push("submit_plan", "report_plan_blocked", "request_plan_choice");
   if (phase === "awaitingClarification") selected.push("answer_plan_choice");
   return prioritizeRgOverGrep([...new Set(selected)]);
 }

@@ -354,7 +354,7 @@ npm test
 ### 7.3 当前仓库验证命令
 
 ```sh
-for dir in goal plan lsp request rg todo; do
+for dir in goal plan lsp request rg todo promptline-editor; do
   (cd "$dir" && npm run check && npm test) || exit 1
 done
 ```
@@ -362,7 +362,7 @@ done
 CI 会执行上述 package matrix。提交前还要从仓库根目录执行隔离加载 smoke，不读取当前 session 或全局链接：
 
 ```sh
-for name in goal plan lsp request rg todo; do
+for name in goal plan lsp request rg todo promptline-editor; do
   pi --no-session -p --extension "$PWD/$name" "Reply with exactly: SMOKE_OK"
 done
 ```

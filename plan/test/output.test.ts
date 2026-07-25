@@ -3,6 +3,7 @@ import test from "node:test";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
 import {
   boundPlanText,
+  renderPlan,
   renderPlanWidget,
   summarizePlanState,
 } from "../src/output.ts";
@@ -10,7 +11,7 @@ import type { PlanState } from "../src/state.ts";
 
 function planState(stepCount = 1, stepText = "Implement"): PlanState {
   return {
-    version: 2,
+    version: 3,
     phase: "executing",
     summary: "Ship safely",
     plan: "Implement and verify.",
@@ -59,4 +60,25 @@ test("Plan result details include planPath only for submitted artifacts", () => 
   assert.equal(withPath.planPath, "/tmp/preview.md");
   assert.equal("plan" in withPath, false);
   assert.deepEqual(withPath.steps, [{ id: "step-1", status: "pending" }]);
+});
+
+test("blocked Plan output exposes evidence and resolution paths without execution steps", () => {
+  const blocked: PlanState = {
+    ...planState(),
+    phase: "blocked",
+    summary: undefined,
+    plan: undefined,
+    steps: [],
+    progress: undefined,
+    blocker: {
+      summary: "No signing credential is available.",
+      blockingFacts: ["The credential store is empty."],
+      evidenceSources: ["credential-store read result"],
+      resolutions: [{ kind: "prerequisite", label: "Provide credential", description: "Add a signing key." }],
+    },
+  };
+  assert.match(renderPlan(blocked), /Verified blocking facts/);
+  assert.match(renderPlan(blocked), /User resolution paths/);
+  assert.deepEqual(renderPlanWidget(blocked), ["Plan blocked", "! No signing credential is available."]);
+  assert.deepEqual(summarizePlanState(blocked, false).blocker, blocked.blocker);
 });

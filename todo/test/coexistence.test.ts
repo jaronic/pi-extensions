@@ -34,7 +34,7 @@ function planSignal(sessionId: string, phase: PlanCoordinationSignal["phase"]): 
     version: 1,
     sessionId,
     phase,
-    readOnly: phase === "planning" || phase === "awaitingClarification" || phase === "awaitingApproval",
+    readOnly: phase === "planning" || phase === "awaitingClarification" || phase === "awaitingApproval" || phase === "blocked",
     awaitingApproval: phase === "awaitingApproval",
     willTriggerTurn: false,
     reason: "test",
@@ -249,6 +249,9 @@ test("Todo ignores foreign-session Plan signals and reacts to current-session si
   await harness.emit("session_tree", { type: "session_tree" });
   await assert.rejects(harness.tool({ op: "done", id: 1 }), /frozen while Plan is awaitingApproval/);
   assert.equal(harness.statuses.get("todo"), undefined);
+
+  harness.api.events.emit(PLAN_COORDINATION_CHANNEL, planSignal("current", "blocked"));
+  await assert.rejects(harness.tool({ op: "done", id: 1 }), /frozen while Plan is blocked/);
 
   harness.api.events.emit(PLAN_COORDINATION_CHANNEL, planSignal("current", "off"));
   const completed = await harness.tool({ op: "done", id: 1 });

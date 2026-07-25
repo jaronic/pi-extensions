@@ -11,6 +11,8 @@ import {
   consumePlanChoice,
   decodePlanJournalEntry,
   refinePlan,
+  reportPlanBlocked,
+  resumeBlockedPlan,
   updatePlanStep,
   validatePlanPath,
   type PlanJournalEntry,
@@ -39,7 +41,7 @@ import {
   controlPlanUpdatedAt,
   PLAN_CONTROL_TYPE,
   PLAN_COORDINATION_CHANNEL,
-  LEGACY_PLAN_STATE_TYPE,
+  LEGACY_PLAN_STATE_TYPES,
   PLAN_STATE_TYPE,
   PLAN_TOOL_NAMES,
   type PlanCoordinationSignal,
@@ -119,7 +121,7 @@ export default function planExtension(
       ctx.ui.setWidget("plan", undefined);
       return;
     }
-    const color = current.phase === "executing" ? "success" : current.phase === "awaitingApproval" || current.phase === "awaitingClarification" ? "warning" : "accent";
+    const color = current.phase === "executing" ? "success" : current.phase === "awaitingApproval" || current.phase === "awaitingClarification" || current.phase === "blocked" ? "warning" : "accent";
     const providerId = current.phase === "executing" && current.progress?.kind === "external"
       ? current.progress.providerId
       : undefined;
@@ -145,7 +147,7 @@ export default function planExtension(
   function appendActive(action: PlanJournalEntry["action"]): void {
     if (!state) throw new Error("Cannot persist an inactive plan as active.");
     syncPlanTools();
-    pi.appendEntry<PlanJournalEntry>(PLAN_STATE_TYPE, { version: 2, action, state });
+    pi.appendEntry<PlanJournalEntry>(PLAN_STATE_TYPE, { version: 3, action, state });
   }
 
   function refreshPersistedActive(ctx: ExtensionContext, willTriggerTurn: boolean, reason: string): void {
@@ -246,6 +248,22 @@ export default function planExtension(
     }
   }
 
+  function commitPlanBlocker(current: PlanState, candidate: PlanState, ctx: ExtensionContext): PlanState {
+    if (state !== current || current.phase !== "planning") {
+      throw new Error("Plan state changed while the blocked result was being recorded.");
+    }
+    state = candidate;
+    try {
+      persistActive("block", ctx, false, "plan-blocked");
+      return candidate;
+    } catch (error) {
+      state = current;
+      syncPlanTools();
+      updateStatus(ctx);
+      throw error;
+    }
+  }
+
   async function transitionOff(
     action: "cancel" | "complete",
     ctx: ExtensionContext,
@@ -253,7 +271,7 @@ export default function planExtension(
     signal?: AbortSignal,
   ): Promise<void> {
     const current = state;
-    pi.appendEntry<PlanJournalEntry>(PLAN_STATE_TYPE, { version: 2, action, state: null });
+    pi.appendEntry<PlanJournalEntry>(PLAN_STATE_TYPE, { version: 3, action, state: null });
     const restoreTools = toolLease.active
       ? toolLease.finish(pi.getActiveTools())
       : current?.enteredWithTools;
@@ -286,7 +304,7 @@ export default function planExtension(
     let restored: PlanState | null = null;
     let restoreWarning: string | undefined;
     for (const entry of ctx.sessionManager.getBranch()) {
-      if (entry.type !== "custom" || (entry.customType !== PLAN_STATE_TYPE && entry.customType !== LEGACY_PLAN_STATE_TYPE)) continue;
+      if (entry.type !== "custom" || (entry.customType !== PLAN_STATE_TYPE && !LEGACY_PLAN_STATE_TYPES.includes(entry.customType as typeof LEGACY_PLAN_STATE_TYPES[number]))) continue;
       const decoded = decodePlanJournalEntry(entry.data);
       if (!decoded.ok) {
         restored = null;
@@ -476,6 +494,25 @@ export default function planExtension(
     queueControlTurn(ctx, "refine", "Refine the submitted plan using current evidence, then call submit_plan with the full replacement.");
   }
 
+  function resumeBlockedAndQueue(ctx: ExtensionContext): void {
+    const current = state;
+    if (!current) throw new Error("No plan is active.");
+    state = resumeBlockedPlan(current);
+    try {
+      persistActive("resume", ctx, true, "blocker-resumed");
+    } catch (error) {
+      state = current;
+      syncPlanTools();
+      updateStatus(ctx);
+      throw error;
+    }
+    queueControlTurn(
+      ctx,
+      "plan",
+      "New user information is available after a blocked Plan result. Re-check the prior blocker against current evidence, then either submit an approvable replacement plan or report_plan_blocked again.",
+    );
+  }
+
   async function choosePlanClarification(
     ctx: ExtensionContext,
     beforeTransition?: () => Promise<void>,
@@ -560,6 +597,7 @@ export default function planExtension(
     },
     persistActive,
     commitSubmittedPlan,
+    commitPlanBlocker,
     syncPlanTools,
     updateStatus,
     emitPlanState,
@@ -568,6 +606,7 @@ export default function planExtension(
     answerChoiceAndQueue,
     choosePlanClarification,
     refineAndQueue,
+    resumeBlockedAndQueue,
     transitionOff,
     renderCurrentPlan,
     updateStep,

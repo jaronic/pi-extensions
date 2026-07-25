@@ -25,6 +25,7 @@ export interface PlanCommandRuntime {
   queueControlTurn(ctx: ExtensionContext, kind: "plan" | "refine" | "execute" | "clarification", content: string): void;
   approveAndQueue(ctx: ExtensionContext): Promise<void>;
   refineAndQueue(ctx: ExtensionContext): void;
+  resumeBlockedAndQueue(ctx: ExtensionContext): void;
   choosePlanClarification(ctx: ExtensionContext, beforeTransition?: () => Promise<void>): Promise<void>;
   reviewSubmittedPlan(ctx: ExtensionContext, beforeTransition?: () => Promise<void>): Promise<void>;
   renderCurrentPlan(ctx: ExtensionContext): Promise<string>;
@@ -39,7 +40,7 @@ async function stopCurrentAgent(ctx: ExtensionCommandContext): Promise<void> {
 
 export function registerPlanCommand(pi: ExtensionAPI, runtime: PlanCommandRuntime): void {
   pi.registerCommand("plan", {
-    description: "Enter read-only planning, choose a pending decision, inspect or review a submission, resume, approve, refine, or cancel",
+    description: "Enter read-only planning, choose a pending decision, inspect or review a submission, resume planning or a blocked result, approve, refine, or cancel",
     getArgumentCompletions: (prefix) => {
       const values = ["status", "choose", "review", "resume", "approve", "refine", "cancel"];
       const filtered = values.filter((value) => value.startsWith(prefix.trim()));
@@ -89,6 +90,17 @@ export function registerPlanCommand(pi: ExtensionAPI, runtime: PlanCommandRuntim
       if (action === "resume") {
         if (!current) {
           ctx.ui.notify("Plan mode is off. Use /plan to start.", "warning");
+          return;
+        }
+        if (current.phase === "blocked") {
+          await stopCurrentAgent(ctx);
+          const settled = runtime.getState();
+          if (!settled || settled.phase !== "blocked") {
+            ctx.ui.notify("Plan state changed while the current agent was settling; inspect /plan status.", "warning");
+            return;
+          }
+          runtime.resumeBlockedAndQueue(ctx);
+          ctx.ui.notify("New information accepted; Plan returned to read-only planning.", "info");
           return;
         }
         if (current.phase === "awaitingApproval") {

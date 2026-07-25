@@ -38,6 +38,68 @@ test("starting Plan without a Goal changes mode without queuing a turn", async (
   );
 });
 
+test("blocked Plan results stay read-only and resume with the recorded evidence", async () => {
+  const harness = new ExtensionHarness();
+  registerTestPlan(harness);
+  await harness.emit("session_start", { type: "session_start", reason: "startup" });
+  await harness.command("plan");
+
+  await harness.tool("report_plan_blocked", {
+    summary: "A signing credential is required before a release plan can be approved.",
+    blockingFacts: ["The configured credential store contains no signing key."],
+    evidenceSources: ["config/signing.ts", "credential-store read result"],
+    resolutions: [
+      { kind: "prerequisite", label: "Provide credential", description: "Add a valid signing key to the configured store." },
+      { kind: "alternative", label: "Defer signed release", description: "Plan an unsigned internal build instead." },
+    ],
+  });
+
+  assert.equal(harness.statuses.get("plan"), "Plan blocked");
+  assert.deepEqual(harness.widgets.get("plan"), ["! A signing credential is required before a release plan can be approved."]);
+  assert.equal(harness.getActiveTools().includes("submit_plan"), false);
+  assert.equal(harness.getActiveTools().includes("report_plan_blocked"), false);
+  assert.equal(
+    blockedDecision(await harness.emit("tool_call", { type: "tool_call", toolName: "write", toolCallId: "blocked-write", input: {} }))?.block,
+    true,
+  );
+  await harness.command("plan", "status");
+  assert.match(harness.notifications.at(-1)?.message ?? "", /Verified blocking facts/);
+
+  await harness.command("plan", "resume");
+  assert.ok(harness.getActiveTools().includes("submit_plan"));
+  assert.ok(harness.getActiveTools().includes("report_plan_blocked"));
+  const promptResults = await harness.emit("before_agent_start", { type: "before_agent_start", systemPrompt: "BASE" });
+  const promptResult = promptResults.at(-1);
+  const systemPrompt = promptResult && typeof promptResult === "object" && "systemPrompt" in promptResult && typeof promptResult.systemPrompt === "string"
+    ? promptResult.systemPrompt
+    : "";
+  assert.match(systemPrompt, /A prior planning attempt could not form an approvable implementation plan/);
+  assert.match(systemPrompt, /credential-store read result/);
+});
+
+test("Goal continuation remains paused while Plan is blocked", async () => {
+  const harness = new ExtensionHarness();
+  goalExtension(harness.api);
+  registerTestPlan(harness);
+  await harness.emit("session_start", { type: "session_start", reason: "startup" });
+  await harness.command("goal", "--tokens 50k ship safely");
+  harness.clearPendingMessages();
+  await harness.command("plan");
+  await harness.tool("report_plan_blocked", {
+    summary: "A signing credential is unavailable.",
+    blockingFacts: ["The credential store has no signing key."],
+    evidenceSources: ["credential-store read result"],
+    resolutions: [{ kind: "prerequisite", label: "Provide credential", description: "Add the required signing key." }],
+  });
+  await harness.emit("agent_start", { type: "agent_start" });
+  const before = harness.sentMessages.length;
+  await harness.emit("agent_end", {
+    type: "agent_end",
+    messages: [{ role: "assistant", stopReason: "stop", usage: { totalTokens: 100 } }],
+  });
+  assert.equal(harness.sentMessages.length, before);
+});
+
 test("Goal and Plan coexist through planning, approval, execution, and continuation", async () => {
   const harness = new ExtensionHarness();
   goalExtension(harness.api);
@@ -80,6 +142,7 @@ test("Goal and Plan coexist through planning, approval, execution, and continuat
     "create_goal",
     "get_goal",
     "submit_plan",
+    "report_plan_blocked",
     "request_plan_choice",
   ]);
 
@@ -230,6 +293,7 @@ test("mode switches settle the current agent before queuing the next phase", asy
     "create_goal",
     "get_goal",
     "submit_plan",
+    "report_plan_blocked",
     "request_plan_choice",
   ]);
 
@@ -558,7 +622,7 @@ test("submit_plan returns a compact summary before awaiting explicit approval", 
   assert.equal(harness.widgets.get("plan"), undefined);
 
   await harness.command("plan");
-  assert.deepEqual(harness.getActiveTools(), ["read", "grep", "find", "ls", "submit_plan", "request_plan_choice"]);
+  assert.deepEqual(harness.getActiveTools(), ["read", "grep", "find", "ls", "submit_plan", "report_plan_blocked", "request_plan_choice"]);
   assert.equal(harness.statuses.get("plan"), "Plan");
   assert.equal(harness.widgets.get("plan"), undefined);
   harness.clearPendingMessages();
@@ -839,7 +903,7 @@ test("artifact persistence failures roll back planning state and retry safely", 
   await harness.command("plan");
   const submission = { summary: "Transactional", plan: "## Transactional", steps: ["Verify"] };
   const submitEntries = () => harness.entries.filter((entry) => {
-    return entry.customType === "plan-state-v2"
+    return entry.customType === "plan-state-v3"
       && entry.data && typeof entry.data === "object"
       && "action" in entry.data && entry.data.action === "submit";
   });
@@ -875,7 +939,7 @@ test("artifact persistence rejects concurrent and stale Plan submissions", async
   deferred.resolve();
   await first;
   const submitEntries = harness.entries.filter((entry) => {
-    return entry.customType === "plan-state-v2"
+    return entry.customType === "plan-state-v3"
       && entry.data && typeof entry.data === "object"
       && "action" in entry.data && entry.data.action === "submit";
   });
@@ -894,7 +958,7 @@ test("artifact persistence rejects concurrent and stale Plan submissions", async
   await assert.rejects(staleSubmission, /Plan state changed while the submitted Plan was being persisted\./);
   assert.equal(staleStore.files.size, 0);
   assert.equal(
-    staleHarness.entries.some((entry) => entry.customType === "plan-state-v2" && entry.data && typeof entry.data === "object" && "action" in entry.data && entry.data.action === "submit"),
+    staleHarness.entries.some((entry) => entry.customType === "plan-state-v3" && entry.data && typeof entry.data === "object" && "action" in entry.data && entry.data.action === "submit"),
     false,
   );
 });
@@ -935,7 +999,7 @@ test("Plan step journal failures preserve the prior executable state and retry s
   assert.equal(harness.getActiveTools().includes("update_plan_step"), false);
 });
 
-test("legacy v1 local progress restores and completes through the v2 journal", async () => {
+test("legacy v1 local progress restores and completes through the v3 journal", async () => {
   const harness = new ExtensionHarness(["read", "bash", "edit"]);
   registerTestPlan(harness);
   harness.entries.push({
@@ -963,8 +1027,8 @@ test("legacy v1 local progress restores and completes through the v2 journal", a
   await harness.tool("update_plan_step", { id: "step-1", status: "completed" });
   assert.equal(harness.widgets.get("plan"), undefined);
   assert.deepEqual(harness.getActiveTools(), ["read", "bash", "edit"]);
-  assert.equal(harness.entries.at(-1)?.customType, "plan-state-v2");
-  assert.deepEqual(harness.entries.at(-1)?.data, { version: 2, action: "complete", state: null });
+  assert.equal(harness.entries.at(-1)?.customType, "plan-state-v3");
+  assert.deepEqual(harness.entries.at(-1)?.data, { version: 3, action: "complete", state: null });
 });
 
 test("provider close failure cannot roll back a durable Plan cancellation", async () => {
@@ -1016,5 +1080,5 @@ test("provider close failure cannot roll back a durable Plan cancellation", asyn
   assert.equal(harness.statuses.get("plan"), undefined);
   assert.deepEqual(harness.getActiveTools(), originalTools);
   assert.ok(harness.notifications.some((notification) => notification.message.includes("Progress provider close failed after Plan exited: cleanup unavailable")));
-  assert.deepEqual(harness.entries.at(-1)?.data, { version: 2, action: "cancel", state: null });
+  assert.deepEqual(harness.entries.at(-1)?.data, { version: 3, action: "cancel", state: null });
 });

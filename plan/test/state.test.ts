@@ -7,6 +7,8 @@ import {
   decodePlanJournalEntry,
   decodePlanState,
   refinePlan,
+  reportPlanBlocked,
+  resumeBlockedPlan,
   submitPlan,
   updatePlanStep,
 } from "../src/state.ts";
@@ -44,6 +46,32 @@ test("plan lifecycle preserves the pre-plan tool snapshot", () => {
   const executing = approvePlan(awaiting, 30);
   assert.equal(executing.phase, "executing");
   assert.deepEqual(executing.enteredWithTools, ["read", "bash"]);
+});
+
+test("blocked Plan results preserve evidence and resume only into read-only planning", () => {
+  const blocked = reportPlanBlocked(createPlanningState(["read", "bash"], 10), {
+    summary: "The required signing credential is unavailable.",
+    blockingFacts: ["The configured credential store contains no signing key."],
+    evidenceSources: ["config/signing.ts", "credential-store read result"],
+    resolutions: [
+      { kind: "prerequisite", label: "Provide signing credential", description: "Add a valid signing key to the configured credential store." },
+      { kind: "alternative", label: "Defer signed release", description: "Plan an unsigned internal build instead." },
+    ],
+  }, 20);
+  assert.equal(blocked.phase, "blocked");
+  assert.equal(blocked.plan, undefined);
+  assert.equal(blocked.steps.length, 0);
+  assert.equal(blocked.blocker?.resolutions[0]?.kind, "prerequisite");
+  assert.equal(decodePlanState(blocked).ok, true);
+  assert.equal(decodePlanState({ ...blocked, blocker: { ...blocked.blocker!, blockingFacts: [] } }).ok, false);
+  assert.equal(decodePlanState({ ...blocked, blocker: { ...blocked.blocker!, summary: ` ${blocked.blocker!.summary}` } }).ok, false);
+
+  const resumed = resumeBlockedPlan(blocked, 30);
+  assert.equal(resumed.phase, "planning");
+  assert.equal(resumed.blocker?.summary, blocked.blocker?.summary);
+  const submitted = submitPlan(resumed, { summary: "Sign release", plan: "Use the supplied credential.", steps: ["Sign release"] }, 40);
+  assert.equal(submitted.blocker, undefined);
+  assert.throws(() => reportPlanBlocked(submitted, blocked.blocker!), /only be blocked during planning/);
 });
 
 test("step updates enforce execution phase, known IDs, and a single in-progress step", () => {
@@ -137,7 +165,7 @@ test("decodePlanState accepts exact v1 state and rejects unsafe persisted data",
   }
 });
 
-test("decodePlanState enforces exact v2 progress payloads", () => {
+test("decodePlanState enforces exact current progress payloads", () => {
   const executing = approvePlan(
     submitPlan(createPlanningState(["read"], 1), { summary: "Strict", plan: "Execute", steps: ["Verify"] }, 2),
     3,
@@ -174,7 +202,7 @@ test("decodePlanJournalEntry enforces version, tombstones, and action phase", ()
   assert.equal(decodePlanJournalEntry({ version: 1, action: "submit", state: storedPlan() }).ok, false);
   assert.deepEqual(decodePlanJournalEntry({ version: 1, action: "complete", state: null }), {
     ok: true,
-    value: { version: 2, action: "complete", state: null },
+    value: { version: 3, action: "complete", state: null },
   });
   assert.equal(decodePlanJournalEntry({ version: 1, action: "complete", state: null, forged: true }).ok, false);
 });

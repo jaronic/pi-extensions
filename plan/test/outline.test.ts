@@ -146,7 +146,7 @@ test("Copy keeps the complete undecorated Plan payload", async () => {
   harness.setCustomInputs("c");
   await harness.command("plan", "review");
   const submitted = [...harness.entries].reverse().find((entry) => {
-    return entry.customType === "plan-state-v2"
+    return entry.customType === "plan-state-v3"
       && entry.data && typeof entry.data === "object"
       && "action" in entry.data && entry.data.action === "submit";
   });

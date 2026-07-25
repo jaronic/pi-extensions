@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This repository contains six independent, private TypeScript extensions for `@earendil-works/pi-coding-agent`:
+This repository contains seven independent, private TypeScript extensions for `@earendil-works/pi-coding-agent`:
 
 - `rg`: registers a ripgrep-backed `rg` tool and prioritizes it over Pi's built-in `grep`.
 - `plan`: implements a planning/approval/execution state machine with tool restrictions.
@@ -10,6 +10,7 @@ This repository contains six independent, private TypeScript extensions for `@ea
 - `lsp`: exposes language-server navigation, diagnostics, symbols, rename previews, and code actions through one `lsp` tool.
 - `request`: provides one responsive request UI for the `ask` tool, native extension dialogs, and versioned cross-extension requests.
 - `todo`: maintains a bounded, branch-local execution ledger with stable task IDs, one active task, and Plan-aware mutation gating.
+- `promptline-editor`: owns the themed custom editor, compact status line, and live Git branch indicator.
 
 There is no root npm package or workspace. Treat each top-level directory as a separate package and run package commands from that directory.
 The top-level `themes/` directory is a standalone global Pi resource, not an extension package and not owned by any extension.
@@ -36,6 +37,7 @@ Each `<extension>/package.json` declares `pi.extensions: ["./src/index.ts"]`. Pi
 | `rg/src/`, `rg/test/` | Ripgrep tool registration, priority logic, and focused tests. |
 | `request/src/`, `request/test/` | Request schemas, responsive TUI, native adapters, event protocol, serialized coordinator, and tests. |
 | `todo/src/`, `todo/test/` | Todo state machine, bounded output, mixed-carrier branch persistence, TUI/command surfaces, and cross-extension coexistence tests. |
+| `promptline-editor/src/`, `promptline-editor/test/` | Promptline TUI renderer plus Git `HEAD` branch monitor and linked-worktree regression test. |
 | `themes/` | Standalone repository-wide light/dark Pi palettes and their global installation/activation contract. |
 | `Makefile`, `scripts/` | Safe global Pi link controls and their dependency-free behavior tests. |
 
@@ -46,7 +48,7 @@ Each package owns its dependencies, lockfile, compiler configuration, and tests.
 Use Node.js `>=22.19.0` and npm. From one extension directory:
 
 ```sh
-cd goal                    # or plan, lsp, request, rg, todo
+cd promptline-editor       # or goal, plan, lsp, request, rg, todo
 npm ci
 npm run check              # tsc --noEmit
 npm test                   # node --import tsx --test test/*.test.ts
@@ -55,16 +57,16 @@ npm test                   # node --import tsx --test test/*.test.ts
 To check every package from the repository root:
 
 ```sh
-for dir in goal plan lsp request rg todo; do
+for dir in goal plan lsp request rg todo promptline-editor; do
   (cd "$dir" && npm run check && npm test) || exit 1
 done
 ```
 
-GitHub Actions runs the same `npm ci`, `npm run check`, and `npm test` sequence for all six packages via `.github/workflows/ci.yml`.
+GitHub Actions runs the same `npm ci`, `npm run check`, and `npm test` sequence for all seven packages via `.github/workflows/ci.yml`.
 
 There are no `build`, `lint`, `format`, `start`, or `dev` scripts. TypeScript is loaded directly by Pi and tests; `npm run check` intentionally emits no build artifacts.
 
-For global development use, enable this repository's six extensions and six themes from the repository root:
+For global development use, enable this repository's seven extensions and six themes from the repository root:
 
 ```sh
 make pi-on
@@ -78,7 +80,7 @@ Pi follows each linked package's manifest to `src/index.ts`; use `/reload` after
 For an isolated load smoke test that does not use the current session or global links:
 
 ```sh
-for name in goal plan lsp request rg todo; do
+for name in goal plan lsp request rg todo promptline-editor; do
   pi --no-session -p --extension "$PWD/$name" "Reply with exactly: SMOKE_OK"
 done
 ```
@@ -100,11 +102,11 @@ done
 ## Important Files
 
 - `docs/pi-extension-development.md`: versioned Pi API reference, ecosystem examples, extension design rules, security guidance, and pre-merge checklist; read it before adding or materially changing an extension.
-- `goal/README.md`, `plan/README.md`, `lsp/README.md`, `request/README.md`, `rg/README.md`, `todo/README.md`: user-facing installation, global symlink integration, usage, configuration, effects, implementation principles, and key code nodes. Keep each aligned with its extension.
+- `goal/README.md`, `plan/README.md`, `lsp/README.md`, `request/README.md`, `rg/README.md`, `todo/README.md`, `promptline-editor/README.md`: user-facing installation, global symlink integration, usage, configuration, effects, implementation principles, and key code nodes. Keep each aligned with its extension.
 - `themes/README.md`: global palette installation, activation lifecycle, semantic roles, and extension integration contract.
 - `*/package.json`: Pi entry metadata, Node requirement, scripts, and package-local dependencies.
 - `*/tsconfig.json`: shared strict `NodeNext`, `noEmit` TypeScript contract covering `src/**/*.ts` and `test/**/*.ts`.
-- `.github/workflows/ci.yml`: dependency-free theme validation and global-link-manager tests plus a six-package Node 22.19 matrix running clean install, typecheck, and tests.
+- `.github/workflows/ci.yml`: dependency-free theme validation and global-link-manager tests plus a seven-package Node 22.19 matrix running clean install, typecheck, and tests.
 - `plan/src/index.ts`, `plan/src/command.ts`, `plan/src/tools.ts`, `plan/src/state.ts`, `plan/src/tool-lease.ts`: Plan lifecycle wiring, user/tool boundaries, state machine, and coexistence-safe active-tool leasing.
 - `goal/src/index.ts`, `goal/src/command.ts`, `goal/src/tools.ts`, `goal/src/state.ts`: Goal lifecycle wiring, user/tool boundaries, persistence, continuation, and accounting rules.
 - `lsp/src/index.ts`, `lsp/src/config.ts`, `lsp/src/server-manager.ts`, `lsp/src/lsp-client.ts`: LSP API boundary, layered configuration, routing/lifecycle, and protocol transport.
@@ -112,6 +114,7 @@ done
 - `rg/src/index.ts`: complete RG extension and exported priority helper.
 - `request/src/index.ts`, `request/src/component.ts`, `request/src/adapters.ts`, `request/src/protocol.ts`: Request lifecycle wiring, responsive renderer, native UI compatibility layer, and shared request channel.
 - `todo/src/index.ts`, `todo/src/state.ts`, `todo/src/tools.ts`, `todo/src/persistence.ts`, `todo/src/output.ts`: Todo lifecycle wiring, immutable transitions, bounded tool contract, branch replay, and TUI/model projections.
+- `promptline-editor/src/index.ts`, `promptline-editor/src/branch.ts`: custom editor composition plus live Git `HEAD` monitoring for normal and linked worktrees.
 - `themes/pi-extensions-*.json`, `themes/validate.mjs`: standalone global Pi palettes and the role-aware schema/contrast gate.
 - `Makefile`, `scripts/pi-global-links.sh`, `scripts/pi-global-links.test.mjs`: conflict-safe global extension/theme link controls and isolated behavior tests.
 - `plan/test/harness.ts`, `plan/test/coexistence.test.ts`: in-process Pi test double and the main cross-extension behavioral suite.
