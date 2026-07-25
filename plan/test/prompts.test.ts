@@ -5,12 +5,15 @@ import type { PlanState } from "../src/state.ts";
 
 function state(phase: PlanState["phase"], plan?: string): PlanState {
   return {
-    version: 1,
+    version: 2,
     phase,
     plan,
     steps: phase === "executing"
-      ? [{ id: "step-1", text: "Execute the approved change", status: "inProgress" }]
+      ? [{ id: "step-1", text: "Execute the approved change" }]
       : [],
+    progress: phase === "executing"
+      ? { kind: "local", steps: [{ id: "step-1", status: "inProgress" }] }
+      : undefined,
     enteredWithTools: ["read"],
     createdAt: 1,
     updatedAt: 1,

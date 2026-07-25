@@ -52,12 +52,14 @@ test("step updates enforce execution phase, known IDs, and a single in-progress 
     { summary: "Do it", plan: "Execute two steps", steps: ["One", "Two"] },
     20,
   );
-  assert.throws(() => updatePlanStep(awaiting, "step-1", "inProgress"), /during execution/);
+  assert.throws(() => updatePlanStep(awaiting, "step-1", "inProgress"), /local execution/);
   let executing = approvePlan(awaiting, 30);
   executing = updatePlanStep(executing, "step-1", "inProgress", 40);
   executing = updatePlanStep(executing, "step-2", "inProgress", 50);
-  assert.equal(executing.steps[0].status, "pending");
-  assert.equal(executing.steps[1].status, "inProgress");
+  assert.equal(executing.progress?.kind, "local");
+  if (executing.progress?.kind !== "local") throw new Error("Expected local progress.");
+  assert.equal(executing.progress.steps[0].status, "pending");
+  assert.equal(executing.progress.steps[1].status, "inProgress");
   assert.throws(() => updatePlanStep(executing, "missing", "completed"), /Unknown plan step/);
 });
 
@@ -129,9 +131,28 @@ test("decodePlanState accepts exact v1 state and rejects unsafe persisted data",
     storedPlan({ enteredWithTools: ["read", "read"] }),
     storedPlan({ enteredWithTools: Array.from({ length: 257 }, (_, index) => `tool-${index}`) }),
     storedPlan({ updatedAt: 0 }),
+    storedPlan({ forged: true }),
   ]) {
     assert.equal(decodePlanState(invalid).ok, false);
   }
+});
+
+test("decodePlanState enforces exact v2 progress payloads", () => {
+  const executing = approvePlan(
+    submitPlan(createPlanningState(["read"], 1), { summary: "Strict", plan: "Execute", steps: ["Verify"] }, 2),
+    3,
+  );
+  assert.equal(decodePlanState(executing).ok, true);
+  assert.equal(decodePlanState({ ...executing, forged: true }).ok, false);
+  assert.equal(decodePlanState({ ...executing, steps: [{ ...executing.steps[0], status: "pending" }] }).ok, false);
+  assert.equal(decodePlanState({
+    ...executing,
+    progress: { kind: "local", steps: [{ id: "step-1", status: "pending", forged: true }] },
+  }).ok, false);
+  assert.equal(decodePlanState({
+    ...executing,
+    progress: { kind: "external", providerId: "todo", executionId: "execution", forged: true },
+  }).ok, false);
 });
 
 test("decodePlanState accepts both new and submitted planning states", () => {
@@ -153,8 +174,9 @@ test("decodePlanJournalEntry enforces version, tombstones, and action phase", ()
   assert.equal(decodePlanJournalEntry({ version: 1, action: "submit", state: storedPlan() }).ok, false);
   assert.deepEqual(decodePlanJournalEntry({ version: 1, action: "complete", state: null }), {
     ok: true,
-    value: { version: 1, action: "complete", state: null },
+    value: { version: 2, action: "complete", state: null },
   });
+  assert.equal(decodePlanJournalEntry({ version: 1, action: "complete", state: null, forged: true }).ok, false);
 });
 
 test("planPath restores cross-platform previews and clears only during refinement", () => {

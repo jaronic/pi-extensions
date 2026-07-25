@@ -6,6 +6,7 @@ import planExtension from "../src/index.ts";
 import { blockedDecision, ExtensionHarness } from "./harness.ts";
 import type { PlanExtensionDependencies } from "../src/index.ts";
 import { InMemoryPlanArtifactStore } from "./harness.ts";
+import { EXECUTION_PROGRESS_CHANNEL, type ProgressProvider } from "../src/progress.ts";
 
 function registerTestPlan(
   harness: ExtensionHarness,
@@ -803,7 +804,7 @@ test("malformed latest journal entries do not resurrect earlier Goal or Plan sta
   };
   planHarness.entries.push(
     { type: "custom", customType: "plan-state-v1", data: { version: 1, action: "start", state } },
-    { type: "custom", customType: "plan-state-v1", data: { version: 2, action: "start", state } },
+    { type: "custom", customType: "plan-state-v2", data: { version: 2, action: "start", state } },
   );
   await planHarness.emit("session_start", { type: "session_start", reason: "startup" });
   assert.equal(planHarness.widgets.get("plan"), undefined);
@@ -838,7 +839,7 @@ test("artifact persistence failures roll back planning state and retry safely", 
   await harness.command("plan");
   const submission = { summary: "Transactional", plan: "## Transactional", steps: ["Verify"] };
   const submitEntries = () => harness.entries.filter((entry) => {
-    return entry.customType === "plan-state-v1"
+    return entry.customType === "plan-state-v2"
       && entry.data && typeof entry.data === "object"
       && "action" in entry.data && entry.data.action === "submit";
   });
@@ -874,7 +875,7 @@ test("artifact persistence rejects concurrent and stale Plan submissions", async
   deferred.resolve();
   await first;
   const submitEntries = harness.entries.filter((entry) => {
-    return entry.customType === "plan-state-v1"
+    return entry.customType === "plan-state-v2"
       && entry.data && typeof entry.data === "object"
       && "action" in entry.data && entry.data.action === "submit";
   });
@@ -893,7 +894,127 @@ test("artifact persistence rejects concurrent and stale Plan submissions", async
   await assert.rejects(staleSubmission, /Plan state changed while the submitted Plan was being persisted\./);
   assert.equal(staleStore.files.size, 0);
   assert.equal(
-    staleHarness.entries.some((entry) => entry.customType === "plan-state-v1" && entry.data && typeof entry.data === "object" && "action" in entry.data && entry.data.action === "submit"),
+    staleHarness.entries.some((entry) => entry.customType === "plan-state-v2" && entry.data && typeof entry.data === "object" && "action" in entry.data && entry.data.action === "submit"),
     false,
   );
+});
+
+test("Plan step journal failures preserve the prior executable state and retry safely", async () => {
+  const harness = new ExtensionHarness();
+  registerTestPlan(harness);
+  await harness.emit("session_start", { type: "session_start", reason: "startup" });
+  await harness.command("plan");
+  await harness.tool("submit_plan", {
+    summary: "Transactional progress",
+    plan: "Advance only after durable progress commits.",
+    steps: ["Verify"],
+  });
+  await harness.command("plan", "approve");
+  assert.deepEqual(harness.widgets.get("plan"), ["· step-1 Verify"]);
+
+  harness.failNextAppendEntry(new Error("step append failed"));
+  await assert.rejects(
+    harness.tool("update_plan_step", { id: "step-1", status: "inProgress" }),
+    /step append failed/,
+  );
+  assert.deepEqual(harness.widgets.get("plan"), ["· step-1 Verify"]);
+  assert.ok(harness.getActiveTools().includes("update_plan_step"));
+
+  await harness.tool("update_plan_step", { id: "step-1", status: "inProgress" });
+  assert.deepEqual(harness.widgets.get("plan"), ["→ step-1 Verify"]);
+  harness.failNextAppendEntry(new Error("terminal append failed"));
+  await assert.rejects(
+    harness.tool("update_plan_step", { id: "step-1", status: "completed" }),
+    /terminal append failed/,
+  );
+  assert.deepEqual(harness.widgets.get("plan"), ["→ step-1 Verify"]);
+  assert.ok(harness.getActiveTools().includes("update_plan_step"));
+
+  await harness.tool("update_plan_step", { id: "step-1", status: "completed" });
+  assert.equal(harness.widgets.get("plan"), undefined);
+  assert.equal(harness.getActiveTools().includes("update_plan_step"), false);
+});
+
+test("legacy v1 local progress restores and completes through the v2 journal", async () => {
+  const harness = new ExtensionHarness(["read", "bash", "edit"]);
+  registerTestPlan(harness);
+  harness.entries.push({
+    type: "custom",
+    customType: "plan-state-v1",
+    data: {
+      version: 1,
+      action: "approve",
+      state: {
+        version: 1,
+        phase: "executing",
+        summary: "Legacy execution",
+        plan: "Finish restored work.",
+        steps: [{ id: "step-1", text: "Verify", status: "inProgress" }],
+        enteredWithTools: ["read", "bash", "edit"],
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    },
+  });
+  await harness.emit("session_start", { type: "session_start", reason: "resume" });
+  assert.deepEqual(harness.widgets.get("plan"), ["→ step-1 Verify"]);
+  assert.ok(harness.getActiveTools().includes("update_plan_step"));
+
+  await harness.tool("update_plan_step", { id: "step-1", status: "completed" });
+  assert.equal(harness.widgets.get("plan"), undefined);
+  assert.deepEqual(harness.getActiveTools(), ["read", "bash", "edit"]);
+  assert.equal(harness.entries.at(-1)?.customType, "plan-state-v2");
+  assert.deepEqual(harness.entries.at(-1)?.data, { version: 2, action: "complete", state: null });
+});
+
+test("provider close failure cannot roll back a durable Plan cancellation", async () => {
+  const originalTools = ["read", "bash", "edit"];
+  const harness = new ExtensionHarness(originalTools);
+  const provider: ProgressProvider = {
+    id: "unstable",
+    priority: 1,
+    async open(request) {
+      return {
+        executionId: request.executionId,
+        revision: 1,
+        steps: [{ id: "step-1", status: "pending" }],
+      };
+    },
+    async read(request) {
+      return {
+        executionId: request.executionId,
+        revision: 1,
+        steps: [{ id: "step-1", status: "pending" }],
+      };
+    },
+    async update(request) {
+      return {
+        executionId: request.executionId,
+        revision: 2,
+        steps: [{ id: "step-1", status: request.status }],
+      };
+    },
+    async close() {
+      throw new Error("cleanup unavailable");
+    },
+  };
+  harness.api.events.on(EXECUTION_PROGRESS_CHANNEL, (value: unknown) => {
+    if (value && typeof value === "object" && "offer" in value && typeof value.offer === "function") value.offer(provider);
+  });
+  registerTestPlan(harness);
+  await harness.emit("session_start", { type: "session_start", reason: "startup" });
+  await harness.command("plan");
+  await harness.tool("submit_plan", {
+    summary: "Cancelable external progress",
+    plan: "Cancel safely.",
+    steps: ["Verify"],
+  });
+  await harness.command("plan", "approve");
+  assert.match(harness.statuses.get("plan") ?? "", /Plan · unstable/);
+
+  await harness.command("plan", "cancel");
+  assert.equal(harness.statuses.get("plan"), undefined);
+  assert.deepEqual(harness.getActiveTools(), originalTools);
+  assert.ok(harness.notifications.some((notification) => notification.message.includes("Progress provider close failed after Plan exited: cleanup unavailable")));
+  assert.deepEqual(harness.entries.at(-1)?.data, { version: 2, action: "cancel", state: null });
 });

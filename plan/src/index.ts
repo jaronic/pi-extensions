@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   copyToClipboard,
   type ExtensionAPI,
@@ -6,19 +7,31 @@ import {
 import {
   answerPlanChoice,
   approvePlan,
+  approvePlanWithExternalProgress,
   consumePlanChoice,
   decodePlanJournalEntry,
   refinePlan,
+  updatePlanStep,
   validatePlanPath,
   type PlanJournalEntry,
   type PlanPhase,
   type PlanState,
+  type PlanStepProgress,
+  type PlanStepStatus,
 } from "./state.ts";
 import {
   phaseLabel,
   renderPlan,
   renderPlanWidget,
 } from "./output.ts";
+import {
+  allProgressStepsComplete,
+  closeProgressProvider,
+  openProgressProvider,
+  readProgressProvider,
+  updateProgressProvider,
+  type ProgressSnapshot,
+} from "./progress.ts";
 import { isPlanToolAllowed, selectPlanTools } from "./tool-policy.ts";
 import { PlanToolLease } from "./tool-lease.ts";
 import { planSystemPrompt } from "./prompts.ts";
@@ -26,6 +39,7 @@ import {
   controlPlanUpdatedAt,
   PLAN_CONTROL_TYPE,
   PLAN_COORDINATION_CHANNEL,
+  LEGACY_PLAN_STATE_TYPE,
   PLAN_STATE_TYPE,
   PLAN_TOOL_NAMES,
   type PlanCoordinationSignal,
@@ -52,6 +66,7 @@ export default function planExtension(
   const copyText = dependencies.copyText ?? copyToClipboard;
   const artifactStore = dependencies.artifactStore ?? createPlanArtifactStore();
   let state: PlanState | null = null;
+  let externalSnapshot: ProgressSnapshot | undefined;
   let controlQueued = false;
   const toolLease = new PlanToolLease(PLAN_TOOL_NAMES);
   let automaticReviewUpdatedAt: number | undefined;
@@ -98,15 +113,19 @@ export default function planExtension(
 
   function updateStatus(ctx: ExtensionContext): void {
     if (!ctx.hasUI) return;
-    if (!state) {
+    const current = state;
+    if (!current) {
       ctx.ui.setStatus("plan", undefined);
       ctx.ui.setWidget("plan", undefined);
       return;
     }
-    const color = state.phase === "executing" ? "success" : state.phase === "awaitingApproval" || state.phase === "awaitingClarification" ? "warning" : "accent";
-    const [heading, ...lines] = renderPlanWidget(state);
-    ctx.ui.setStatus("plan", ctx.ui.theme.fg(color, heading));
-    ctx.ui.setWidget("plan", lines.length > 0 ? lines : undefined);
+    const color = current.phase === "executing" ? "success" : current.phase === "awaitingApproval" || current.phase === "awaitingClarification" ? "warning" : "accent";
+    const providerId = current.phase === "executing" && current.progress?.kind === "external"
+      ? current.progress.providerId
+      : undefined;
+    const [heading, ...lines] = renderPlanWidget(current, externalSnapshot?.steps);
+    ctx.ui.setStatus("plan", ctx.ui.theme.fg(color, providerId ? `${heading} · ${providerId}` : heading));
+    ctx.ui.setWidget("plan", providerId ? undefined : lines.length > 0 ? lines : undefined);
   }
 
   function emitPlanState(ctx: ExtensionContext, willTriggerTurn: boolean, reason: string): void {
@@ -126,7 +145,7 @@ export default function planExtension(
   function appendActive(action: PlanJournalEntry["action"]): void {
     if (!state) throw new Error("Cannot persist an inactive plan as active.");
     syncPlanTools();
-    pi.appendEntry<PlanJournalEntry>(PLAN_STATE_TYPE, { version: 1, action, state });
+    pi.appendEntry<PlanJournalEntry>(PLAN_STATE_TYPE, { version: 2, action, state });
   }
 
   function refreshPersistedActive(ctx: ExtensionContext, willTriggerTurn: boolean, reason: string): void {
@@ -227,19 +246,37 @@ export default function planExtension(
     }
   }
 
-  function transitionOff(action: "cancel" | "complete", ctx: ExtensionContext, reason: string): void {
+  async function transitionOff(
+    action: "cancel" | "complete",
+    ctx: ExtensionContext,
+    reason: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const current = state;
+    pi.appendEntry<PlanJournalEntry>(PLAN_STATE_TYPE, { version: 2, action, state: null });
+    const restoreTools = toolLease.active
+      ? toolLease.finish(pi.getActiveTools())
+      : current?.enteredWithTools;
+    state = null;
+    externalSnapshot = undefined;
     automaticReviewUpdatedAt = undefined;
     automaticClarificationUpdatedAt = undefined;
     choiceAnswerQueuedAt = undefined;
-    const restoreTools = toolLease.active
-      ? toolLease.finish(pi.getActiveTools())
-      : state?.enteredWithTools;
-    state = null;
     if (restoreTools) pi.setActiveTools(restoreTools);
     else syncPlanTools();
-    pi.appendEntry<PlanJournalEntry>(PLAN_STATE_TYPE, { version: 1, action, state: null });
     updateStatus(ctx);
     emitPlanState(ctx, false, reason);
+    if (current?.phase !== "executing" || current.progress?.kind !== "external") return;
+    try {
+      await closeProgressProvider(pi.events, current.progress.providerId, {
+        sessionId: ctx.sessionManager.getSessionId(),
+        executionId: current.progress.executionId,
+        outcome: action === "complete" ? "completed" : "cancelled",
+        signal,
+      });
+    } catch (error) {
+      if (ctx.hasUI) ctx.ui.notify(`Progress provider close failed after Plan exited: ${error instanceof Error ? error.message : String(error)}`, "warning");
+    }
   }
 
   function restoreFromBranch(ctx: ExtensionContext): void {
@@ -249,7 +286,7 @@ export default function planExtension(
     let restored: PlanState | null = null;
     let restoreWarning: string | undefined;
     for (const entry of ctx.sessionManager.getBranch()) {
-      if (entry.type !== "custom" || entry.customType !== PLAN_STATE_TYPE) continue;
+      if (entry.type !== "custom" || (entry.customType !== PLAN_STATE_TYPE && entry.customType !== LEGACY_PLAN_STATE_TYPE)) continue;
       const decoded = decodePlanJournalEntry(entry.data);
       if (!decoded.ok) {
         restored = null;
@@ -260,6 +297,7 @@ export default function planExtension(
       restoreWarning = undefined;
     }
     state = restored;
+    externalSnapshot = undefined;
     controlQueued = false;
     automaticReviewUpdatedAt = undefined;
     automaticClarificationUpdatedAt = undefined;
@@ -309,15 +347,126 @@ export default function planExtension(
     return state;
   }
 
-  function approveAndQueue(ctx: ExtensionContext): void {
-    if (!state) throw new Error("No plan is active.");
-    state = approvePlan(state);
-    persistActive("approve", ctx, true, "approved-tools-restored");
+  async function approveAndQueue(ctx: ExtensionContext): Promise<void> {
+    const current = state;
+    if (!current || current.phase !== "awaitingApproval") throw new Error("No plan is active.");
+    const executionId = randomUUID();
+    const attempt = await openProgressProvider(pi.events, {
+      sessionId: ctx.sessionManager.getSessionId(),
+      executionId,
+      steps: current.steps,
+      signal: ctx.signal,
+    });
+    if (state !== current || state.phase !== "awaitingApproval") {
+      if (attempt.opened) {
+        await closeProgressProvider(pi.events, attempt.opened.providerId, {
+          sessionId: ctx.sessionManager.getSessionId(),
+          executionId,
+          outcome: "cancelled",
+          signal: ctx.signal,
+        });
+      }
+      throw new Error("Plan state changed while progress ownership was being acquired.");
+    }
+    const candidate = attempt.opened
+      ? approvePlanWithExternalProgress(current, attempt.opened.providerId, executionId)
+      : approvePlan(current);
+    state = candidate;
+    externalSnapshot = attempt.opened?.snapshot;
+    try {
+      persistActive("approve", ctx, true, "approved-tools-restored");
+    } catch (error) {
+      state = current;
+      externalSnapshot = undefined;
+      syncPlanTools();
+      if (attempt.opened) {
+        try {
+          await closeProgressProvider(pi.events, attempt.opened.providerId, {
+            sessionId: ctx.sessionManager.getSessionId(),
+            executionId,
+            outcome: "cancelled",
+            signal: ctx.signal,
+          });
+        } catch (closeError) {
+          throw new AggregateError([error, closeError], "Failed to roll back Plan progress ownership.", { cause: error });
+        }
+      }
+      throw error;
+    }
+    if (!attempt.opened && attempt.failures.length > 0 && ctx.hasUI) {
+      ctx.ui.notify(`External progress providers declined; using Plan local progress. ${attempt.failures.join("; ")}`, "warning");
+    }
     queueControlTurn(
       ctx,
       "execute",
-      `Execute the explicitly approved plan below. Update tracked steps as their observable state changes.\n\n${renderPlan(state)}`,
+      `Execute the explicitly approved plan below. Update tracked steps as their observable state changes.\n\n${renderPlan(candidate, attempt.opened?.snapshot.steps)}`,
     );
+  }
+
+  async function renderCurrentPlan(ctx: ExtensionContext): Promise<string> {
+    const current = state;
+    if (!current) return "Plan mode is off. Use /plan to start.";
+    if (current.phase !== "executing" || current.progress?.kind !== "external") return renderPlan(current);
+    try {
+      const snapshot = await readProgressProvider(pi.events, current.progress.providerId, {
+        sessionId: ctx.sessionManager.getSessionId(),
+        executionId: current.progress.executionId,
+        signal: ctx.signal,
+      }, current.steps);
+      if (state === current) {
+        externalSnapshot = snapshot;
+        updateStatus(ctx);
+      }
+      return renderPlan(current, snapshot.steps);
+    } catch (error) {
+      return `${renderPlan(current, externalSnapshot?.steps)}\n\nProgress provider unavailable: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  async function updateStep(
+    requestId: string,
+    id: string,
+    status: PlanStepStatus,
+    signal: AbortSignal | undefined,
+    ctx: ExtensionContext,
+  ): Promise<{ state: PlanState; progress: readonly PlanStepProgress[]; complete: boolean }> {
+    const current = state;
+    if (!current || current.phase !== "executing" || !current.progress) {
+      throw new Error("No approved plan is currently executing.");
+    }
+    if (current.progress.kind === "local") {
+      const next = updatePlanStep(current, id, status);
+      const progress = next.progress?.kind === "local" ? next.progress.steps : [];
+      const complete = progress.length > 0 && progress.every((step) => step.status === "completed");
+      if (complete) {
+        await transitionOff("complete", ctx, "completed-tools-restored", signal);
+      } else {
+        state = next;
+        try {
+          persistActive("step", ctx, false, "step-updated");
+        } catch (error) {
+          state = current;
+          syncPlanTools();
+          updateStatus(ctx);
+          throw error;
+        }
+      }
+      return { state: next, progress, complete };
+    }
+    const snapshot = await updateProgressProvider(pi.events, current.progress.providerId, {
+      sessionId: ctx.sessionManager.getSessionId(),
+      executionId: current.progress.executionId,
+      requestId,
+      stepId: id,
+      status,
+      signal,
+    }, current.steps);
+    if (state !== current) throw new Error("Plan state changed while its progress provider was updating.");
+    externalSnapshot = snapshot;
+    updateStatus(ctx);
+    const complete = allProgressStepsComplete(snapshot);
+    if (complete) await transitionOff("complete", ctx, "completed-tools-restored", signal);
+    return { state: current, progress: snapshot.steps, complete };
   }
 
   function refineAndQueue(ctx: ExtensionContext): void {
@@ -393,13 +542,13 @@ export default function planExtension(
       return;
     }
     if (choice === "Execute plan") {
-      approveAndQueue(ctx);
+      await approveAndQueue(ctx);
       ctx.ui.notify("Plan approved; original tools restored and execution queued.", "info");
     } else if (choice === "Refine plan") {
       refineAndQueue(ctx);
       ctx.ui.notify("Plan returned to read-only refinement.", "info");
     } else {
-      transitionOff("cancel", ctx, "cancelled-tools-restored");
+      await transitionOff("cancel", ctx, "cancelled-tools-restored", ctx.signal);
       ctx.ui.notify("Plan cancelled; original tools restored.", "info");
     }
   }
@@ -420,6 +569,8 @@ export default function planExtension(
     choosePlanClarification,
     refineAndQueue,
     transitionOff,
+    renderCurrentPlan,
+    updateStep,
     reviewSubmittedPlan,
   };
   registerPlanCommand(pi, planRuntime);

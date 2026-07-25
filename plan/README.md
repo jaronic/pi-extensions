@@ -2,7 +2,7 @@
 
 `plan` 为 Pi 增加“只读调研 → 提交计划 → 用户审批 → 按步骤执行”的状态机，在用户批准前从工具选择和 tool-call 拦截两层阻止工作区写入。
 
-> 维护约束：凡是改变 Plan 的行为、命令、工具 schema、状态机、工具策略、与 Goal 的协议或安装方式，都必须在同一改动中同步本 README。
+> 维护约束：凡是改变 Plan 的行为、命令、工具 schema、状态机、工具策略、与 Goal/Todo/Request/RG/LSP 的协作协议或安装方式，都必须在同一改动中同步本 README。
 
 ## 适用场景与效果
 
@@ -12,7 +12,7 @@
 - `submit_plan` 成功后立即返回摘要与 Review 提示并进入 `awaitingApproval`；完整候选计划仅在 Review、Copy、`/plan status` 与 journal state 中呈现，工具调用不等待 UI。
 - 每次成功初次提交或 refinement 重提都会创建一份不可变、仅含 Plan body 的 Markdown artifact；同一绝对路径只写入持久 Plan state 与 machine-readable tool result details，不进入 model-visible content。
 - 批准后恢复进入 Plan 前的工具集，并额外启用 `update_plan_step`。
-- TUI footer 以独立 keyed status 横向显示 Plan 与 Goal；Plan 提交后，独立 widget 仅显示最多 20 个步骤及其 `pending`、`inProgress`、`completed`、`blocked` 状态。
+- TUI footer 以独立 keyed status 横向显示 Plan 与 Goal；无外部进度 provider 时，Plan widget 最多显示 20 个步骤；provider 接管后 Plan 只显示 owner，步骤 status/widget 由 provider 投影，避免双份进度面板。
 - 状态写入 Pi session journal；切换 session tree 分支会恢复该分支最后的有效 Plan 状态。
 
 ## 安装与启用
@@ -92,7 +92,7 @@ stateDiagram-v2
 | `/plan resume` | 继续已存在的 planning 或 executing 状态；不会绕过 awaiting approval。 |
 | `/plan approve` | 仅在 `awaitingApproval` 可用；恢复原工具并排队执行轮。 |
 | `/plan refine` | 仅在 `awaitingApproval` 可用；回到只读 planning，并要求 agent 提交完整替代计划。 |
-| `/plan cancel` | 任意活跃 phase 均可取消；恢复原工具，不暂停 active Goal。 |
+| `/plan cancel` | 任意活跃 phase 均可取消；恢复原工具，不暂停 active Goal。Plan 已为 `off` 时仍重发权威 `off` 协调信号，以解除消费者的陈旧冻结状态。 |
 
 命令在改变状态前会 abort 当前 agent 并等待 idle，防止旧 agent 在新策略下继续运行。
 
@@ -131,7 +131,7 @@ stateDiagram-v2
 }
 ```
 
-status 可为 `pending`、`inProgress`、`completed`、`blocked`。最后一个未完成步骤变为 `completed` 时，Plan 自动完成并退出。
+status 可为 `pending`、`inProgress`、`completed`、`blocked`。`update_plan_step` 始终是 agent 面向的唯一更新入口：本地模式由 Plan reducer 更新，外部模式由 Plan 转发给批准时选定的 provider。最后一个未完成步骤变为 `completed` 时，Plan 自动完成并退出；外部 provider 更新失败会让工具调用失败，不会静默分叉出一份本地进度。
 
 ## 阶段与工具策略
 
@@ -179,35 +179,54 @@ Plan 通过版本化 `pi.events` channel 广播 phase、只读状态及是否即
 - cancel 结束 Plan read-only 门控；active Goal 按既有无 pending turn、runtime idle 条件恢复 continuation。
 - 所有信号带 session ID；跨 session 的事件会被 Goal 忽略。
 
-协议定义在 `src/protocol.ts` 与 `../goal/src/protocol.ts`。任何协议变化都必须同步两个包及 `test/coexistence.test.ts`。
+
+## 与 Todo 插件协作
+
+Plan 与 Todo 不做步骤双写。两者通过两个独立、版本化的 `pi.events` channel 协作，production code 不跨 package import：
+
+- `pi-extensions:plan-state:v1` 继续广播 Plan phase。Todo 在所有活跃 phase 冻结普通 board mutation；planning/clarification/approval 阶段隐藏普通 Todo prompt/footer/widget。
+- `/plan approve` 通过 `pi-extensions:execution-progress:v1` 同步发现 provider，按 `priority` 降序、ID 升序尝试 `open`，使用第一个返回完整有效 snapshot 的 provider；重复 provider ID 被整体拒绝。没有 provider 或全部 decline/fail 时安全退回 Plan 本地进度。
+- Todo 安装时提供 ID `todo` 的 provider。Plan 不调用通用 `pi-extensions:todo-service:v1`，避免把 Plan steps 写入普通 board。接管后，Plan 只持久化不可变步骤定义、provider ID 和 execution ID；Todo 用独立 managed ledger 持久化 mutable status。agent 仍只调用 `update_plan_step`，不能用 `todo` 修改 managed ledger。
+- Todo 接管执行期时，Plan footer 显示 `Plan · todo` 并移除自身步骤 widget；Todo 的 `todo` key 显示 managed Plan footer/widget，并注入唯一的有界 execution-progress prompt。原普通 Todo board 保持冻结且不被覆盖。
+- 全部步骤完成或 `/plan cancel` 时，Plan 先 append v2 terminal tombstone、恢复工具并广播 `off`，再 best-effort 调用已选 provider `close`。Todo 在 close 成功时清理 managed ledger；cleanup 失败只发 warning，不能回滚已经持久化的 Plan 终态，残留 ledger 在 `off` 时不投影且可被下一次 execution 原子替换。`/plan cancel` 在已为 `off` 时仍重发同 session 的权威 `off`。
+- 已选 provider 在 read/update 时不可用会显式失败；Plan 不切换 owner、不回退本地状态，也不伪造成功。terminal close 不可用按上一条作为 cleanup warning 处理。`/plan status` 尝试读取 provider，失败时显示最后一次有效 snapshot 和 unavailable 原因。
+
+`src/progress.ts` 定义 Plan 侧 discover/open/read/update/close 和严格 snapshot decoder；Todo 在 `../todo/src/progress-provider.ts` 独立定义并验证同一 v1 wire contract。改变任一 channel 或 payload 时必须同步两包 README、实现与 coexistence tests；`plan-state` payload 变化仍需同步 Goal。
+
+## 与 Request、RG 和 LSP 插件协作
+
+- Request 只包装标准 `select`/`confirm`/`input`；Plan Review 和持久化 clarification 使用自己的领域组件与状态机，不会被 Request 替换。Request 的 `ask` 若原本在 active tools 中，仍属于 Plan 只读 allowlist；需要写入 Plan journal 的方案取舍必须使用 `request_plan_choice`。
+- `rg` 与 `lsp` 都在 `planning`、`awaitingClarification`、`awaitingApproval` 的只读 allowlist 中。RG 继续保持在 `grep` 前；LSP 的 rename/code action 只返回 preview，因此不会绕过 Plan 的工作区写保护。
+- 这些工具/UI 扩展不参与 execution-progress provider 选择，也不读取或更新 Plan mutable progress。进入执行期后，它们是否可用仍取决于进入 Plan 前的有效工具集；Plan 的 tool lease 会保留其他扩展在生命周期内对工具集做出的变化。
 
 ## 配置与持久化
 
 Plan 没有外部配置文件。状态完全来自命令、工具调用和 Pi session journal：
 
-- journal entry 记录 start、clarify、answer、submit、approve、refine、step、cancel、complete。
-- 恢复时严格校验 version、phase、步骤、时间戳及进入时工具集；无效 entry 不会部分恢复。`planPath` 是可选恢复元数据：foreign-OS 或 ENOENT 路径不使整个 state 解码失败。
+- 当前 `plan-state-v2` journal entry 记录 start、clarify、answer、submit、approve、refine、本地 step、cancel、complete；恢复仍读取并规范迁移合法 `plan-state-v1`，但新状态只写 v2，不双写旧格式。
+- v2 把已批准步骤文本与 mutable progress 分离：本地 owner 的 status 存在 Plan state；外部 owner 只存 provider/execution 引用，snapshot 由 provider 自己持久化。恢复时严格校验 journal/state version 匹配、phase、owner、步骤、时间戳及进入时工具集；无效 entry 不会部分恢复。
 - 有 session 文件时，artifact 位于 session JSONL 相邻的 `.plan-artifacts/<sessionId>/`；无 session 时位于 OS 临时目录，并在 `session_shutdown` 清理。每份文件使用私有权限、UTF-8 与终止换行，内容只等于规范化后的 `state.plan` body。
-- `details.planPath` 与对应 `plan-state-v1.data.state.planPath` 是第三方发现 artifact 的稳定接口。journal 是权威状态：写成但尚未 append journal 的孤立文件不会被恢复；后续 UI 或 Goal 刷新失败不会回滚已提交 artifact。
+- `details.planPath` 与对应 `plan-state-v2.data.state.planPath` 是第三方发现 artifact 的稳定接口。journal 是权威状态：写成但尚未 append journal 的孤立文件不会被恢复；后续 UI 或 Goal 刷新失败不会回滚已提交 artifact。
 - context hook 只保留与当前 Plan `updatedAt` 对应的最新显式 phase-transition 隐藏控制消息，避免旧分支消息重复执行；初次 `/plan` 不创建控制消息。
 - Plan 输出按 Pi 通用行数/字节限制截断，但完整计划仍保存在 journal state 中。
 
 ## 实现原理与关键节点
 
-- `src/index.ts`：扩展入口和状态机编排；工具 lease、journal、UI、生命周期 hooks、显式 phase-transition 控制轮及 Goal 事件均在此汇合。
-- `src/state.ts`：纯状态转换、步骤 ID/状态、批准/refine/恢复校验。
+- `src/index.ts`：扩展入口和状态机编排；工具 lease、journal、provider lifecycle、UI、生命周期 hooks、显式 phase-transition 控制轮及 Goal 事件均在此汇合。
+- `src/state.ts`：纯状态转换、不可变步骤定义、本地/外部 owner、v1→v2 恢复校验。
+- `src/progress.ts`：可插拔进度 provider discovery、优先级选择、open/read/update/close 与严格 snapshot decoder。
 - `src/command.ts`：`/plan` 用户控制面和 abort-before-transition 顺序。
 - `src/review.ts`：`/plan review` 的可滚动 Markdown 审批窗口、响应式 Outline、焦点和复制行为。
 - `src/clarification.ts`：当前轮 settled 后显示的 Plan 选择窗口。
 - `src/artifacts.ts`：private、原子、不可变的 body-only artifact writer 与临时目录清理。
 - `src/outline.ts`：Markdown heading 解析、渲染跳转 marker 与 marker 清理。
-- `src/tools.ts`、`src/tool-schema.ts`：提交、选择与步骤更新契约。
+- `src/tools.ts`、`src/tool-schema.ts`：提交、选择与统一步骤更新 facade。
 - `src/tool-policy.ts`：只读白名单、phase 判定及 RG 优先顺序。
 - `src/tool-lease.ts`：与其他扩展共存时的工具集合并算法。
-- `src/prompts.ts`：各 phase 注入的强制约束。
-- `src/protocol.ts`：Goal/Plan 版本化协调协议。
-- `src/output.ts`：footer 状态文本、步骤 widget、有界输出和 details。
-- `test/coexistence.test.ts`：Goal/Plan 端到端交互；`test/harness.ts` 提供 in-process Pi test double。
+- `src/prompts.ts`：各 phase 注入的强制约束；外部 owner 模式不复制 provider 的动态步骤投影。
+- `src/protocol.ts`：Goal/Todo 消费的 Plan 版本化 phase 协调协议。
+- `src/output.ts`：footer 状态文本、本地步骤 widget、有界输出和 details。
+- `test/coexistence.test.ts`：Goal/Plan 端到端交互；Todo 对 Plan 各 phase 与双加载顺序的契约位于 `../todo/test/coexistence.test.ts`；`test/harness.ts` 提供 in-process Pi test double。
 
 ## 开发与验证
 
@@ -217,4 +236,4 @@ npm run check
 npm test
 ```
 
-改变协议或 Goal 协作时，同时在 `goal/` 运行 `npm run check && npm test`。
+改变协调协议或 Goal/Todo 协作时，同时在 `goal/` 与 `todo/` 运行 `npm run check && npm test`。

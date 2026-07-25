@@ -23,11 +23,12 @@ export interface PlanCommandRuntime {
   updateStatus(ctx: ExtensionContext): void;
   emitPlanState(ctx: ExtensionContext, willTriggerTurn: boolean, reason: string): void;
   queueControlTurn(ctx: ExtensionContext, kind: "plan" | "refine" | "execute" | "clarification", content: string): void;
-  approveAndQueue(ctx: ExtensionContext): void;
+  approveAndQueue(ctx: ExtensionContext): Promise<void>;
   refineAndQueue(ctx: ExtensionContext): void;
   choosePlanClarification(ctx: ExtensionContext, beforeTransition?: () => Promise<void>): Promise<void>;
   reviewSubmittedPlan(ctx: ExtensionContext, beforeTransition?: () => Promise<void>): Promise<void>;
-  transitionOff(action: "cancel" | "complete", ctx: ExtensionContext, reason: string): void;
+  renderCurrentPlan(ctx: ExtensionContext): Promise<string>;
+  transitionOff(action: "cancel" | "complete", ctx: ExtensionContext, reason: string, signal?: AbortSignal): Promise<void>;
 }
 
 async function stopCurrentAgent(ctx: ExtensionCommandContext): Promise<void> {
@@ -55,7 +56,7 @@ export function registerPlanCommand(pi: ExtensionAPI, runtime: PlanCommandRuntim
         return;
       }
       if (!action || action === "status") {
-        const statusText = current ? boundPlanText(renderPlan(current)).text : "Plan mode is off. Use /plan to start.";
+        const statusText = current ? boundPlanText(await runtime.renderCurrentPlan(ctx)).text : "Plan mode is off. Use /plan to start.";
         ctx.ui.notify(statusText, "info");
         return;
       }
@@ -118,10 +119,11 @@ export function registerPlanCommand(pi: ExtensionAPI, runtime: PlanCommandRuntim
         if (settled.phase === "planning") {
           runtime.queueControlTurn(ctx, "plan", "Resume read-only planning from current evidence, then submit the complete plan.");
         } else {
+          const rendered = await runtime.renderCurrentPlan(ctx);
           runtime.queueControlTurn(
             ctx,
             "execute",
-            `Resume the explicitly approved plan. Update tracked steps as their observable state changes.\n\n${renderPlan(settled)}`,
+            `Resume the explicitly approved plan. Update tracked steps as their observable state changes.\n\n${rendered}`,
           );
         }
         ctx.ui.notify(`Plan ${phaseLabel(settled.phase)} resumed.`, "info");
@@ -138,7 +140,7 @@ export function registerPlanCommand(pi: ExtensionAPI, runtime: PlanCommandRuntim
           ctx.ui.notify("Plan state changed while the current agent was settling; inspect /plan status.", "warning");
           return;
         }
-        runtime.approveAndQueue(ctx);
+        await runtime.approveAndQueue(ctx);
         ctx.ui.notify("Plan approved; original tools restored and execution queued.", "info");
         return;
       }
@@ -159,6 +161,7 @@ export function registerPlanCommand(pi: ExtensionAPI, runtime: PlanCommandRuntim
       }
       if (action === "cancel") {
         if (!current) {
+          runtime.emitPlanState(ctx, false, "cancel-already-off");
           ctx.ui.notify("Plan mode is already off.", "info");
           return;
         }
@@ -167,7 +170,7 @@ export function registerPlanCommand(pi: ExtensionAPI, runtime: PlanCommandRuntim
           ctx.ui.notify("Plan mode became inactive while the current agent was settling.", "info");
           return;
         }
-        runtime.transitionOff("cancel", ctx, "cancelled-tools-restored");
+        await runtime.transitionOff("cancel", ctx, "cancelled-tools-restored", ctx.signal);
         ctx.ui.notify("Plan cancelled; original tools restored.", "info");
         return;
       }

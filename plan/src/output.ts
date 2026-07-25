@@ -4,7 +4,7 @@ import {
   formatSize,
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
-import type { PlanPhase, PlanState } from "./state.ts";
+import type { PlanPhase, PlanState, PlanStepProgress } from "./state.ts";
 
 const NOTICE_RESERVE_BYTES = 1_024;
 const NOTICE_RESERVE_LINES = 2;
@@ -24,6 +24,15 @@ export interface BoundedPlanText {
   truncation?: TruncationSummary;
 }
 
+function displayedProgress(
+  state: PlanState,
+  external?: readonly PlanStepProgress[],
+): readonly PlanStepProgress[] {
+  if (state.phase === "executing" && state.progress?.kind === "local") return state.progress.steps;
+  if (state.phase === "executing" && state.progress?.kind === "external" && external) return external;
+  return state.steps.map((step) => ({ id: step.id, status: "pending" as const }));
+}
+
 export function phaseLabel(phase: PlanPhase): string {
   switch (phase) {
     case "off":
@@ -39,11 +48,14 @@ export function phaseLabel(phase: PlanPhase): string {
   }
 }
 
-export function renderPlan(state: PlanState): string {
+export function renderPlan(state: PlanState, external?: readonly PlanStepProgress[]): string {
   const lines = [
     `Plan: ${state.summary ?? "draft"}`,
     `Phase: ${phaseLabel(state.phase)}`,
   ];
+  if (state.phase === "executing" && state.progress?.kind === "external") {
+    lines.push(`Progress provider: ${state.progress.providerId}`);
+  }
   if (state.clarification) {
     lines.push("", "User decision:", state.clarification.question);
     for (const [index, option] of state.clarification.options.entries()) {
@@ -54,10 +66,12 @@ export function renderPlan(state: PlanState): string {
   }
   if (state.plan) lines.push("", state.plan);
   if (state.steps.length > 0) {
+    const statusById = new Map(displayedProgress(state, external).map((step) => [step.id, step.status]));
     lines.push("", "Execution steps:");
     for (const step of state.steps) {
-      const marker = step.status === "completed" ? "x" : step.status === "blocked" ? "!" : " ";
-      lines.push(`- [${marker}] ${step.id}: ${step.text} (${step.status})`);
+      const status = statusById.get(step.id) ?? "pending";
+      const marker = status === "completed" ? "x" : status === "blocked" ? "!" : " ";
+      lines.push(`- [${marker}] ${step.id}: ${step.text} (${status})`);
     }
   }
   return lines.join("\n");
@@ -86,12 +100,16 @@ export function summarizePlanState(
   state: PlanState | null,
   complete = false,
   truncation?: TruncationSummary,
+  external?: readonly PlanStepProgress[],
 ): Record<string, unknown> {
   if (!state) return { phase: "off", complete, truncation };
   const summary = {
     phase: state.phase,
     summary: state.summary,
-    steps: state.steps.map(({ id, status }) => ({ id, status })),
+    progress: state.phase === "executing" ? state.progress?.kind : undefined,
+    providerId: state.phase === "executing" && state.progress?.kind === "external" ? state.progress.providerId : undefined,
+    executionId: state.phase === "executing" && state.progress?.kind === "external" ? state.progress.executionId : undefined,
+    steps: displayedProgress(state, external).map(({ id, status }) => ({ id, status })),
     updatedAt: state.updatedAt,
     complete,
     truncation,
@@ -99,7 +117,7 @@ export function summarizePlanState(
   return state.planPath ? { ...summary, planPath: state.planPath } : summary;
 }
 
-export function renderPlanWidget(state: PlanState): string[] {
+export function renderPlanWidget(state: PlanState, external?: readonly PlanStepProgress[]): string[] {
   const lines = ["Plan"];
   if (state.phase === "awaitingClarification" && state.clarification) {
     const text = [...state.clarification.question];
@@ -108,12 +126,14 @@ export function renderPlanWidget(state: PlanState): string[] {
       : state.clarification.question;
     lines.push(`? ${boundedText}`);
   }
+  const statusById = new Map(displayedProgress(state, external).map((step) => [step.id, step.status]));
   for (const step of state.steps.slice(0, MAX_WIDGET_STEPS)) {
-    const marker = step.status === "completed"
+    const status = statusById.get(step.id) ?? "pending";
+    const marker = status === "completed"
       ? "✓"
-      : step.status === "blocked"
+      : status === "blocked"
         ? "!"
-        : step.status === "inProgress"
+        : status === "inProgress"
           ? "→"
           : "·";
     const text = [...step.text];

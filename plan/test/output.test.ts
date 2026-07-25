@@ -10,15 +10,18 @@ import type { PlanState } from "../src/state.ts";
 
 function planState(stepCount = 1, stepText = "Implement"): PlanState {
   return {
-    version: 1,
+    version: 2,
     phase: "executing",
     summary: "Ship safely",
     plan: "Implement and verify.",
     steps: Array.from({ length: stepCount }, (_, index) => ({
       id: `step-${index + 1}`,
       text: stepText,
-      status: "pending" as const,
     })),
+    progress: {
+      kind: "local",
+      steps: Array.from({ length: stepCount }, (_, index) => ({ id: `step-${index + 1}`, status: "pending" as const })),
+    },
     enteredWithTools: ["read"],
     createdAt: 1,
     updatedAt: 2,

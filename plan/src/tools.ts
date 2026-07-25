@@ -1,12 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { boundPlanText, renderPlan, summarizePlanState } from "./output.ts";
 import {
-  allPlanStepsComplete,
   requestPlanChoice,
   submitPlan,
-  updatePlanStep,
   type PlanJournalEntry,
   type PlanState,
+  type PlanStepProgress,
+  type PlanStepStatus,
 } from "./state.ts";
 import {
   AnswerPlanChoiceParams,
@@ -31,9 +31,13 @@ export interface PlanToolRuntime {
     reason: string,
   ): void;
   answerChoiceAndQueue(selection: number, ctx: ExtensionContext): PlanState;
-  approveAndQueue(ctx: ExtensionContext): void;
-  refineAndQueue(ctx: ExtensionContext): void;
-  transitionOff(action: "cancel" | "complete", ctx: ExtensionContext, reason: string): void;
+  updateStep(
+    requestId: string,
+    id: string,
+    status: PlanStepStatus,
+    signal: AbortSignal | undefined,
+    ctx: ExtensionContext,
+  ): Promise<{ state: PlanState; progress: readonly PlanStepProgress[]; complete: boolean }>;
 }
 
 export function registerPlanTools(pi: ExtensionAPI, runtime: PlanToolRuntime): void {
@@ -133,26 +137,23 @@ export function registerPlanTools(pi: ExtensionAPI, runtime: PlanToolRuntime): v
     description: "Update a tracked step while executing an approved plan.",
     promptSnippet: "Update approved plan-step progress",
     parameters: UpdatePlanStepParams,
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+    async execute(toolCallId, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
       const current = runtime.getState();
       if (!current || current.phase !== "executing") {
         throw new Error("No approved plan is currently executing.");
       }
-      const next = updatePlanStep(current, params.id, params.status);
-      runtime.setState(next);
-      if (allPlanStepsComplete(next)) {
-        runtime.transitionOff("complete", ctx, "completed-tools-restored");
+      const updated = await runtime.updateStep(toolCallId, params.id, params.status, signal, ctx);
+      if (updated.complete) {
         return {
           content: [{ type: "text", text: "All approved plan steps are complete; Plan mode exited." }],
-          details: summarizePlanState(next, true),
+          details: summarizePlanState(updated.state, true, undefined, updated.progress),
         };
       }
-      runtime.persistActive("step", ctx, false, "step-updated");
-      const bounded = boundPlanText(renderPlan(next));
+      const bounded = boundPlanText(renderPlan(updated.state, updated.progress));
       return {
         content: [{ type: "text", text: bounded.text }],
-        details: summarizePlanState(next, false, bounded.truncation),
+        details: summarizePlanState(updated.state, false, bounded.truncation, updated.progress),
       };
     },
   });
