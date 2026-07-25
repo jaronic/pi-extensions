@@ -29,3 +29,6 @@ pnpm-debug.log*
 # Local code indexes and package artifacts
 **/.codegraph/
 *.tgz
+
+# IntelliJ IDEA project settings
+.idea/
