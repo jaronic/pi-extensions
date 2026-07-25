@@ -26,6 +26,9 @@ pnpm-debug.log*
 !.env.example
 .pi/
 
+# Local development worktrees
+.worktrees/
+
 # Local code indexes and package artifacts
 **/.codegraph/
 *.tgz
