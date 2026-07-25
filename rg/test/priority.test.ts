@@ -7,6 +7,9 @@ interface RegisteredToolSummary {
   name: string;
   promptSnippet?: string;
   promptGuidelines?: string[];
+  parameters?: unknown;
+  execute?: unknown;
+  renderResult?: unknown;
 }
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
@@ -48,6 +51,9 @@ test("rg extension registers explicit fallback guidance and prioritizes active t
   rgExtension(api);
   assert.ok(registered);
   assert.equal(registered.name, "rg");
+  assert.ok(registered.parameters);
+  assert.equal(typeof registered.execute, "function");
+  assert.equal(typeof registered.renderResult, "function");
   assert.match(registered.promptSnippet ?? "", /before grep/);
   assert.deepEqual(registered.promptGuidelines, [
     "When both rg and grep are active, use rg first for file-content searches.",

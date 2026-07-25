@@ -4,7 +4,7 @@
 
 它不会删除或替换 `grep`：`grep` 保留为 `rg` 不可用或调用失败时的 fallback。
 
-> 维护约束：凡是改变 RG 的参数、搜索行为、工具优先级、事件接入、Pi 内建 grep 依赖或安装方式，都必须在同一改动中同步本 README。
+> 维护约束：凡是改变 RG 的参数、搜索行为、工具优先级、事件接入、Pi 内建 grep 依赖、与其他扩展的工具协作或安装方式，都必须在同一改动中同步本 README。
 
 ## 效果
 
@@ -14,6 +14,8 @@
 - 去除重复工具名，但保持所有无关工具的相对顺序。
 - prompt 明确要求“先 rg，rg 不可用或失败时才 grep”。
 - 搜索尊重 `.gitignore`，返回文件路径、行号和可选上下文；hidden 文件由底层 ripgrep 搜索规则处理。
+- 仅 TUI 与 HTML export 会将可识别的 `path:line: text` 和 `path-line- text` 结果按文件路径分组：每个文件路径显示一次，匹配行和 context 行缩进列在其下。
+- 模型可见的 tool result content、session 中持久化的 `GrepToolDetails` 与内建 grep 执行格式保持原样，仍是 Pi 提供的逐行 `path:line: text` 输出。
 
 ## 安装与启用
 
@@ -75,7 +77,11 @@ pi --extension ./src/index.ts
 
 默认结果最多 100 个匹配或 50 KiB，以先达到者为准；过长单行也会截断，并在 tool details/UI 中标明命中数、字节或行截断。
 
-## 与 Pi `grep` 及 Plan 的关系
+### 输出显示
+
+交互式 TUI 与 HTML export 的 collapsed 视图最多显示 15 个最终显示行（包括文件标题、缩进行和尾部 limit notice）；展开后显示全部。若 Pi 宿主输出不完全匹配当前的匹配行、context 行以及末尾 notice 格式，则安全回退为原始文本显示，不会丢弃、重排或猜测内容。
+
+## 与 Pi `grep` 及其他扩展的关系
 
 初始 active tools 如下：
 
@@ -89,7 +95,9 @@ read, grep, lsp, rg, write
 read, rg, grep, lsp, write
 ```
 
-它只改变 `rg` 相对 `grep` 的位置。缺少任一工具时不插入新副本，也不移动其他工具。Plan 插件的只读白名单同时允许 `rg` 和 `grep`，并同样维持 `rg` 优先，因此规划阶段可继续使用该搜索工具。
+它只改变 `rg` 相对 `grep` 的位置。缺少任一工具时不插入新副本，也不移动 `lsp`、`todo`、`ask` 或其他工具。Plan 插件的 `planning`、`awaitingClarification`、`awaitingApproval` 只读 allowlist 同时允许 `rg` 和 `grep`，并维持 `rg` 优先，因此 Plan 调研阶段可继续使用该搜索工具。
+
+Goal、Todo 和 Request 不拥有或调用 RG；RG 也不调用 `pi-extensions:todo-service:v1`，不会根据搜索结果创建、完成或修改 Todo task。Goal continuation 及普通执行轮只在 `rg` 当前可见时使用它，任务进度与完成证据仍由对应 Goal/Plan/Todo 状态机显式提交。
 
 ## 配置
 
@@ -99,13 +107,15 @@ RG 没有独立配置文件。可调行为全部来自每次 tool call 的参数
 
 ## 实现原理与关键节点
 
-完整运行时代码位于 `src/index.ts`：
+运行时代码位于 `src/index.ts` 和 `src/result-renderer.ts`：
 
 - 模块加载时从 Pi factory 取得参数 schema，用于注册独立的 `rg` 工具。
 - `execute` 使用 `ctx.cwd` 创建新的内建 grep definition，并原样转发 `toolCallId`、参数、`AbortSignal`、update callback 与 context。
+- `renderResult` 仅连接 text content 并交给 `result-renderer.ts`；它不会改写 `execute()` 返回的内容或 details。
+- `formatGrepOutputForDisplay()` 只解析 Pi 当前的匹配/context 记录，按首次出现的文件路径分组；不认识的宿主输出直接回退原文。`renderGrepOutput()` 使用 host Theme token 着色，并按最终显示行应用 15 行 collapsed 上限。
 - `prioritizeRgOverGrep()` 是纯函数：Set 去重、条件移动 `rg`、不修改调用方数组。
 - `session_start` 和 `session_tree` 复用同一 `applyPriority`，保证新 session 和分支切换后顺序稳定。
-- `test/priority.test.ts` 验证顺序、不变性、fallback prompt 和 lifecycle hook。真实搜索执行继承 Pi 内建 grep definition，本包当前没有独立 live test。
+- `test/priority.test.ts` 验证顺序、不变性、fallback prompt、renderer 注册和 lifecycle hook；`test/result-renderer.test.ts` 验证分组、context、notice、raw/error fallback 与 collapsed/expanded 边界。真实搜索执行仍继承 Pi 内建 grep definition。
 
 ## 开发与验证
 
