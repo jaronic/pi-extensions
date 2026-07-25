@@ -255,6 +255,9 @@ Plan 没有外部配置文件。状态完全来自命令、工具调用和 Pi se
 
 ```bash
 cd /path/to/pi-extensions/plan
+npm ci
+# test/coexistence.test.ts imports Goal source, so TypeScript needs Goal's package-local dependencies.
+(cd ../goal && npm ci)
 npm run check
 npm test
 ```
