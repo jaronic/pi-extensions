@@ -333,10 +333,10 @@ npm test
 
 | 层次 | 应覆盖的契约 | 本仓库/社区参考 |
 | --- | --- | --- |
-| 纯单元 | schema、parser、状态转换、不变量、格式化、路径/URL 判定 | `goal/test/state.test.ts`、`plan/test/state.test.ts`、`todo/test/state.test.ts`、Web Access SSRF tests |
-| Extension harness | 注册内容、事件顺序、UI/headless 行为、持久化恢复、active tools | `plan/test/coexistence.test.ts`、`todo/test/integration.test.ts`、`todo/test/coexistence.test.ts` |
+| 纯单元 | schema、parser、状态转换、不变量、格式化、路径/URL 判定 | `goal/test/state.test.ts`、`plan/test/state.test.ts`、`todo/test/state.test.ts`、`hashline/test/digest-lines.test.ts`、`hashline/test/operations.test.ts`、Web Access SSRF tests |
+| Extension harness | 注册内容、事件顺序、UI/headless 行为、持久化恢复、active tools | `plan/test/coexistence.test.ts`、`todo/test/integration.test.ts`、`todo/test/coexistence.test.ts`、`hashline/test/e2e.test.ts`、`hashline/test/coexistence.test.ts` |
 | 协议/子进程 | 初始化失败、取消、timeout、crash、诊断 settle、部分失败、idle/shutdown | `lsp/test/lsp-client.test.ts`、`lsp/test/server-manager.test.ts`、`lsp/test/fake-server.mjs` |
-| 安全回归 | symlink escape、外部 cwd、私网/DNS redirect、shell indirection、fail-closed | `lsp/test/roots.test.ts`、Permission System test matrix、Web Access SSRF tests |
+| 安全回归 | symlink escape、外部 cwd、私网/DNS redirect、shell indirection、fail-closed | `lsp/test/roots.test.ts`、`hashline/test/tools.test.ts`、Permission System test matrix、Web Access SSRF tests |
 | 安装 smoke | manifest entry、fresh no-session load、全局软链接、reload、退出 | 本节命令、Pi Lens install/compat smoke workflow |
 
 ### 7.2 每个新增行为至少检查
@@ -354,7 +354,7 @@ npm test
 ### 7.3 当前仓库验证命令
 
 ```sh
-for dir in goal plan lsp request rg todo promptline-editor; do
+for dir in goal plan lsp hashline request rg todo promptline-editor; do
   (cd "$dir" && npm run check && npm test) || exit 1
 done
 ```
@@ -362,7 +362,7 @@ done
 CI 会执行上述 package matrix。提交前还要从仓库根目录执行隔离加载 smoke，不读取当前 session 或全局链接：
 
 ```sh
-for name in goal plan lsp request rg todo promptline-editor; do
+for name in goal plan lsp hashline request rg todo promptline-editor; do
   pi --no-session -p --extension "$PWD/$name" "Reply with exactly: SMOKE_OK"
 done
 ```

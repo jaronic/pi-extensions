@@ -464,7 +464,7 @@ Extension 作者至少要保证：
 - 无 UI 时危险动作 fail closed；
 - 真正不可信工作放在外部 sandbox，最小化挂载、凭据和网络。
 
-## 12. 七个本仓库扩展如何对应控制面
+## 12. 八个本仓库扩展如何对应控制面
 
 ```mermaid
 flowchart TB
@@ -473,10 +473,13 @@ flowchart TB
     Goal[goal<br/>持久目标 + token/time accounting + continuation]
     LSP[lsp<br/>配置路由 + 子进程 + 有界输出]
     Request[request<br/>共享 UI adapter + 串行 dialog + 协议]
+    Hashline[hashline<br/>read/edit override + branch snapshot + byte CAS]
     Todo[todo<br/>branch 执行账本 + bounded snapshot + Plan gate]
     Promptline[promptline-editor<br/>自定义 editor + 状态条 + Git watcher]
 
     RG --> Tools[工具控制]
+    Hashline --> Tools
+    Hashline --> State
     Plan --> Tools
     Plan --> State[branch state]
     Goal --> State
@@ -500,6 +503,7 @@ flowchart TB
 | Plan | planning/blocked/approval/executing 状态机与 tool gate | 只靠 prompt 声称“只读” |
 | Goal | `agent_settled` continuation 与空转保护 | 在 `agent_end` 重入新 run |
 | LSP | lazy manager、cwd 路由、取消/超时/清理 | factory 启进程或无限返回 diagnostics |
+| Hashline | branch provenance、seen-line guard、完整 byte CAS 与共享 mutation queue | 把短 hash、模糊恢复或普通行号误当成可靠写入前置条件 |
 | Request | UI method 适配、串行协调、headless 语义 | 并发 overlay、shutdown 恢复他人 wrapper |
 | Todo | 稳定 ID、纯 reducer、mixed-carrier branch replay 与单一活动项 | 用 prompt 代替状态机、复制 Plan steps 或把项目文件当事实源 |
 | Promptline Editor | 用 host theme/status/footer data 组合 editor，并监视 linked-worktree `HEAD` | 硬编码 palette、覆盖 footer 状态源或忘记关闭 watcher |
@@ -538,6 +542,7 @@ Extension API 的本质是一个**进程内 Harness 控制平面**。它强大�
 - [本仓库 Plan README](../../plan/README.md)
 - [本仓库 Goal README](../../goal/README.md)
 - [本仓库 LSP README](../../lsp/README.md)
+- [本仓库 Hashline README](../../hashline/README.md)
 - [本仓库 Request README](../../request/README.md)
 - [本仓库 Todo README](../../todo/README.md)
 - [本仓库 Promptline Editor README](../../promptline-editor/README.md)

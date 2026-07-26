@@ -321,6 +321,10 @@ export class ExtensionHarness {
     return [...this.activeTools];
   }
 
+  toolDefinition(name: string): unknown {
+    return this.tools.get(name);
+  }
+
   clearPendingMessages(): void {
     this.pendingMessages = false;
     this.idle = true;
