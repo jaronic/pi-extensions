@@ -18,16 +18,16 @@ The top-level `themes/` directory is a standalone global Pi resource, not an ext
 
 ## Architecture & Data Flow
 
-Each `<extension>/package.json` declares `pi.extensions: ["./src/index.ts"]`. Pi loads that module and calls its default `*Extension(pi: ExtensionAPI)` function. Global themes are discovered and selected independently of extension loading.
+Each standalone `<extension>/package.json` declares its own `pi.extensions` entry. Plan additionally bundles Request and Todo as direct package dependencies and lists their extension resources first, so a Plan-only package load composes Request → Todo → Plan. Each default entry calls its idempotent installer; Request/Todo use EventBus-scoped registries to share one runtime across physical package copies. Global themes are discovered and selected independently of extension loading.
 
 - Plan and Goal keep mutable lifecycle state in `src/index.ts`; command registration, tool contracts, prompts, schemas, and event/journal protocols live in focused modules. Pure transition and validation logic lives in `state.ts`. Both extensions persist versioned custom entries with `pi.appendEntry()` and rebuild from the active branch on `session_start` and `session_tree`.
 - Todo keeps its immutable board snapshot in `src/index.ts`; pure transitions and strict decoding live in `state.ts`, while tool results and command custom entries share a versioned sequence/replay protocol in `persistence.ts`.
-- Plan moves through `planning -> awaitingApproval -> executing`, leases the active tool set without losing external changes, and injects phase-specific context before agent turns. Goal injects objective context, accounts tokens/time, and queues continuation turns until completion or a terminal status.
-- Plan broadcasts `pi-extensions:plan-state:v1`; Goal and Todo independently define and validate the same versioned payload without production cross-imports. Keep all three protocol modules plus `plan/test/coexistence.test.ts` and `todo/test/coexistence.test.ts` synchronized.
+- Plan moves through `planning -> awaitingApproval -> executing`, leases the active tool set without losing external changes, injects phase-specific context before agent turns, and directly composes Request clarification plus Todo managed progress. Goal injects objective context, accounts tokens/time, and queues continuation turns until completion or a terminal status.
+- Plan broadcasts `pi-extensions:plan-state:v1` only for optional Goal coordination. Todo receives the minimal typed phase sync through its direct service; it does not consume or duplicate the Plan broadcast.
 - LSP resolves and confines a requested file to the workspace, chooses a configured server by action and file type, reuses one client per server/workspace root, synchronizes the document, sends JSON-RPC, and formats bounded results. `tool_result` performs best-effort sync after `edit`/`write`; `session_shutdown` closes clients and child processes.
 - Hashline preserves Pi's `read`/`edit` names, schemas where applicable, renderers, result details, and shared mutation queue while adding strict byte snapshots and branch-local seen-line provenance. Snapshot metadata is replayed from versioned custom entries; stale, unknown, wrong-path, or unseen edits fail before writing.
 - RG delegates execution to Pi's grep definition using `ctx.cwd`, then reorders active tools on session lifecycle events.
-- Request normalizes and serializes interactive questions through one responsive Question/Review component. It installs session-scoped adapters over the shared `ExtensionUIContext` `select`/`confirm`/`input` methods and exposes `pi-extensions:request-ui:v1` for richer independent callers; shutdown aborts pending dialogs and restores only wrappers it still owns.
+- Request normalizes and serializes interactive questions through one responsive Question/Review component. `installRequest(pi)` returns the shared runtime service, while `pi-extensions:request-ui:v1` remains a compatibility channel for independent callers. It installs session-scoped adapters over the shared `ExtensionUIContext` `select`/`confirm`/`input` methods; shutdown aborts pending dialogs and restores only wrappers it still owns.
 
 ## Key Directories
 
@@ -44,7 +44,7 @@ Each `<extension>/package.json` declares `pi.extensions: ["./src/index.ts"]`. Pi
 | `themes/` | Standalone repository-wide light/dark Pi palettes and their global installation/activation contract. |
 | `Makefile`, `scripts/` | Safe global Pi link controls and their dependency-free behavior tests. |
 
-Each package owns its dependencies, lockfile, compiler configuration, and tests. Do not add cross-package production imports or assume root-level dependency resolution.
+Each package owns its dependencies, lockfile, compiler configuration, and tests. Cross-package production imports require a formal package dependency, public package-root export, bundled runtime dependency, and manifest resource ordering; never import another package through `../../other/src` in production.
 
 ## Development Commands
 
@@ -116,8 +116,8 @@ done
 - `lsp/src/roots.ts`, `lsp/src/positions.ts`, `lsp/src/format.ts`: workspace confinement, position conversion, and bounded output formatting.
 - `hashline/src/index.ts`, `hashline/src/read-tool.ts`, `hashline/src/edit-tool.ts`, `hashline/src/operations.ts`: snapshot lifecycle, read capture, guarded compare-and-set mutation, and deterministic line operations.
 - `rg/src/index.ts`: complete RG extension and exported priority helper.
-- `request/src/index.ts`, `request/src/component.ts`, `request/src/adapters.ts`, `request/src/protocol.ts`: Request lifecycle wiring, responsive renderer, native UI compatibility layer, and shared request channel.
-- `todo/src/index.ts`, `todo/src/state.ts`, `todo/src/tools.ts`, `todo/src/persistence.ts`, `todo/src/output.ts`: Todo lifecycle wiring, immutable transitions, bounded tool contract, branch replay, and TUI/model projections.
+- `request/src/index.ts`, `request/src/component.ts`, `request/src/adapters.ts`, `request/src/protocol.ts`: idempotent Request installer/service, responsive renderer, native UI compatibility layer, and independent-caller request channel.
+- `todo/src/index.ts`, `todo/src/state.ts`, `todo/src/tools.ts`, `todo/src/persistence.ts`, `todo/src/progress-provider.ts`, `todo/src/output.ts`: idempotent Todo installer/service, immutable board and managed-progress transitions, bounded tool contract, branch replay, and TUI/model projections.
 - `promptline-editor/src/index.ts`, `promptline-editor/src/branch.ts`: custom editor composition plus live Git `HEAD` monitoring for normal and linked worktrees.
 - `themes/pi-extensions-*.json`, `themes/validate.mjs`: standalone global Pi palettes and the role-aware schema/contrast gate.
 - `Makefile`, `scripts/pi-global-links.sh`, `scripts/pi-global-links.test.mjs`: conflict-safe global extension/theme link controls and isolated behavior tests.
@@ -136,10 +136,10 @@ done
 Tests use Node's built-in `node:test` runner, `node:assert/strict`, and `tsx`. Test files are direct children named `test/*.test.ts`; helpers such as `plan/test/harness.ts` and `lsp/test/fake-server.mjs` are intentionally outside that glob.
 
 - Put pure transition and validation contracts beside the relevant package tests.
-- Use `plan/test/coexistence.test.ts` for observable Goal/Plan lifecycle behavior; it imports Goal directly and exercises commands, tools, events, UI state, abort/wait ordering, persistence, and continuation.
+- Use `plan/test/coexistence.test.ts` for observable Goal/Plan lifecycle behavior, Request clarification, direct Todo failure semantics, commands, tools, UI state, abort/wait ordering, persistence, and continuation.
 - LSP tests use isolated temporary workspaces and a deterministic child-process fake server. Cover initialization failure, request cancellation/timeout, process crashes, diagnostic settling, partial multi-server failure, idle cleanup, and bounded shutdown; always remove temporary files in cleanup hooks.
-- Request tests drive the real component through tool, native UI, external event, and Goal confirmation paths. Cover single/multi/Other/Review behavior, serialization, abort/timeout/shutdown, headless rejection, fallback semantics, and bounded narrow-terminal rendering.
-- Todo tests cover pure transitions, strict mixed-carrier replay, bounded prompt/output, command and TUI/headless behavior, and Plan/Goal/Request coexistence in both load orders.
+- Request tests drive the real component through tool, native UI, external event, direct service, and Goal confirmation paths. Cover single/multi/Other/Review behavior, serialization, abort/timeout/shutdown, headless rejection, fallback semantics, and bounded narrow-terminal rendering.
+- Todo tests cover pure transitions, strict mixed-carrier replay, direct board/managed services, bounded prompt/output, command and TUI/headless behavior, and the Plan-only/dependencies-first/Plan-first registration and managed-ledger regressions.
 - Hashline tests cover byte-precise digest/line behavior, strict snapshot replay/LRU, operation conflicts and limits, stale/unseen/path failures, concurrent mutation, cancellation/commit boundaries, symlink/hardlink policy, lifecycle recovery, and Plan/LSP/RG coexistence.
 - Run `node themes/validate.mjs` for any palette change and `make pi-links-test` for global-link-manager changes. Run `npm run check` and `npm test` in every affected package. For Plan coordination protocol changes, run Goal, Plan, and Todo plus both coexistence suites; CI repeats the resource gates and all eight package checks from clean installs.
 - No coverage tool, threshold, skipped-test convention, or focused-test script is configured. Add tests for new observable contracts and plausible regressions; do not assert incidental implementation details merely to increase coverage.

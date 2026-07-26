@@ -3,10 +3,9 @@ import test from "node:test";
 import goalExtension from "../../goal/src/index.ts";
 import planExtension from "../../plan/src/index.ts";
 import requestExtension from "../../request/src/index.ts";
-import todoExtension from "../src/index.ts";
-import { PLAN_COORDINATION_CHANNEL, type PlanCoordinationSignal } from "../src/protocol.ts";
+import todoExtension, { installTodo, TODO_SERVICE_CHANNEL } from "../src/index.ts";
+import { REQUEST_UI_CHANNEL } from "../../request/src/protocol.ts";
 import { TodoHarness } from "./harness.ts";
-
 const BOARD = "00000000-0000-4000-8000-000000000051";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -15,7 +14,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function loadTodo(harness: TodoHarness): void {
   let now = 1;
-  todoExtension(harness.api, { now: () => ++now, createBoardId: () => BOARD });
+  installTodo(harness.api, { now: () => ++now, createBoardId: () => BOARD });
 }
 
 function loadPlan(harness: TodoHarness): void {
@@ -28,18 +27,53 @@ function loadPlan(harness: TodoHarness): void {
     },
   });
 }
+for (const order of ["plan-only", "dependencies-first", "plan-first"] as const) {
+  test(`direct Plan dependency composition registers every shared surface once (${order})`, () => {
+    const harness = new TodoHarness();
+    if (order === "dependencies-first") {
+      requestExtension(harness.api);
+      todoExtension(harness.api);
+      loadPlan(harness);
+    } else if (order === "plan-first") {
+      loadPlan(harness);
+      requestExtension(harness.api);
+      todoExtension(harness.api);
+    } else {
+      loadPlan(harness);
+    }
 
-function planSignal(sessionId: string, phase: PlanCoordinationSignal["phase"]): PlanCoordinationSignal {
-  return {
-    version: 1,
-    sessionId,
-    phase,
-    readOnly: phase === "planning" || phase === "awaitingClarification" || phase === "awaitingApproval" || phase === "blocked",
-    awaitingApproval: phase === "awaitingApproval",
-    willTriggerTurn: false,
-    reason: "test",
-  };
+    assert.deepEqual(
+      [...harness.toolRegistrationCounts.entries()].sort(),
+      [
+        ["answer_plan_choice", 1],
+        ["ask", 1],
+        ["report_plan_blocked", 1],
+        ["request_plan_choice", 1],
+        ["submit_plan", 1],
+        ["todo", 1],
+        ["update_plan_step", 1],
+      ],
+    );
+    assert.deepEqual([...harness.commandRegistrationCounts.entries()].sort(), [["plan", 1], ["todos", 1]]);
+    assert.deepEqual([...harness.coordinationRegistrationCounts.entries()].sort(), [
+      [REQUEST_UI_CHANNEL, 1],
+      [TODO_SERVICE_CHANNEL, 1],
+    ]);
+    assert.deepEqual([...harness.lifecycleRegistrationCounts.entries()].sort(), [
+      ["agent_settled", 1],
+      ["agent_start", 2],
+      ["before_agent_start", 2],
+      ["context", 1],
+      ["session_compact", 1],
+      ["session_shutdown", 3],
+      ["session_start", 3],
+      ["session_tree", 2],
+      ["tool_call", 1],
+      ["tool_result", 1],
+    ]);
+  });
 }
+
 
 for (const order of ["todo-first", "plan-first"] as const) {
   test(`Plan coexistence freezes Todo mutation and restores it (${order})`, async () => {
@@ -56,7 +90,7 @@ for (const order of ["todo-first", "plan-first"] as const) {
     await harness.startSession();
     await harness.tool({ op: "init", list: [{ phase: "Todo", items: ["Inspect", "Implement"] }] });
     assert.ok(harness.getActiveTools().includes("todo"));
-    assert.match(harness.statuses.get("todo") ?? "", /Todo 0\/2/);
+    assert.equal(harness.statuses.get("todo"), undefined);
 
     await harness.command("plan");
     assert.equal(harness.statuses.get("todo"), undefined);
@@ -75,7 +109,7 @@ for (const order of ["todo-first", "plan-first"] as const) {
 
     await harness.command("plan", "cancel");
     assert.ok(harness.getActiveTools().includes("todo"));
-    assert.match(harness.statuses.get("todo") ?? "", /Todo 0\/2/);
+    assert.equal(harness.statuses.get("todo"), undefined);
     const appended = await harness.tool({ op: "append", phase: "Todo", items: ["Verify"] });
     assert.equal(appended.details.sequence, 2);
   });
@@ -104,8 +138,8 @@ for (const order of ["todo-first", "plan-first"] as const) {
     });
     await harness.command("plan", "approve");
 
-    assert.match(harness.statuses.get("plan") ?? "", /Plan · todo/);
-    assert.match(harness.statuses.get("todo") ?? "", /Todo · Plan 0\/2/);
+    assert.equal(harness.statuses.get("plan"), undefined);
+    assert.equal(harness.statuses.get("todo"), undefined);
     assert.equal(harness.widgets.get("plan"), undefined, "Plan relinquishes its local progress widget");
     assert.match(harness.widgets.get("todo")?.join("\n") ?? "", /Todo · Plan · 0\/2 completed/);
     const prompt = { type: "before_agent_start", systemPrompt: "BASE" };
@@ -116,13 +150,13 @@ for (const order of ["todo-first", "plan-first"] as const) {
     assert.equal(prompt.systemPrompt.includes("<untrusted_todo_state"), false);
 
     await harness.executeTool("update_plan_step", { id: "step-1", status: "inProgress" }, { toolCallId: "progress-1" });
-    assert.match(harness.statuses.get("todo") ?? "", /step-1 Inspect/);
+    assert.equal(harness.statuses.get("todo"), undefined);
     await harness.executeTool("update_plan_step", { id: "step-1", status: "completed" }, { toolCallId: "progress-2" });
-    assert.match(harness.statuses.get("todo") ?? "", /Plan 1\/2/);
+    assert.equal(harness.statuses.get("todo"), undefined);
     await harness.executeTool("update_plan_step", { id: "step-2", status: "completed" }, { toolCallId: "progress-3" });
 
     assert.equal(harness.statuses.get("plan"), undefined);
-    assert.match(harness.statuses.get("todo") ?? "", /Todo 0\/1/);
+    assert.equal(harness.statuses.get("todo"), undefined);
     assert.ok(harness.getActiveTools().includes("todo"));
     const ordinary = await harness.tool({ op: "view", includeClosed: true, offset: 0, limit: 50 });
     assert.equal(ordinary.details.sequence, 1);
@@ -150,8 +184,8 @@ test("managed Plan progress restores across reload before execution resumes", as
   loadPlan(restored);
   loadTodo(restored);
   await restored.startSession("resume");
-  assert.match(restored.statuses.get("plan") ?? "", /Plan · todo/);
-  assert.match(restored.statuses.get("todo") ?? "", /Plan 1\/2/);
+  assert.equal(restored.statuses.get("plan"), undefined);
+  assert.equal(restored.statuses.get("todo"), undefined);
   assert.equal(restored.widgets.get("plan"), undefined);
   const prompt = { type: "before_agent_start", systemPrompt: "BASE" };
   await restored.emit("before_agent_start", prompt);
@@ -160,33 +194,54 @@ test("managed Plan progress restores across reload before execution resumes", as
 
   await restored.executeTool("update_plan_step", { id: "step-2", status: "completed" }, { toolCallId: "reload-step-2" });
   assert.equal(restored.statuses.get("plan"), undefined);
-  assert.match(restored.statuses.get("todo") ?? "", /Todo 0\/1/);
+  assert.equal(restored.statuses.get("todo"), undefined);
   const ordinary = await restored.tool({ op: "view", includeClosed: true, offset: 0, limit: 50 });
   assert.equal(ordinary.details.state.phases[0]?.tasks[0]?.content, "Keep after reload");
 });
 
-test("restored external ownership fails closed when its provider is unavailable", async () => {
+test("restored Plan progress rejects a non-Todo owner", async () => {
   const original = new TodoHarness({ initialTools: ["read", "bash", "edit", "write"] });
   loadTodo(original);
   loadPlan(original);
   await original.startSession();
   await original.command("plan");
   await original.executeTool("submit_plan", {
-    summary: "Provider outage",
-    plan: "Verify without changing ownership.",
+    summary: "Managed owner",
+    plan: "Verify the owner before resuming.",
     steps: ["Verify"],
   });
   await original.command("plan", "approve");
 
+  const restoredEntries = original.entries.map((entry) => {
+    if (
+      !isRecord(entry) ||
+      entry.type !== "custom" ||
+      entry.customType !== "plan-state-v3" ||
+      !isRecord(entry.data) ||
+      entry.data.action !== "approve" ||
+      !isRecord(entry.data.state) ||
+      !isRecord(entry.data.state.progress)
+    ) return entry;
+    return {
+      ...entry,
+      data: {
+        ...entry.data,
+        state: {
+          ...entry.data.state,
+          progress: { ...entry.data.state.progress, providerId: "other" },
+        },
+      },
+    };
+  });
   const restored = new TodoHarness({ initialTools: ["read", "bash", "edit", "write"] });
-  restored.replaceBranch(original.entries);
+  restored.replaceBranch(restoredEntries);
   loadPlan(restored);
   await restored.startSession("resume");
   await assert.rejects(
-    restored.executeTool("update_plan_step", { id: "step-1", status: "completed" }, { toolCallId: "provider-missing" }),
-    /Progress provider todo is unavailable/,
+    restored.executeTool("update_plan_step", { id: "step-1", status: "completed" }, { toolCallId: "wrong-owner" }),
+    /Plan progress owner other is unsupported/,
   );
-  assert.match(restored.statuses.get("plan") ?? "", /Plan · todo/);
+  assert.equal(restored.statuses.get("plan"), undefined);
   assert.equal(restored.widgets.get("plan"), undefined);
   assert.ok(restored.getActiveTools().includes("update_plan_step"));
 });
@@ -204,11 +259,11 @@ test("cancelling an externally tracked Plan closes Todo managed progress", async
     steps: ["Inspect"],
   });
   await harness.command("plan", "approve");
-  assert.match(harness.statuses.get("todo") ?? "", /Todo · Plan 0\/1/);
+  assert.equal(harness.statuses.get("todo"), undefined);
 
   await harness.command("plan", "cancel");
   assert.equal(harness.statuses.get("plan"), undefined);
-  assert.match(harness.statuses.get("todo") ?? "", /Todo 0\/1/);
+  assert.equal(harness.statuses.get("todo"), undefined);
   const managedEntries = harness.entries.filter(
     (entry) => isRecord(entry) && entry.type === "custom" && entry.customType === "todo-managed-progress-v1",
   );
@@ -220,43 +275,6 @@ test("cancelling an externally tracked Plan closes Todo managed progress", async
   assert.equal(latestManagedData.state, null);
 });
 
-test("no-op /plan cancel resynchronizes stale Todo Plan state", async () => {
-  const harness = new TodoHarness({ sessionId: "current" });
-  loadTodo(harness);
-  planExtension(harness.api, { copyText: async () => undefined });
-  await harness.startSession();
-
-  harness.api.events.emit(PLAN_COORDINATION_CHANNEL, planSignal("current", "awaitingApproval"));
-  await harness.command("plan", "cancel");
-
-  assert.equal(harness.notifications.at(-1)?.message, "Plan mode is already off.");
-  const initialized = await harness.tool({ op: "init", list: [{ phase: "Todo", items: ["Create board"] }] });
-  assert.equal(initialized.details.sequence, 1);
-});
-
-test("Todo ignores foreign-session Plan signals and reacts to current-session signals", async () => {
-  const harness = new TodoHarness({ sessionId: "current" });
-  loadTodo(harness);
-  await harness.startSession();
-  await harness.tool({ op: "init", list: [{ phase: "A", items: ["One"] }] });
-
-  harness.api.events.emit(PLAN_COORDINATION_CHANNEL, planSignal("other", "planning"));
-  const edited = await harness.tool({ op: "edit", id: 1, content: "Still mutable" });
-  assert.equal(edited.details.sequence, 2);
-
-  harness.api.events.emit(PLAN_COORDINATION_CHANNEL, planSignal("current", "awaitingApproval"));
-  harness.api.events.emit(PLAN_COORDINATION_CHANNEL, planSignal("other", "planning"));
-  await harness.emit("session_tree", { type: "session_tree" });
-  await assert.rejects(harness.tool({ op: "done", id: 1 }), /frozen while Plan is awaitingApproval/);
-  assert.equal(harness.statuses.get("todo"), undefined);
-
-  harness.api.events.emit(PLAN_COORDINATION_CHANNEL, planSignal("current", "blocked"));
-  await assert.rejects(harness.tool({ op: "done", id: 1 }), /frozen while Plan is blocked/);
-
-  harness.api.events.emit(PLAN_COORDINATION_CHANNEL, planSignal("current", "off"));
-  const completed = await harness.tool({ op: "done", id: 1 });
-  assert.equal(completed.details.sequence, 3);
-});
 
 test("clear confirmation behaves identically with and without Request adapters", async (t) => {
   await t.test("native confirm", async () => {

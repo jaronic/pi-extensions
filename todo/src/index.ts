@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  EventBus,
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
@@ -16,26 +17,29 @@ import {
   TODO_MANAGED_PROGRESS_TYPE,
   buildManagedProgressEntry,
   createTodoProgressProvider,
-  managedProgressFooter,
   managedProgressPrompt,
   managedProgressWidget,
-  registerTodoProgressProvider,
   restoreManagedProgress,
+  type ManagedProgressCloseRequest,
   type ManagedProgressEntry,
+  type ManagedProgressOpenRequest,
+  type ManagedProgressReadRequest,
+  type ManagedProgressService,
   type ManagedProgressState,
+  type ManagedProgressUpdateRequest,
 } from "./progress-provider.ts";
 import { todoSystemPrompt } from "./prompts.ts";
 import {
-  PLAN_COORDINATION_CHANNEL,
-  decodePlanCoordinationSignal,
+  decodeTodoPlanPhaseSync,
   planBlocksTodoMutation,
-  type CoordinatedPlanPhase,
-  type PlanCoordinationSignal,
+  type TodoPlanPhase,
+  type TodoPlanPhaseSync,
 } from "./protocol.ts";
 import {
   registerTodoService,
   requestTodoService,
   TODO_SERVICE_CHANNEL,
+  type TodoService,
   type TodoServiceRequest,
   type TodoServiceResult,
 } from "./service.ts";
@@ -48,7 +52,7 @@ import {
   type TodoSnapshot,
   type TodoTransition,
 } from "./state.ts";
-import { todoFooter, todoWidget } from "./output.ts";
+import { todoWidget } from "./output.ts";
 import {
   executeTodoOperation,
   registerTodoTool,
@@ -59,7 +63,18 @@ import {
 export { TODO_STATE_TYPE, TODO_TOOL_DETAILS_KIND } from "./persistence.ts";
 export type { TodoStateEntry, TodoStateEntryOperation, TodoStateEntrySource, TodoToolDetails } from "./persistence.ts";
 export { requestTodoService, TODO_SERVICE_CHANNEL } from "./service.ts";
-export type { TodoServiceOperation, TodoServiceRequest, TodoServiceResult } from "./service.ts";
+export type { TodoService, TodoServiceOperation, TodoServiceRequest, TodoServiceResult } from "./service.ts";
+export type {
+  ManagedProgressCloseRequest,
+  ManagedProgressOpenRequest,
+  ManagedProgressReadRequest,
+  ManagedProgressService,
+  ManagedProgressSnapshot,
+  ManagedProgressStatus,
+  ManagedProgressStepDefinition,
+  ManagedProgressUpdateRequest,
+} from "./progress-provider.ts";
+export type { TodoPlanPhase, TodoPlanPhaseSync } from "./protocol.ts";
 export type {
   TodoCounts,
   TodoPhase,
@@ -74,22 +89,52 @@ export interface TodoExtensionDependencies {
   createBoardId(): string;
 }
 
-export default function todoExtension(
+interface TodoInstallation {
+  service: TodoService;
+  dispose(ctx?: ExtensionContext): void;
+}
+
+const TODO_INSTALLATIONS = Symbol.for("pi-extensions:todo:installations:v1");
+
+function todoInstallations(): WeakMap<EventBus, TodoInstallation> {
+  const host = globalThis as { [key: symbol]: unknown };
+  const existing = host[TODO_INSTALLATIONS];
+  if (existing === undefined) {
+    const installations = new WeakMap<EventBus, TodoInstallation>();
+    host[TODO_INSTALLATIONS] = installations;
+    return installations;
+  }
+  if (!(existing instanceof WeakMap)) throw new Error("Todo installation registry is invalid.");
+  return existing as WeakMap<EventBus, TodoInstallation>;
+}
+
+export function installTodo(
   pi: ExtensionAPI,
   dependencies: Partial<TodoExtensionDependencies> = {},
-): void {
+): TodoService {
+  const installations = todoInstallations();
+  const installed = installations.get(pi.events);
+  if (installed) return installed.service;
+
   const now = dependencies.now ?? Date.now;
   const createBoardId = dependencies.createBoardId ?? randomUUID;
+  const lifetimeController = new AbortController();
   let snapshot: TodoSnapshot = EMPTY_TODO_SNAPSHOT;
   let managedProgress: ManagedProgressState | null = null;
   let restoreBlockedReason: string | undefined;
-  let planPhase: CoordinatedPlanPhase = "off";
-  const latestPlanSignals = new Map<string, PlanCoordinationSignal>();
+  let planPhase: TodoPlanPhase = "off";
+  const latestPlanPhases = new Map<string, TodoPlanPhase>();
   let sessionId: string | undefined;
   let currentContext: ExtensionContext | undefined;
   let widgetVisible = true;
   let settledWidgetVisible = false;
-  let didUnsubscribe = false;
+  let disposed = false;
+  let unsubscribeService: () => void = () => undefined;
+  let installation: TodoInstallation;
+
+  function assertInstallationActive(): void {
+    if (disposed || lifetimeController.signal.aborted) throw new Error("Todo installation has shut down.");
+  }
 
   function isPlanActive(): boolean {
     return planBlocksTodoMutation(planPhase);
@@ -108,15 +153,13 @@ export default function todoExtension(
   function refreshUi(ctx: ExtensionContext): void {
     if (!ctx.hasUI) return;
     try {
+      ctx.ui.setStatus("todo", undefined);
       if (restoreBlockedReason) {
-        ctx.ui.setStatus("todo", ctx.ui.theme.fg("error", `Todo unavailable · ${restoreBlockedReason}`));
         ctx.ui.setWidget("todo", undefined);
         return;
       }
       const managed = managedProgress;
       if (planPhase === "executing" && managed) {
-        const footer = managedProgressFooter(managed);
-        ctx.ui.setStatus("todo", ctx.ui.theme.fg(footer.color, footer.text));
         ctx.ui.setWidget("todo", widgetVisible
           ? (_tui, theme) => ({
               render: (width) => managedProgressWidget(managed, theme, width),
@@ -126,21 +169,17 @@ export default function todoExtension(
         return;
       }
       if (isPlanActive()) {
-        ctx.ui.setStatus("todo", undefined);
         ctx.ui.setWidget("todo", undefined);
         return;
       }
-      const footer = todoFooter(snapshot.state);
-      if (!footer) {
-        ctx.ui.setStatus("todo", undefined);
-        ctx.ui.setWidget("todo", undefined);
-        return;
-      }
-      ctx.ui.setStatus("todo", ctx.ui.theme.fg(footer.color, footer.text));
       const state = snapshot.state;
+      if (!state) {
+        ctx.ui.setWidget("todo", undefined);
+        return;
+      }
       const boardStatus = todoBoardStatus(state);
-      const shouldShowWidget = widgetVisible && state !== null && (boardStatus !== "settled" || settledWidgetVisible);
-      ctx.ui.setWidget("todo", shouldShowWidget && state
+      const shouldShowWidget = widgetVisible && (boardStatus !== "settled" || settledWidgetVisible);
+      ctx.ui.setWidget("todo", shouldShowWidget
         ? (_tui, theme) => ({
             render: (width) => todoWidget(state, theme, width),
             invalidate: () => undefined,
@@ -176,6 +215,7 @@ export default function todoExtension(
     assertAvailable();
     applyCommittedSnapshot(next, ctx);
   }
+
   function commitService(next: TodoSnapshot, ctx: ExtensionContext, op: TodoMutationOperation): void {
     assertAvailable();
     assertMutationAllowed();
@@ -189,7 +229,6 @@ export default function todoExtension(
     pi.appendEntry<TodoStateEntry>(TODO_STATE_TYPE, entry);
     applyCommittedSnapshot(next, ctx);
   }
-
 
   function commitCommand(
     action: "clear" | "reopen",
@@ -216,17 +255,12 @@ export default function todoExtension(
     if (currentContext) refreshUi(currentContext);
   }
 
-  function applyPlanSignal(signal: PlanCoordinationSignal): void {
-    latestPlanSignals.set(signal.sessionId, signal);
-    if (sessionId === undefined || signal.sessionId !== sessionId) return;
-    planPhase = signal.phase;
+  function applyPlanPhase(input: TodoPlanPhaseSync): void {
+    latestPlanPhases.set(input.sessionId, input.phase);
+    if (sessionId === undefined || input.sessionId !== sessionId) return;
+    planPhase = input.phase;
     if (currentContext) refreshUi(currentContext);
   }
-
-  const unsubscribePlan = pi.events.on(PLAN_COORDINATION_CHANNEL, (value: unknown) => {
-    const signal = decodePlanCoordinationSignal(value);
-    if (signal) applyPlanSignal(signal);
-  });
 
   const todoProgressProvider = createTodoProgressProvider({
     getState: () => managedProgress,
@@ -235,9 +269,27 @@ export default function todoExtension(
     now,
     commit: commitManagedProgress,
   });
-  const unsubscribeProgress = registerTodoProgressProvider(pi.events, todoProgressProvider);
+  const progress: ManagedProgressService = Object.freeze({
+    open: (request: ManagedProgressOpenRequest) => {
+      assertInstallationActive();
+      return todoProgressProvider.open(request);
+    },
+    read: (request: ManagedProgressReadRequest) => {
+      assertInstallationActive();
+      return todoProgressProvider.read(request);
+    },
+    update: (request: ManagedProgressUpdateRequest) => {
+      assertInstallationActive();
+      return todoProgressProvider.update(request);
+    },
+    close: (request: ManagedProgressCloseRequest) => {
+      assertInstallationActive();
+      return todoProgressProvider.close(request);
+    },
+  });
 
   function restoreFromBranch(ctx: ExtensionContext): void {
+    if (disposed) return;
     safeClearUi(ctx);
     currentContext = ctx;
     sessionId = ctx.sessionManager.getSessionId();
@@ -249,8 +301,8 @@ export default function todoExtension(
     restoreBlockedReason = restored.blockedReason;
     const restoredManaged = restoreManagedProgress(ctx.sessionManager.getBranch(), sessionId);
     managedProgress = restoredManaged.state;
-    const latestPlanSignal = latestPlanSignals.get(sessionId);
-    if (latestPlanSignal) planPhase = latestPlanSignal.phase;
+    const latestPlanPhase = latestPlanPhases.get(sessionId);
+    if (latestPlanPhase) planPhase = latestPlanPhase;
     settledWidgetVisible = todoBoardStatus(snapshot.state) === "settled";
     refreshUi(ctx);
     if (restored.warning && ctx.hasUI) ctx.ui.notify(restored.warning, "warning");
@@ -273,15 +325,13 @@ export default function todoExtension(
     now,
     createBoardId,
   };
-
   const serviceRuntime: TodoToolRuntime = {
     ...runtime,
     commitTool: commitService,
   };
 
-  registerTodoTool(pi, runtime);
-  registerTodoCommand(pi, runtime);
-  const unsubscribeService = registerTodoService(pi.events, (request: TodoServiceRequest): TodoServiceResult => {
+  function execute(request: TodoServiceRequest): TodoServiceResult {
+    assertInstallationActive();
     const ctx = currentContext;
     const activeSessionId = sessionId;
     if (!ctx || activeSessionId === undefined) throw new Error("The Todo service is not ready for an active session.");
@@ -289,7 +339,39 @@ export default function todoExtension(
     request.signal?.throwIfAborted();
     const result = executeTodoOperation(serviceRuntime, request.operation, request.signal, ctx);
     return Object.freeze({ content: result.content[0].text, details: result.details });
+  }
+
+  function syncPlanPhase(input: TodoPlanPhaseSync): void {
+    assertInstallationActive();
+    applyPlanPhase(decodeTodoPlanPhaseSync(input));
+  }
+
+  const service = Object.freeze({
+    lifetime: lifetimeController.signal,
+    execute,
+    syncPlanPhase,
+    progress,
   });
+
+  function dispose(ctx: ExtensionContext | undefined): void {
+    if (disposed) return;
+    disposed = true;
+    lifetimeController.abort();
+    const uiContext = ctx ?? currentContext;
+    if (uiContext) safeClearUi(uiContext);
+    currentContext = undefined;
+    sessionId = undefined;
+    latestPlanPhases.clear();
+    unsubscribeService();
+    if (installations.get(pi.events) === installation) installations.delete(pi.events);
+  }
+
+  installation = { service, dispose };
+  installations.set(pi.events, installation);
+
+  registerTodoTool(pi, runtime);
+  registerTodoCommand(pi, runtime);
+  unsubscribeService = registerTodoService(pi.events, service.execute);
 
   pi.on("session_start", (_event, ctx) => restoreFromBranch(ctx));
   pi.on("session_tree", (_event, ctx) => restoreFromBranch(ctx));
@@ -329,16 +411,10 @@ export default function todoExtension(
     refreshUi(ctx);
   });
 
-  pi.on("session_shutdown", (_event, ctx) => {
-    safeClearUi(ctx);
-    currentContext = undefined;
-    sessionId = undefined;
-    latestPlanSignals.clear();
-    if (!didUnsubscribe) {
-      didUnsubscribe = true;
-      unsubscribePlan();
-      unsubscribeProgress();
-      unsubscribeService();
-    }
-  });
+  pi.on("session_shutdown", (_event, ctx) => dispose(ctx));
+  return service;
+}
+
+export default function todoExtension(pi: ExtensionAPI): void {
+  installTodo(pi);
 }

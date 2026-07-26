@@ -38,6 +38,9 @@ export class RequestHarness {
   readonly originalConfirm: ExtensionUIContext["confirm"];
   readonly originalInput: ExtensionUIContext["input"];
   maxConcurrentCustom = 0;
+  readonly toolRegistrationCounts = new Map<string, number>();
+  readonly lifecycleRegistrationCounts = new Map<string, number>();
+  readonly eventListenerRegistrationCounts = new Map<string, number>();
 
   private readonly handlers = new Map<string, LifecycleHandler[]>();
   private readonly eventHandlers = new Map<string, EventHandler[]>();
@@ -175,6 +178,7 @@ export class RequestHarness {
 
     const events = {
       on: (channel: string, handler: EventHandler) => {
+        this.eventListenerRegistrationCounts.set(channel, (this.eventListenerRegistrationCounts.get(channel) ?? 0) + 1);
         const handlers = this.eventHandlers.get(channel) ?? [];
         handlers.push(handler);
         this.eventHandlers.set(channel, handlers);
@@ -190,11 +194,15 @@ export class RequestHarness {
     this.api = {
       events,
       on: (event: string, handler: LifecycleHandler) => {
+        this.lifecycleRegistrationCounts.set(event, (this.lifecycleRegistrationCounts.get(event) ?? 0) + 1);
         const handlers = this.handlers.get(event) ?? [];
         handlers.push(handler);
         this.handlers.set(event, handlers);
       },
-      registerTool: (definition: ToolDefinition) => this.tools.set(definition.name, definition),
+      registerTool: (definition: ToolDefinition) => {
+        this.toolRegistrationCounts.set(definition.name, (this.toolRegistrationCounts.get(definition.name) ?? 0) + 1);
+        this.tools.set(definition.name, definition);
+      },
       registerCommand: (name: string, definition: CommandDefinition) => this.commands.set(name, definition),
       getActiveTools: () => [],
       setActiveTools: () => undefined,
@@ -245,6 +253,10 @@ export class RequestHarness {
     const command = this.commands.get(name);
     if (!command) throw new Error(`Unknown command: ${name}`);
     await Reflect.apply(command.handler, command, [args, this.context]);
+  }
+
+  eventListenerCount(channel: string): number {
+    return this.eventHandlers.get(channel)?.length ?? 0;
   }
 
   async emit(event: string, value: unknown): Promise<void> {

@@ -1,6 +1,6 @@
 # Request UI 插件
 
-`request` 为 Pi 提供统一的交互式请求界面：agent 可通过 `ask` 工具一次提交一组相关问题；其他 extension 的 `ctx.ui.select()`、`ctx.ui.confirm()`、`ctx.ui.input()` 会在 TUI session 中自动使用同一 renderer；需要描述、预览、多选或多问题的 extension 可通过版本化事件 channel 调用同一 coordinator。
+`request` 为 Pi 提供统一的交互式请求界面：agent 可通过 `ask` 工具一次提交一组相关问题；其他 extension 的 `ctx.ui.select()`、`ctx.ui.confirm()`、`ctx.ui.input()` 会在 TUI session 中自动使用同一 renderer；明确声明 Request package 依赖的 extension 可直接调用导出的 typed `installRequest(pi)` service，未声明依赖的独立 extension 仍可通过版本化事件 channel 调用同一 coordinator。
 
 该插件只处理当前进程中的短生命周期交互，不持久化答案、不访问网络，也不改变非 TUI 模式的行为。
 
@@ -104,8 +104,8 @@ TUI `session_start` 时，Request 在共享 `ExtensionUIContext` 实例上安装
 ### 与 Goal、Plan 和 Todo 的边界
 
 - Goal 的 active-objective replacement 与 Todo 的 `/todos clear` 通过标准 `ctx.ui.confirm()` 自动获得 Request renderer；调用方仍拥有确认后的状态转换与 journal 写入。
-- Plan Review、Plan clarification 和 Todo managed Plan progress 都有各自的领域状态机与组件，不经 Request coordinator，也不会被 native adapter 替换。Plan 只读阶段若暴露 `ask`，它仍是一次性用户问答，不会写入 Plan clarification state。
-- Request 不调用 `pi-extensions:todo-service:v1`，不创建普通 Todo task，也不读取或更新 managed Plan ledger。它只负责交互结果；Goal、Plan、Todo 分别校验结果并提交自己的状态。
+- Plan Review 保留自己的领域组件；Plan clarification 由其领域状态机调用 Request service 展示单选问题，Plan 仍独自验证选择并写入 journal。Todo managed Plan progress 不经过 Request coordinator。
+- Request 不调用 Todo service，不创建普通 Todo task，也不读取或更新 managed Plan ledger。它只负责交互结果；Goal、Plan、Todo 分别校验结果并提交自己的状态。
 
 ### 版本化事件协议
 
@@ -115,14 +115,15 @@ TUI `session_start` 时，Request 在共享 `ExtensionUIContext` 实例上安装
 pi-extensions:request-ui:v1
 ```
 
-`request/src/index.ts` 导出 `REQUEST_UI_CHANNEL`、`requestFromUser()` 及全部 public types。显式依赖 Request package 的调用方可直接使用 helper：
+`request/src/index.ts` 导出 `installRequest()`、`RequestService`、`REQUEST_UI_CHANNEL`、`requestFromUser()` 及全部 public types。明确声明 package dependency 的调用方直接安装并持有 service：
 
 ```ts
 import {
-  requestFromUser,
+  installRequest,
   type RequestQuestion,
-} from "/path/to/pi-extensions/request/src/index.ts";
+} from "pi-request-ui-dev";
 
+const request = installRequest(pi);
 const questions: RequestQuestion[] = [{
   id: "cache",
   header: "Cache",
@@ -134,13 +135,13 @@ const questions: RequestQuestion[] = [{
   recommended: 0,
 }];
 
-const result = await requestFromUser(pi, questions, {
+const result = await request.request(questions, {
   signal: abortController.signal,
   timeout: 30_000,
 });
 ```
 
-仓库内独立 package 不应建立跨 package production import；它们可按 `RequestUIEnvelope` 的结构直接向该 channel emit。Envelope 包含 `version: 1`、`questions`、可选 `options`、一次性的 `accept()` 仲裁函数，以及 `resolve()`/`reject()` completion。第一个加载的兼容 listener 接受请求；没有 listener 时 `requestFromUser()` 明确 reject，不会静默挂起。所有入口由同一个 coordinator 串行显示，避免多个 extension 的 dialog 互相覆盖。
+`pi-extensions:request-ui:v1` 继续是未声明 package dependency 的兼容入口。此类独立 package 可按 `RequestUIEnvelope` 的结构 emit；第一个 listener 接受请求，没有 listener 时 `requestFromUser()` 明确 reject。所有直接、`ask` 与 channel 入口由同一个 coordinator 串行显示，避免 dialog 互相覆盖。
 
 事件 API 还支持文本题：
 
@@ -161,11 +162,11 @@ const result = await requestFromUser(pi, questions, {
 - option：每题最多 10 项；label 最多 160 字符且规范化后不得重复；description 最多 500 字符；preview 最多 4,000 字符。
 - answer：文本和 Other 最多 1,000 字符。
 - 非 TUI 模式下 `ask` 明确失败；native UI 不会在该模式安装 adapter；事件请求在没有 ready TUI session 时 reject。
-- 所有异步请求支持 abort 和 timeout；session shutdown 会 abort 当前及排队请求、清除 timer/listener，并注销事件 channel。
+- 所有异步请求支持 abort 和 timeout；session shutdown 会 abort 当前及排队请求、清除 timer/listener、注销兼容 channel；失效 installation 的旧 service 引用会 fail closed。
 
 ## 代码结构
 
-- `src/index.ts`：composition root；注册 tool/channel，管理 session signal，并安装/恢复 native adapter。
+- `src/index.ts`：composition root；导出幂等 `installRequest()` service，注册 tool/channel，管理 session signal，并安装/恢复 native adapter。
 - `src/request.ts`：public types、输入上限、规范化与结果结构。
 - `src/component.ts`：响应式 Question/Review TUI、键盘状态机、滚动和 Editor 集成。
 - `src/dialog.ts`：所有调用方共享的串行 coordinator。

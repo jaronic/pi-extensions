@@ -1,29 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ExtensionHarness } from "./harness.ts";
 import {
-  EXECUTION_PROGRESS_CHANNEL,
-  closeProgressProvider,
+  closeTodoProgress,
   decodeProgressSnapshot,
-  discoverProgressProviders,
-  openProgressProvider,
-  readProgressProvider,
-  updateProgressProvider,
-  type ProgressProvider,
+  openTodoProgress,
+  readTodoProgress,
+  updateTodoProgress,
   type ProgressStepDefinition,
+  type TodoManagedProgressService,
 } from "../src/progress.ts";
 
 const STEPS: readonly ProgressStepDefinition[] = [
   { id: "step-1", text: "Inspect" },
   { id: "step-2", text: "Implement" },
 ];
-
-function offerProviders(value: unknown, providers: readonly ProgressProvider[]): void {
-  if (value === null || typeof value !== "object" || !("offer" in value) || typeof value.offer !== "function") {
-    throw new Error("Expected a progress discovery envelope.");
-  }
-  for (const provider of providers) value.offer(provider);
-}
 
 function progressSnapshot(executionId: string, first: "pending" | "inProgress" | "completed" = "pending"): object {
   return {
@@ -36,76 +26,32 @@ function progressSnapshot(executionId: string, first: "pending" | "inProgress" |
   };
 }
 
-test("progress discovery selects the first valid provider by priority and records declined failures", async () => {
-  const harness = new ExtensionHarness();
-  let lowStatus: "pending" | "inProgress" | "completed" = "pending";
+test("direct Todo managed progress validates open, read, update, and close snapshots", async () => {
+  let first: "pending" | "inProgress" | "completed" = "pending";
   let closed = false;
-  const malformed: ProgressProvider = {
-    id: "malformed",
-    priority: 200,
+  const progress: TodoManagedProgressService = {
     async open(request) {
-      return { executionId: request.executionId, revision: 1, steps: [] };
-    },
-    async read() {
-      return undefined;
-    },
-    async update() {
-      return undefined;
-    },
-    async close() {},
-  };
-  const throwing: ProgressProvider = {
-    id: "throwing",
-    priority: 100,
-    async open() {
-      throw new Error("offline");
-    },
-    async read() {
-      return undefined;
-    },
-    async update() {
-      return undefined;
-    },
-    async close() {},
-  };
-  const selected: ProgressProvider = {
-    id: "selected",
-    priority: 10,
-    async open(request) {
-      return progressSnapshot(request.executionId);
+      return progressSnapshot(request.executionId) as never;
     },
     async read(request) {
-      return progressSnapshot(request.executionId, lowStatus);
+      return progressSnapshot(request.executionId, first) as never;
     },
     async update(request) {
-      lowStatus = request.status === "blocked" ? "pending" : request.status;
-      return progressSnapshot(request.executionId, lowStatus);
+      first = request.status === "blocked" ? "pending" : request.status;
+      return progressSnapshot(request.executionId, first) as never;
     },
     async close() {
       closed = true;
     },
   };
-  harness.api.events.on(EXECUTION_PROGRESS_CHANNEL, (value: unknown) => {
-    offerProviders(value, [selected, throwing, malformed]);
-  });
 
-  assert.deepEqual(discoverProgressProviders(harness.api.events).map((provider) => provider.id), [
-    "malformed",
-    "throwing",
-    "selected",
-  ]);
-  const opened = await openProgressProvider(harness.api.events, {
+  const opened = await openTodoProgress(progress, {
     sessionId: "session",
     executionId: "execution",
     steps: STEPS,
   });
-  assert.equal(opened.opened?.providerId, "selected");
-  assert.deepEqual(opened.failures, [
-    "malformed: Progress snapshot does not contain every approved Plan step.",
-    "throwing: offline",
-  ]);
-
-  const updated = await updateProgressProvider(harness.api.events, "selected", {
+  assert.equal(opened.steps[0]?.status, "pending");
+  const updated = await updateTodoProgress(progress, {
     sessionId: "session",
     executionId: "execution",
     requestId: "request-1",
@@ -113,12 +59,12 @@ test("progress discovery selects the first valid provider by priority and record
     status: "inProgress",
   }, STEPS);
   assert.equal(updated.steps[0]?.status, "inProgress");
-  const read = await readProgressProvider(harness.api.events, "selected", {
+  const read = await readTodoProgress(progress, {
     sessionId: "session",
     executionId: "execution",
   }, STEPS);
   assert.deepEqual(read, updated);
-  await closeProgressProvider(harness.api.events, "selected", {
+  await closeTodoProgress(progress, {
     sessionId: "session",
     executionId: "execution",
     outcome: "cancelled",
@@ -126,23 +72,18 @@ test("progress discovery selects the first valid provider by priority and record
   assert.equal(closed, true);
 });
 
-test("duplicate provider IDs are rejected instead of depending on listener order", () => {
-  const harness = new ExtensionHarness();
-  const provider = (priority: number): ProgressProvider => ({
-    id: "duplicate",
-    priority,
+test("direct Todo managed progress fails closed for missing, malformed, and aborted snapshots", async () => {
+  const unavailable: TodoManagedProgressService = {
     async open() { return undefined; },
     async read() { return undefined; },
-    async update() { return undefined; },
+    async update() { throw new Error("offline"); },
     async close() {},
-  });
-  harness.api.events.on(EXECUTION_PROGRESS_CHANNEL, (value: unknown) => {
-    offerProviders(value, [provider(1), provider(2)]);
-  });
-  assert.deepEqual(discoverProgressProviders(harness.api.events), []);
-});
-
-test("progress snapshots reject unknown fields", () => {
+  };
+  await assert.rejects(openTodoProgress(unavailable, {
+    sessionId: "session",
+    executionId: "execution",
+    steps: STEPS,
+  }), /could not open/);
   assert.throws(() => decodeProgressSnapshot({
     ...progressSnapshot("execution"),
     forged: true,
@@ -154,37 +95,21 @@ test("progress snapshots reject unknown fields", () => {
       { id: "step-2", status: "pending" },
     ],
   }, "execution", STEPS), /unknown fields/);
-});
 
-test("provider discovery failure falls back cleanly and abort wins over fallback", async () => {
-  const throwingHarness = new ExtensionHarness();
-  throwingHarness.api.events.on(EXECUTION_PROGRESS_CHANNEL, () => {
-    throw new Error("listener failed");
-  });
-  assert.deepEqual(await openProgressProvider(throwingHarness.api.events, {
-    sessionId: "session",
-    executionId: "execution",
-    steps: STEPS,
-  }), { failures: ["discovery: listener failed"] });
-
-  const abortHarness = new ExtensionHarness();
   const controller = new AbortController();
-  const provider: ProgressProvider = {
-    id: "aborting",
-    priority: 1,
+  const aborting: TodoManagedProgressService = {
     async open(request) {
-      controller.abort();
-      return progressSnapshot(request.executionId);
+      controller.abort(new Error("caller stopped"));
+      return progressSnapshot(request.executionId) as never;
     },
     async read() { return undefined; },
-    async update() { return undefined; },
+    async update() { throw new Error("offline"); },
     async close() {},
   };
-  abortHarness.api.events.on(EXECUTION_PROGRESS_CHANNEL, (value: unknown) => offerProviders(value, [provider]));
-  await assert.rejects(openProgressProvider(abortHarness.api.events, {
+  await assert.rejects(openTodoProgress(aborting, {
     sessionId: "session",
     executionId: "execution",
     steps: STEPS,
     signal: controller.signal,
-  }), /aborted/i);
+  }), /caller stopped/);
 });

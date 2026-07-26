@@ -1,8 +1,6 @@
-import type { EventBus, Theme } from "@earendil-works/pi-coding-agent";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
-export const EXECUTION_PROGRESS_CHANNEL = "pi-extensions:execution-progress:v1";
-export const TODO_PROGRESS_PROVIDER_ID = "todo";
 export const TODO_MANAGED_PROGRESS_TYPE = "todo-managed-progress-v1";
 
 const MAX_STEPS = 50;
@@ -49,47 +47,45 @@ export interface ManagedProgressEntry {
   readonly state: ManagedProgressState | null;
 }
 
-interface ProgressStepDefinition {
+export interface ManagedProgressStepDefinition {
   readonly id: string;
   readonly text: string;
 }
 
-interface ProgressOpenRequest {
+export interface ManagedProgressSnapshot {
+  readonly executionId: string;
+  readonly revision: number;
+  readonly steps: readonly { readonly id: string; readonly status: ManagedProgressStatus }[];
+}
+
+export interface ManagedProgressOpenRequest {
   readonly sessionId: string;
   readonly executionId: string;
-  readonly steps: readonly ProgressStepDefinition[];
+  readonly steps: readonly ManagedProgressStepDefinition[];
   readonly signal?: AbortSignal;
 }
 
-interface ProgressReadRequest {
+export interface ManagedProgressReadRequest {
   readonly sessionId: string;
   readonly executionId: string;
   readonly signal?: AbortSignal;
 }
 
-interface ProgressUpdateRequest extends ProgressReadRequest {
+export interface ManagedProgressUpdateRequest extends ManagedProgressReadRequest {
   readonly requestId: string;
   readonly stepId: string;
   readonly status: ManagedProgressStatus;
 }
 
-interface ProgressCloseRequest extends ProgressReadRequest {
+export interface ManagedProgressCloseRequest extends ManagedProgressReadRequest {
   readonly outcome: "completed" | "cancelled";
 }
 
-interface ProgressProvider {
-  readonly id: string;
-  readonly priority: number;
-  open(request: ProgressOpenRequest): Promise<unknown>;
-  read(request: ProgressReadRequest): Promise<unknown>;
-  update(request: ProgressUpdateRequest): Promise<unknown>;
-  close(request: ProgressCloseRequest): Promise<void>;
-}
-
-interface ProgressDiscoveryEnvelope {
-  readonly version: 1;
-  readonly kind: "discover";
-  offer(provider: unknown): void;
+export interface ManagedProgressService {
+  open(request: ManagedProgressOpenRequest): Promise<ManagedProgressSnapshot | undefined>;
+  read(request: ManagedProgressReadRequest): Promise<ManagedProgressSnapshot | undefined>;
+  update(request: ManagedProgressUpdateRequest): Promise<ManagedProgressSnapshot>;
+  close(request: ManagedProgressCloseRequest): Promise<void>;
 }
 
 export interface ManagedProgressRuntime {
@@ -261,7 +257,7 @@ export function restoreManagedProgress(
   });
 }
 
-function snapshot(state: ManagedProgressState): object {
+function snapshot(state: ManagedProgressState): ManagedProgressSnapshot {
   return Object.freeze({
     executionId: state.executionId,
     revision: state.revision,
@@ -269,33 +265,31 @@ function snapshot(state: ManagedProgressState): object {
   });
 }
 
-function matchesDefinitions(state: ManagedProgressState, steps: readonly ProgressStepDefinition[]): boolean {
+function matchesDefinitions(state: ManagedProgressState, steps: readonly ManagedProgressStepDefinition[]): boolean {
   return state.steps.length === steps.length && state.steps.every(
     (step, index) => step.id === steps[index]?.id && step.text === steps[index]?.text,
   );
 }
 
-function validateOpenRequest(request: ProgressOpenRequest): readonly ManagedProgressStep[] {
+function validateOpenRequest(request: ManagedProgressOpenRequest): readonly ManagedProgressStep[] {
   identifier(request.sessionId, "Progress session ID", MAX_SESSION_ID_CHARS);
   identifier(request.executionId, "Progress execution ID", MAX_EXECUTION_ID_CHARS);
   if (!Array.isArray(request.steps) || request.steps.length < 1 || request.steps.length > MAX_STEPS) {
-    throw new Error(`Todo progress provider requires 1 to ${MAX_STEPS} steps.`);
+    throw new Error(`Todo managed progress requires 1 to ${MAX_STEPS} steps.`);
   }
   return Object.freeze(request.steps.map((step, index) => normalizedStep({ ...step, status: "pending" }, index)));
 }
 
-export function createTodoProgressProvider(runtime: ManagedProgressRuntime): ProgressProvider {
+export function createTodoProgressProvider(runtime: ManagedProgressRuntime): ManagedProgressService {
   return Object.freeze({
-    id: TODO_PROGRESS_PROVIDER_ID,
-    priority: 100,
-    async open(request: ProgressOpenRequest) {
+    async open(request: ManagedProgressOpenRequest) {
       request.signal?.throwIfAborted();
       const steps = validateOpenRequest(request);
       if (runtime.getSessionId() !== request.sessionId) return undefined;
       const current = runtime.getState();
       if (current?.executionId === request.executionId) {
         if (!matchesDefinitions(current, request.steps)) {
-          throw new Error("Todo progress execution was reopened with different approved steps.");
+          throw new Error("Todo managed progress was reopened with different approved steps.");
         }
         return snapshot(current);
       }
@@ -314,7 +308,7 @@ export function createTodoProgressProvider(runtime: ManagedProgressRuntime): Pro
       runtime.commit(next);
       return snapshot(next);
     },
-    async read(request: ProgressReadRequest) {
+    async read(request: ManagedProgressReadRequest) {
       request.signal?.throwIfAborted();
       const current = runtime.getState();
       if (
@@ -325,7 +319,7 @@ export function createTodoProgressProvider(runtime: ManagedProgressRuntime): Pro
       ) return undefined;
       return snapshot(current);
     },
-    async update(request: ProgressUpdateRequest) {
+    async update(request: ManagedProgressUpdateRequest) {
       request.signal?.throwIfAborted();
       identifier(request.requestId, "Progress request ID", MAX_REQUEST_ID_CHARS);
       const current = runtime.getState();
@@ -334,7 +328,7 @@ export function createTodoProgressProvider(runtime: ManagedProgressRuntime): Pro
         runtime.getSessionId() !== request.sessionId ||
         current.sessionId !== request.sessionId ||
         current.executionId !== request.executionId
-      ) throw new Error("Todo progress provider does not own this execution.");
+      ) throw new Error("Todo managed progress does not own this execution.");
       const nextStatus = status(request.status, "Progress update");
       const stepId = identifier(request.stepId, "Progress update step ID", MAX_STEP_ID_CHARS);
       const lastRequest = current.lastRequest;
@@ -362,19 +356,12 @@ export function createTodoProgressProvider(runtime: ManagedProgressRuntime): Pro
       runtime.commit(next);
       return snapshot(next);
     },
-    async close(request: ProgressCloseRequest) {
+    async close(request: ManagedProgressCloseRequest) {
       request.signal?.throwIfAborted();
       const current = runtime.getState();
       if (!current || current.executionId !== request.executionId || current.sessionId !== request.sessionId) return;
       runtime.commit(null);
     },
-  });
-}
-
-export function registerTodoProgressProvider(events: EventBus, provider: ProgressProvider): () => void {
-  return events.on(EXECUTION_PROGRESS_CHANNEL, (value: unknown) => {
-    if (!isRecord(value) || value.version !== 1 || value.kind !== "discover" || typeof value.offer !== "function") return;
-    (value as unknown as ProgressDiscoveryEnvelope).offer(provider);
   });
 }
 

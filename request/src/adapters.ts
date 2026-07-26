@@ -1,15 +1,14 @@
-import type {
-  ExtensionUIDialogOptions,
-  ExtensionUIContext,
-} from "@earendil-works/pi-coding-agent";
-import type { RequestCoordinator } from "./dialog.ts";
-import { normalizeRequestQuestions, type RequestDialogOptions, type RequestQuestion } from "./request.ts";
+import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { normalizeRequestQuestions, type RequestDialogOptions, type RequestDialogResult, type RequestQuestion } from "./request.ts";
 
 export interface InstalledRequestUIAdapters {
   restore(): void;
 }
 
-type DialogOptionsFactory = (options?: ExtensionUIDialogOptions) => RequestDialogOptions;
+export type RequestDialogHandler = (
+  questions: readonly RequestQuestion[],
+  options?: RequestDialogOptions,
+) => Promise<RequestDialogResult>;
 
 function nativeQuestion(
   id: string,
@@ -37,8 +36,7 @@ function supportsUnifiedDialog(question: RequestQuestion): boolean {
 
 export function installRequestUIAdapters(
   ui: ExtensionUIContext,
-  coordinator: RequestCoordinator,
-  dialogOptions: DialogOptionsFactory,
+  request: RequestDialogHandler,
 ): InstalledRequestUIAdapters {
   const originalSelect = ui.select;
   const originalConfirm = ui.confirm;
@@ -50,7 +48,7 @@ export function installRequestUIAdapters(
     }
     const question = nativeQuestion("select", title, title, options);
     if (!supportsUnifiedDialog(question)) return originalSelect.call(ui, title, options, nativeOptions);
-    const result = await coordinator.request(ui, [question], dialogOptions(nativeOptions));
+    const result = await request([question], nativeOptions);
     if (result.cancelled) return undefined;
     return result.results[0]?.selectedOptions[0];
   };
@@ -58,7 +56,7 @@ export function installRequestUIAdapters(
   const unifiedConfirm: ExtensionUIContext["confirm"] = async (title, message, nativeOptions) => {
     const question = nativeQuestion("confirm", title, message, ["Yes", "No"]);
     if (!supportsUnifiedDialog(question)) return originalConfirm.call(ui, title, message, nativeOptions);
-    const result = await coordinator.request(ui, [question], dialogOptions(nativeOptions));
+    const result = await request([question], nativeOptions);
     return !result.cancelled && result.results[0]?.selectedOptions[0] === "Yes";
   };
 
@@ -71,7 +69,7 @@ export function installRequestUIAdapters(
       ...(placeholder ? { placeholder } : {}),
     };
     if (!supportsUnifiedDialog(question)) return originalInput.call(ui, title, placeholder, nativeOptions);
-    const result = await coordinator.request(ui, [question], dialogOptions(nativeOptions));
+    const result = await request([question], nativeOptions);
     if (result.cancelled) return undefined;
     return result.results[0]?.customInput;
   };

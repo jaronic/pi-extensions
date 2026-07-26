@@ -47,6 +47,10 @@ export class TodoHarness {
   abortCount = 0;
   waitForIdleCount = 0;
   setActiveToolsCount = 0;
+  readonly toolRegistrationCounts = new Map<string, number>();
+  readonly commandRegistrationCounts = new Map<string, number>();
+  readonly lifecycleRegistrationCounts = new Map<string, number>();
+  readonly coordinationRegistrationCounts = new Map<string, number>();
 
   private readonly handlers = new Map<string, LifecycleHandler[]>();
   private readonly coordinationHandlers = new Map<string, CoordinationHandler[]>();
@@ -193,6 +197,7 @@ export class TodoHarness {
     this.api = {
       events: {
         on: (channel: string, handler: CoordinationHandler) => {
+          this.coordinationRegistrationCounts.set(channel, (this.coordinationRegistrationCounts.get(channel) ?? 0) + 1);
           const handlers = this.coordinationHandlers.get(channel) ?? [];
           handlers.push(handler);
           this.coordinationHandlers.set(channel, handlers);
@@ -206,16 +211,21 @@ export class TodoHarness {
         },
       },
       on: (event: string, handler: LifecycleHandler) => {
+        this.lifecycleRegistrationCounts.set(event, (this.lifecycleRegistrationCounts.get(event) ?? 0) + 1);
         const handlers = this.handlers.get(event) ?? [];
         handlers.push(handler);
         this.handlers.set(event, handlers);
       },
       registerTool: (definition: ToolDefinition) => {
+        this.toolRegistrationCounts.set(definition.name, (this.toolRegistrationCounts.get(definition.name) ?? 0) + 1);
         this.tools.set(definition.name, definition);
         this.toolSources.set(definition.name, "extension");
         if (!this.activeTools.includes(definition.name)) this.activeTools.push(definition.name);
       },
-      registerCommand: (name: string, definition: CommandDefinition) => this.commands.set(name, definition),
+      registerCommand: (name: string, definition: CommandDefinition) => {
+        this.commandRegistrationCounts.set(name, (this.commandRegistrationCounts.get(name) ?? 0) + 1);
+        this.commands.set(name, definition);
+      },
       getActiveTools: () => [...this.activeTools],
       setActiveTools: (names: string[]) => {
         this.setActiveToolsCount += 1;

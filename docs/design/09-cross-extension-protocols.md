@@ -1,6 +1,6 @@
 # 09 · 跨扩展通用协议：事件总线上的调用、发现与感知
 
-> 本篇回答：Todo、Request 为什么能向任意 extension 提供通用调用面；其他插件并未 production import 它们时，怎样发现能力、选择 provider、等待异步结果并在 reload/session 切换后保持正确；`pi.events` 的底层同步语义又给协议设计带来哪些硬约束。实现基线为本仓库当前 Todo service v1、Request UI v1、execution-progress v1 和 Plan coordination v1。
+> 本篇回答：Todo、Request 怎样向未声明依赖的 extension 保留通用 channel；硬依赖如何通过 package manifest 与 typed installer 直接组合；以及 `pi.events` 的同步语义怎样约束兼容调用与状态广播。实现基线为 Request UI v1、Todo service v1、Plan → Request/Todo direct composition 和 Plan → Goal coordination v1。
 
 ## 1. 结论先行
 
@@ -9,11 +9,11 @@
 | 感知对象 | 实际机制 | 调用方是否知道提供者 | 当前实例 |
 | --- | --- | --- | --- |
 | 模型感知一个工具 | active tool 的 schema、description、`promptSnippet`、`promptGuidelines` 进入模型边界 | 模型知道工具名，不知道 extension 实现 | `todo`、`ask` |
-| Extension 调用一个通用能力 | 共享 `pi.events` 上的版本化 request/response envelope | 知道 channel/wire contract，不依赖实现包 | Todo service、Request UI channel |
-| 消费者从多个实现中选 provider | 同步 `discover` + `offer(provider)`，随后直接调用 provider 方法 | 只持久化选中的 provider ID | Plan execution progress |
-| Extension 被动感知状态变化 | 单向广播 immutable snapshot，接收方校验、按 session 缓存和投影 | 知道状态协议，不调用发送者内部对象 | Plan → Goal/Todo |
+| 硬依赖 extension 调用能力 | manifest 声明 package，直接调用幂等 installer 返回的 typed service | 知道 package 与领域 API | Plan → Request/Todo |
+| 独立 extension 调用可选兼容能力 | 共享 `pi.events` 上的版本化 request/response envelope | 知道 channel/wire contract，不依赖实现包 | Todo service、Request UI channel |
+| Extension 被动感知状态变化 | 单向广播 immutable snapshot，接收方校验并投影 | 知道状态协议，不调用发送者内部对象 | Plan → Goal |
 
-Request 还提供第五种、对调用方最透明的接入：它包装 session 共享的 `ctx.ui.select/confirm/input`。其他 extension 继续调用 Pi 标准 UI API，就自动得到 Request renderer；这不是 event request，也不是调用方“发现了 Request”，而是共享方法入口被兼容 adapter 拦截。
+Request 还提供共享 `ctx.ui.select/confirm/input` adapter；这不是 event request，也不是调用方“发现了 Request”。
 
 因此先记住五个边界：
 
@@ -137,14 +137,14 @@ flowchart TD
     Durable -->|需要恢复| Journal[appendEntry / tool details]
 ```
 
-| 模式 | 基数 | 返回方式 | 缺失实现 | 是否持久 | 代表 channel |
-| --- | --- | --- | --- | --- | --- |
-| UI adapter | 一个共享 method slot，可被链式包装 | 原方法 Promise | 自动使用原生 UI | 否 | 无 channel |
-| Request/response | 多 listener 中恰好一个接受 | envelope `resolve/reject` | caller 立即 reject | 否；业务方另行持久化 | `todo-service:v1`、`request-ui:v1` |
-| Provider discovery | 零到多个 offer，consumer 选择 | 直接调用 provider methods | open 阶段可 fallback | owner/state 由业务方持久化 | `execution-progress:v1` |
-| State broadcast | 一个 sender 到零到多个 consumer | 无 response | sender 不受影响 | Bus 不持久；sender journal + lifecycle 重发 | `plan-state:v1` |
+| 模式 | 基数 | 返回方式 | 缺失实现 | 是否持久 | 当前代表 |
+| --- | --- | --- | --- | --- |
+| UI adapter | 一个共享 method slot，可被链式包装 | 原方法 Promise | 自动使用原生 UI | 否 | Request native adapter |
+| Direct service | manifest 已声明的一个 runtime | typed method return/Promise | 安装失败立即失败 | 领域方决定 | Plan → Request/Todo |
+| Request/response compatibility | 多 listener 中恰好一个接受 | envelope `resolve/reject` | caller 立即 reject | 否；业务方另行持久化 | `todo-service:v1`、`request-ui:v1` |
+| State broadcast | 一个 sender 到零到多个 consumer | 无 response | sender 不受影响 | Bus 不持久；sender journal + lifecycle re-emit | `plan-state:v1` 给 Goal |
 
-不要为了“统一”把四者压成一个万能 registry。它们的 owner 数量、失败语义和生命周期不同；过度统一会把业务差异藏进 optional 字段和隐式约定。
+不要为了“统一”把所有领域能力压成万能 registry。硬依赖由 package manager 与 direct service 表达；兼容 channel 只保留给真正独立的可选组合。
 
 ## 4. 单接收者 request/response：把 EventBus 提升成进程内 RPC
 
@@ -422,61 +422,14 @@ Shutdown/session replacement 时，Request：
 
 Identity check 很关键：若另一个 extension 在 Request 之后又包装了 `confirm`，Request shutdown 不能把后来者的 wrapper 覆盖回旧方法。
 
-## 7. Provider discovery：多个实现怎样被 Plan 感知和确定性选择
+## 7. Plan → Request/Todo：硬依赖直接组合
 
-Request/response 只允许第一个 listener 接受；Plan progress 需要允许多个实现竞争，所以使用：
+Plan 缺少 Request 或 Todo 就无法提供完整 clarification 或获批执行，因此它在 manifest 声明并捆绑两个 package，按 Request → Todo → Plan resource 顺序加载。Plan factory 仍调用 `installRequest(pi)`、`installTodo(pi)`：这覆盖直接加载 `plan/src/index.ts`，并与默认 entry 共用 EventBus-scoped installation registry。
 
-```ts
-interface ProgressDiscoveryEnvelope {
-  readonly version: 1;
-  readonly kind: "discover";
-  offer(provider: unknown): void;
-}
-```
+Plan clarification 将领域 choice 转成 Request 单选问题；Request 只返回结果，Plan 负责映射、状态验证与 journal。Plan approval 直接调用 `todo.progress.open`，严格验证 snapshot 后才写 owner `todo` 与 execution ID。后续 read/update/close 固定走该 service；Todo lifetime 失效、错误 snapshot 或恢复到其他 owner 都 fail closed。新的 approval 没有 priority、provider discovery、listener-order fallback 或 local progress fallback；仅历史 journal 中的 local progress 保留 reducer 迁移路径。
 
-Provider 在 factory 阶段订阅 channel；收到 `discover` 后同步 `offer()`：
-
-```ts
-events.on(EXECUTION_PROGRESS_CHANNEL, (value) => {
-  if (isDiscoverEnvelope(value)) value.offer(provider);
-});
-```
-
-Consumer 每次需要能力时主动 discover：
-
-```mermaid
-sequenceDiagram
-    participant P as Plan
-    participant B as pi.events
-    participant T as Todo provider
-    participant X as Other provider
-
-    P->>B: emit discover envelope
-    B->>T: discover
-    T->>P: offer({ id: "todo", priority: 100, methods... })
-    B->>X: discover
-    X->>P: offer({ id, priority, methods... })
-    B-->>P: emit returns
-    P->>P: decode, reject duplicate IDs,<br/>sort priority desc then ID
-    loop candidates
-      P->>T: open(sessionId, executionId, steps, signal)
-      T-->>P: snapshot / undefined / error
-    end
-    P->>P: persist selected owner ID + execution ID
-```
-
-`plan/src/progress.ts` 的选择规则：
-
-1. provider ID 必须有界、trimmed；priority 是 safe integer；四个 method 都存在；
-2. 重复 ID 不采用“最后一个赢”，而是移除该 ID 并标记冲突；
-3. 候选按 priority 降序、ID 升序排序，与 listener load order 解耦；
-4. `open()` 返回 `undefined` 表示 decline，throw 记录 failure，合法 snapshot 才取得 ownership；
-5. 没有 provider 时，Plan 在**首次批准**可使用本地 progress；
-6. 一旦 external owner 被持久化，后续 `read/update/close` 只寻找该 ID；provider 缺失或坏 snapshot 显式失败，不静默切换 owner 或创建本地副本。
-
-Provider object 携带真实函数 reference，因此 discover 只适用于同进程、同信任域。若改成 worker/daemon/远程插件，必须把 method call 变成可序列化 RPC，并新增 request ID、transport timeout、disconnect 和重连语义。
-
-## 8. State broadcast：为什么 Plan、Goal、Todo 能跨加载顺序同步
+这种 direct method call 只在同一 Pi 进程、同一信任域成立；它不是 Pi core 的通用工具执行 API，也不让 stock Pi 自动采用第三方 service。
+## 8. State broadcast：为什么 Plan → Goal 能跨加载顺序同步
 
 Plan phase 使用：
 
@@ -498,7 +451,7 @@ pi-extensions:plan-state:v1
 }
 ```
 
-Goal 与 Todo 各自在本包复制 wire type、把 payload 当 `unknown` 解码、过滤 foreign session，再决定工具、continuation 和 UI gate。Todo 使用 exact-key decoder；Goal 当前 parser 校验 version/session/phase，并为部分可选/非法字段采用安全默认。两者都不把收到的对象当自己的 durable state。
+Goal 在自己的 package 内复制 wire type，把 payload 当 `unknown` 解码、过滤 foreign session，再决定 continuation 与 UI gate。Todo 不消费这个 broadcast：Plan 在同一 transaction 中直接调用 `todo.syncPlanPhase()`；两者的 direct service lifetime 由 installer 管理，而不是 wire protocol。
 
 ### 8.1 EventBus 不 replay，恢复靠发送者重发与接收者缓存
 
@@ -508,24 +461,24 @@ Goal 与 Todo 各自在本包复制 wire type、把 payload 当 `unknown` 解码
 sequenceDiagram
     participant L as Extension loader
     participant P as Plan factory/listener set
-    participant T as Todo factory/listener set
+    participant G as Goal factory/listener set
     participant S as session_start handlers
 
     L->>P: load factory
-    L->>T: load factory
-    Note over P,T: 所有 factory 完成后才进入 session_start
-    S->>P: restore Plan, emit session-sync
-    P->>T: Plan signal
-    alt Todo session 尚未 restore
-      T->>T: cache by sessionId
-      S->>T: restore Todo branch
-      T->>T: reapply cached signal
-    else Todo 已 ready
-      T->>T: apply immediately
+    L->>G: load factory
+    Note over P,G: 所有 factory 完成后才进入 session_start
+    S->>P: restore Plan, emit session snapshot
+    P->>G: Plan signal
+    alt Goal session 尚未 restore
+      G->>G: cache by sessionId
+      S->>G: restore Goal branch
+      G->>G: reapply cached signal
+    else Goal 已 ready
+      G->>G: apply immediately
     end
 ```
 
-反向加载时，Todo 先建立 `sessionId`，随后 Plan emit，信号直接应用。`session_tree` 重复同一套 restore/reconcile。Reload 会销毁旧 extension instance、重新执行全部 factory，再进入 `session_start`。
+反向加载时，Goal 先建立 `sessionId`，随后 Plan emit，信号直接应用。`session_tree` 重复同一套 restore/reconcile。Reload 会销毁旧 extension instance、重新执行全部 factory，再进入 `session_start`。
 
 这里有一个通用规则：**广播协议若表示当前状态，发送者必须在 lifecycle restore 后重发权威 snapshot；接收者若可能早于自己的 session restore 收到消息，必须按 session identity 缓存后 reconcile。**
 
@@ -547,8 +500,8 @@ Request 和 Todo 都选择“missing/not-ready 立即失败”，而不是把请
 
 | 问题 | 协议层正确处理 |
 | --- | --- |
-| 无 receiver | `emit()` 返回后 `accepted === false`，立即 reject |
-| 多 receiver | 单 owner 用 `accept()`；多 provider 用 ID + priority discovery |
+| 无 receiver | compatibility caller 在 `emit()` 返回后发现 `accepted === false`，立即 reject；hard dependency installer 无法建立时立即失败 |
+| 多 receiver | compatibility channel 只允许一个 listener `accept()`；硬依赖 service 通过 EventBus-scoped installer 保证唯一 runtime |
 | Receiver 同步 throw | listener catch 后 `reject(error)`；不依赖 EventBus 传播 |
 | Receiver 异步失败 | Promise rejection 转发到 envelope `reject` |
 | Caller abort | pre-check + once listener + settle cleanup |
@@ -569,31 +522,31 @@ Request 没有业务 journal，因此它的 commit point 是用户在 component 
 
 ## 11. Wire contract：独立 package 为什么复制类型
 
-本仓库刻意不让 `goal/` production import `plan/src/protocol.ts`，也不让 `todo/` import `request/`：
+`goal/` 没有 Plan package dependency，因此不 production import `plan/src/protocol.ts`；Todo/Request 的独立 consumer 也不通过仓库相对路径获得 optional capability：
 
 - 每个 package 可独立安装；
 - 不假设仓库根目录依赖解析；
-- 缺失可选 extension 时仍能运行；
+- 缺失 optional extension 时仍能运行；
 - 一方重构内部文件不会成为另一方 runtime dependency。
 
-代价是编译器无法证明两份协议一致。因此需要三层替代约束：
+代价是兼容 channel 没有编译期跨包契约。因此需要三层替代约束：
 
 1. **Channel/version**：`pi-extensions:<capability>:vN`；breaking change 新开版本，不在同名 channel 猜 shape。
 2. **Runtime decoder**：接收 `unknown`，验证 discriminant、exact keys、上限、session identity 与返回值关联。
-3. **Coexistence tests**：用真实两包加载顺序执行请求、缺失、invalid、abort、reload 和 owner outage。
+3. **Coexistence tests**：用真实两包加载顺序执行请求、缺失、invalid、abort、reload 和 shutdown。
 
-若消费者明确愿意依赖 provider package，也可 import 公开 helper/type；Todo 与 Request 都从 `src/index.ts` 导出 caller helper。但仓库内独立 extension 仍优先复制最小 wire contract，避免把可选能力变成硬依赖。
+反之，Plan 明确声明 Request/Todo package dependency，因而只从两个 package root import public installer/type，直接持有 typed service。此时不复制它们的 wire contract，也不使用 compatibility channel。
 
 ### 当前协议严格度并不完全相同
 
-| 协议 | 当前输入校验 | 当前输出校验 |
+| 协议/边界 | 当前输入校验 | 当前输出校验 |
 | --- | --- | --- |
-| Todo service | exact envelope/request keys；clone/freeze operation；领域 executor 再校验 op | exact result、bounded content、strict details、op correlation |
-| Request UI | envelope required shape；questions 在 coordinator 规范化 | 当前直接 settle coordinator result |
-| Progress discovery | provider ID/priority/methods；duplicate ID barrier | 每次 snapshot exact decode，并绑定 approved definitions/execution ID |
-| Plan broadcast | sender typed snapshot；Todo exact decoder；Goal required-field parser | 无 response |
+| Todo compatibility service | exact envelope/request keys；clone/freeze operation；领域 executor 再校验 op | exact result、bounded content、strict details、op correlation |
+| Request compatibility UI | envelope required shape；questions 在 coordinator 规范化 | 当前直接 settle coordinator result |
+| Plan → Todo direct managed service | typed input 加上 Plan side snapshot/owner/execution ID validation | 每次 snapshot exact decode，并绑定 approved definitions/execution ID |
+| Plan → Goal broadcast | sender typed snapshot；Goal required-field parser | 无 response |
 
-这张表用于解释风险边界，不代表应盲目把所有协议写成同一严格度。凡是结果会驱动持久 mutation、权限或 owner transfer，优先采用 Todo/progress 级别的双向 exact validation。
+这张表用于解释风险边界，不代表应盲目把所有协议写成同一严格度。凡是结果会驱动持久 mutation、权限或 owner transfer，优先采用 Todo managed service 级别的双向 exact validation。
 
 ## 12. 测试怎样证明“无缝”不是偶然
 
@@ -601,23 +554,23 @@ Request 没有业务 journal，因此它的 commit point 是用户在 component 
 
 | 维度 | 必测路径 |
 | --- | --- |
-| 加载顺序 | consumer-first、provider-first |
-| Provider 存在性 | absent、not-ready、shutdown 后 unregister |
-| 仲裁 | 一个接受、多个 listener、duplicate provider ID |
-| Wire 数据 | extra field、wrong version/kind、oversize、wrong session、bad result |
+| 加载顺序 | Plan-only、dependencies-first、Plan-first 后加载 default entries |
+| 安装面 | tool、command、channel listener、adapter 和 journal runtime 各注册一次 |
+| Direct service | install lifetime、open failure、stale lifetime、wrong restored owner、rollback |
+| Compatibility wire 数据 | extra field、wrong version/kind、oversize、wrong session、bad result |
 | 异步 | sync resolve、async resolve/reject、pre-abort、mid-flight abort、timeout |
 | 原子性 | persist failure 不更新 closure；commit 后 abort 不反转成功 |
-| Lifecycle | startup、reload、tree、shutdown、foreign session signal |
-| 降级 | native UI fallback、首次 progress local fallback、selected owner outage fail closed |
+| Lifecycle | startup、reload、tree、shutdown、foreign session broadcast |
+| 降级 | native UI fallback；新 managed execution direct service failure fail closed；legacy local journal 仍可完成 |
 | 资源 | adapter identity restore、listener unsubscribe、pending dialog disposal |
 
 当前证据落点：
 
-- `request/test/external-fixture.ts`：不 import Request production code，按 literal wire envelope 调用 channel；
-- `request/test/integration.test.ts`：external channel、native adapters、serialization、abort/timeout、headless、shutdown；
-- `todo/test/integration.test.ts`：tool/service 同一 board、v2 persistence、session isolation、Plan gate、同步 settlement；
-- `plan/test/progress.test.ts`：provider decode、priority、duplicate ID、decline/failure、abort；
-- `plan/test/coexistence.test.ts` 与 `todo/test/coexistence.test.ts`：双加载顺序、Plan/Goal/Todo phase 与 owner lifecycle；
+- `request/test/external-fixture.ts`：不 import Request production code，按 literal wire envelope 调用 compatibility channel；
+- `request/test/integration.test.ts`：external channel、direct service、native adapters、serialization、abort/timeout、headless、shutdown；
+- `todo/test/integration.test.ts`：tool/direct service/compatibility channel 的同一 board、v2 persistence、session isolation、Plan gate、同步 settlement；
+- `plan/test/progress.test.ts`：Todo direct snapshot decode、open/update failure、stale lifetime、wrong owner、legacy local recovery；
+- `plan/test/coexistence.test.ts` 与 `todo/test/coexistence.test.ts`：三种 package 加载顺序、Plan/Goal broadcast、Todo direct managed owner lifecycle；
 - `todo/test/progress-provider.test.ts`：managed journal、idempotent request ID、read/update/close 和 invalid replay。
 
 只有单包 unit test 不能证明跨扩展合同。至少需要一个 consumer 按自己复制的 wire type 调真实 provider。
@@ -643,7 +596,7 @@ Request 没有业务 journal，因此它的 commit point 是用户在 component 
 pi-extensions:<capability>:v<wire-version>
 ```
 
-Owner 不一定写入 channel。Todo service 由 Todo 拥有，所以 capability 名本身含 todo；execution-progress 则刻意不绑定 provider，允许 Todo 及未来实现共同 offer。
+Compatibility channel 名应反映稳定 capability owner，例如 `todo-service`。硬依赖不需要 channel 名：consumer 按 package name import installer，并从 typed service 调用领域 API。只有未来真正可替换的 optional capability 才应设计不绑定 provider 的 discovery channel。
 
 ### 13.3 推荐最小文件边界
 
@@ -672,21 +625,22 @@ src/
 
 ## 15. 本篇结论
 
-Todo、Request 和 Plan 的跨扩展组合建立在一个很小的宿主原语上：**每个 ExtensionAPI 共享同一个进程内 EventBus**。可靠性并不来自 EventBus 自身，而来自协议补上的结构：
+Todo、Request 和 Plan 的跨扩展组合建立在少量、边界清晰的宿主原语上。可靠性不来自 EventBus 自身，而来自正确选择调用边界：
 
-- request/response 用同步 `accept()` 和异步 `resolve/reject()`；
-- provider discovery 用同步 `offer()`、确定性排序和持久 owner；
-- state broadcast 用 session identity、lifecycle 重发和 receiver reconcile；
+- Plan → Request/Todo 的硬依赖用 manifest bundle/load order、EventBus-scoped installer 与 typed direct service；
+- 独立 consumer 的 compatibility request/response 用同步 `accept()` 和异步 `resolve/reject()`；
+- Plan → Goal state broadcast 用 session identity、lifecycle 重发和 receiver reconcile；
 - transparent UI integration 用共享 method wrapper、fallback 和 identity-safe restore；
 - durable behavior 仍由 branch journal、strict decoder 和原子 commit 保证。
 
-“无缝”只描述调用体验。底层并没有魔法：调用方要么经过一个被包装的共享入口，要么显式遵守版本化 channel；receiver 必须在正确生命周期注册、同步完成握手、严格校验 unknown 数据，并在缺失、取消、重复和 reload 时给出可测试的确定语义。
+“无缝”只描述调用体验。底层并没有魔法：调用方要么显式依赖 package 并持有 service，要么显式遵守版本化 compatibility channel；receiver 必须在正确生命周期注册、严格校验 unknown 数据，并在缺失、取消、重复和 reload 时给出可测试的确定语义。
 
 ## 参考资料
 
 本仓库：
 
 - [扩展系统设计](04-extension-system.md)
+- [通用能力注册调研](10-capability-registry-research.md)
 - [生产级最佳实践](07-production-checklist.md)
 - [Todo 扩展实现](08-todo-extension-design.md)
 - [Todo README](../../todo/README.md)
@@ -705,4 +659,4 @@ Pi 官方：
 - [Inter-extension event bus example](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/examples/extensions/event-bus.ts)
 - [TUI components](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/tui.md)
 
-[上一篇：Todo 扩展实现](08-todo-extension-design.md)
+[上一篇：Todo 扩展实现](08-todo-extension-design.md) · [下一篇：通用能力注册调研](10-capability-registry-research.md)

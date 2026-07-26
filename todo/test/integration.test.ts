@@ -1,19 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import todoExtension, { requestTodoService, TODO_SERVICE_CHANNEL } from "../src/index.ts";
+import todoExtension, { installTodo, requestTodoService, TODO_SERVICE_CHANNEL } from "../src/index.ts";
 import { TODO_STATE_TYPE, buildTodoStateEntry } from "../src/persistence.ts";
 import { freezeTodoSnapshot } from "../src/state.ts";
-import { PLAN_COORDINATION_CHANNEL } from "../src/protocol.ts";
 import { TodoHarness } from "./harness.ts";
 
 const BOARD_A = "00000000-0000-4000-8000-000000000041";
 const BOARD_B = "00000000-0000-4000-8000-000000000042";
 
-function install(harness: TodoHarness): void {
+function install(harness: TodoHarness) {
   let timestamp = 100;
   let board = 0;
-  todoExtension(harness.api, {
+  return installTodo(harness.api, {
     now: () => ++timestamp,
     createBoardId: () => board++ === 0 ? BOARD_A : BOARD_B,
   });
@@ -199,7 +198,7 @@ test("service settlement wins cancellation after a synchronous commit", async ()
 
 test("global Todo service preserves validation, abort, persistence, and Plan gates", async () => {
   const harness = new TodoHarness();
-  install(harness);
+  const service = install(harness);
   await harness.startSession();
   await requestTodoService(harness.api, {
     sessionId: "todo-session",
@@ -241,15 +240,7 @@ test("global Todo service preserves validation, abort, persistence, and Plan gat
     /different session/,
   );
 
-  harness.api.events.emit(PLAN_COORDINATION_CHANNEL, {
-    version: 1,
-    sessionId: "todo-session",
-    phase: "planning",
-    readOnly: true,
-    awaitingApproval: false,
-    willTriggerTurn: false,
-    reason: "test",
-  });
+  service.syncPlanPhase({ sessionId: "todo-session", phase: "planning" });
   const frozenView = await requestTodoService(harness.api, {
     sessionId: "todo-session",
     operation: { op: "view" },
@@ -262,15 +253,7 @@ test("global Todo service preserves validation, abort, persistence, and Plan gat
     }),
     /frozen while Plan is planning/,
   );
-  harness.api.events.emit(PLAN_COORDINATION_CHANNEL, {
-    version: 1,
-    sessionId: "todo-session",
-    phase: "off",
-    readOnly: false,
-    awaitingApproval: false,
-    willTriggerTurn: false,
-    reason: "test",
-  });
+  service.syncPlanPhase({ sessionId: "todo-session", phase: "off" });
   const appended = await requestTodoService(harness.api, {
     sessionId: "todo-session",
     operation: { op: "append", phase: "A", items: ["Two"] },
@@ -413,14 +396,14 @@ test("reopen command parses a stable ID, interrupts streaming, and journals the 
   await assert.rejects(harness.command("todos", "reopen 0 invalid"), /Usage|positive|safe integer/);
 });
 
-test("TUI status, widget controls, settled visibility, and semantic colors remain isolated", async () => {
+test("TUI widget controls, settled visibility, and semantic colors remain isolated", async () => {
   const harness = new TodoHarness({ terminalWidth: 16, terminalRows: 12 });
   harness.statuses.set("goal", "Goal stays");
   harness.widgets.set("plan", ["Plan stays"]);
   install(harness);
   await harness.startSession();
   await harness.tool({ op: "init", list: [{ phase: "A", items: ["A very long current task", "Second"] }] });
-  assert.match(harness.statuses.get("todo") ?? "", /Todo 0\/2/);
+  assert.equal(harness.statuses.get("todo"), undefined);
   assert.ok(harness.widgets.get("todo"));
   assert.equal(harness.widgets.get("todo")?.every((line) => visibleWidth(line) <= 16), true);
   assert.equal(harness.statuses.get("goal"), "Goal stays");
@@ -447,7 +430,7 @@ test("TUI status, widget controls, settled visibility, and semantic colors remai
   assert.ok(harness.widgets.get("todo"), "settled board remains visible until the next turn starts");
   await harness.emit("agent_start", { type: "agent_start" });
   assert.equal(harness.widgets.get("todo"), undefined);
-  assert.match(harness.statuses.get("todo") ?? "", /settled/);
+  assert.equal(harness.statuses.get("todo"), undefined);
 });
 
 test("headless modes keep the tool usable and reject UI-only slash operations", async () => {
@@ -483,10 +466,10 @@ test("future-version recovery hides supported projections, fails closed, and rec
     ...seed.entries,
     { type: "custom", customType: "todo-state-v3", data: { version: 3 } },
   ]);
-  install(harness);
-  assert.equal(harness.coordinationListenerCount(PLAN_COORDINATION_CHANNEL), 1);
+  const service = install(harness);
+  assert.equal(harness.coordinationListenerCount(TODO_SERVICE_CHANNEL), 1);
   await harness.startSession();
-  assert.match(harness.statuses.get("todo") ?? "", /unavailable/);
+  assert.equal(harness.statuses.get("todo"), undefined);
   assert.equal(harness.widgets.get("todo"), undefined);
   const blockedPrompt = { type: "before_agent_start", systemPrompt: "BASE" };
   await harness.emit("before_agent_start", blockedPrompt);
@@ -499,10 +482,11 @@ test("future-version recovery hides supported projections, fails closed, and rec
   await harness.emit("session_tree", { type: "session_tree" });
   const recovered = await harness.tool({ op: "view", includeClosed: true, offset: 0, limit: 50 });
   assert.equal(sequenceFrom(recovered), 1);
-  assert.match(harness.statuses.get("todo") ?? "", /Todo 0\/1/);
+  assert.equal(harness.statuses.get("todo"), undefined);
 
   await harness.emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
-  assert.equal(harness.coordinationListenerCount(PLAN_COORDINATION_CHANNEL), 0);
+  assert.equal(harness.coordinationListenerCount(TODO_SERVICE_CHANNEL), 0);
+  assert.equal(service.lifetime.aborted, true);
   assert.equal(harness.statuses.get("todo"), undefined);
   assert.equal(harness.widgets.get("todo"), undefined);
   await seed.emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
@@ -547,4 +531,44 @@ test("slash command completions expose the documented surface", () => {
     { value: "clear", label: "clear" },
     { value: "reopen", label: "reopen" },
   ]);
+});
+
+test("direct Todo service shares the compatibility board and fails closed after shutdown", async () => {
+  const harness = new TodoHarness();
+  const service = install(harness);
+  assert.ok(Object.isFrozen(service));
+  await harness.startSession();
+
+  const initialized = service.execute({
+    sessionId: "todo-session",
+    operation: { op: "init", list: [{ phase: "Delivery", items: ["Implement"] }] },
+  });
+  assert.equal(initialized.details.sequence, 1);
+  const compatible = await requestTodoService(harness.api, {
+    sessionId: "todo-session",
+    operation: { op: "view", includeClosed: true },
+  });
+  assert.equal(compatible.details.sequence, 1);
+  assert.deepEqual(compatible.details.state, initialized.details.state);
+
+  service.syncPlanPhase({ sessionId: "todo-session", phase: "awaitingApproval" });
+  assert.throws(
+    () => service.execute({
+      sessionId: "todo-session",
+      operation: { op: "append", phase: "Delivery", items: ["Verify"] },
+    }),
+    /frozen while Plan is awaitingApproval/,
+  );
+  assert.throws(
+    () => service.syncPlanPhase({ sessionId: "todo-session", phase: "off", forged: true } as never),
+    /unknown fields/,
+  );
+  service.syncPlanPhase({ sessionId: "todo-session", phase: "off" });
+
+  await harness.emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
+  assert.equal(service.lifetime.aborted, true);
+  assert.throws(
+    () => service.execute({ sessionId: "todo-session", operation: { op: "view" } }),
+    /shut down/,
+  );
 });

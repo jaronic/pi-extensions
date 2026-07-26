@@ -1,4 +1,4 @@
-import type { EventBus } from "@earendil-works/pi-coding-agent";
+import type { ManagedProgressService } from "pi-todo-dev";
 import {
   MAX_PLAN_STEP_CHARS,
   MAX_PLAN_STEP_ID_CHARS,
@@ -6,8 +6,6 @@ import {
   type PlanStepStatus,
 } from "./state.ts";
 
-export const EXECUTION_PROGRESS_CHANNEL = "pi-extensions:execution-progress:v1";
-export const MAX_PROGRESS_PROVIDER_ID_CHARS = 128;
 const PROGRESS_SNAPSHOT_KEYS = new Set(["executionId", "revision", "steps"]);
 const PROGRESS_STEP_SNAPSHOT_KEYS = new Set(["id", "status"]);
 export const MAX_PROGRESS_EXECUTION_ID_CHARS = 128;
@@ -51,30 +49,7 @@ export interface ProgressCloseRequest extends ProgressReadRequest {
   readonly outcome: "completed" | "cancelled";
 }
 
-export interface ProgressProvider {
-  readonly id: string;
-  readonly priority: number;
-  open(request: ProgressOpenRequest): Promise<unknown>;
-  read(request: ProgressReadRequest): Promise<unknown>;
-  update(request: ProgressUpdateRequest): Promise<unknown>;
-  close(request: ProgressCloseRequest): Promise<void>;
-}
-
-interface ProgressDiscoveryEnvelope {
-  readonly version: 1;
-  readonly kind: "discover";
-  offer(provider: unknown): void;
-}
-
-export interface OpenedProgressProvider {
-  readonly providerId: string;
-  readonly snapshot: ProgressSnapshot;
-}
-
-export interface ProgressOpenAttempt {
-  readonly opened?: OpenedProgressProvider;
-  readonly failures: readonly string[];
-}
+export type TodoManagedProgressService = Pick<ManagedProgressService, "open" | "read" | "update" | "close">;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -91,60 +66,13 @@ function normalizedIdentifier(value: unknown, label: string, maximum: number): s
   return value;
 }
 
-function decodeProvider(value: unknown): ProgressProvider | undefined {
-  if (!isRecord(value)) return undefined;
-  try {
-    const id = normalizedIdentifier(value.id, "Progress provider ID", MAX_PROGRESS_PROVIDER_ID_CHARS);
-    if (typeof value.priority !== "number" || !Number.isSafeInteger(value.priority)) return undefined;
-    if (
-      typeof value.open !== "function" ||
-      typeof value.read !== "function" ||
-      typeof value.update !== "function" ||
-      typeof value.close !== "function"
-    ) return undefined;
-    return Object.freeze({
-      id,
-      priority: value.priority,
-      open: value.open as ProgressProvider["open"],
-      read: value.read as ProgressProvider["read"],
-      update: value.update as ProgressProvider["update"],
-      close: value.close as ProgressProvider["close"],
-    });
-  } catch {
-    return undefined;
-  }
-}
-
-export function discoverProgressProviders(events: EventBus): readonly ProgressProvider[] {
-  const offered = new Map<string, ProgressProvider>();
-  const duplicateIds = new Set<string>();
-  const envelope: ProgressDiscoveryEnvelope = {
-    version: 1,
-    kind: "discover",
-    offer(value) {
-      const provider = decodeProvider(value);
-      if (!provider || duplicateIds.has(provider.id)) return;
-      if (offered.has(provider.id)) {
-        offered.delete(provider.id);
-        duplicateIds.add(provider.id);
-        return;
-      }
-      offered.set(provider.id, provider);
-    },
-  };
-  events.emit(EXECUTION_PROGRESS_CHANNEL, envelope);
-  return Object.freeze([...offered.values()].sort(
-    (left, right) => right.priority - left.priority || left.id.localeCompare(right.id),
-  ));
-}
-
 export function decodeProgressSnapshot(
   value: unknown,
   executionId: string,
   definitions: readonly ProgressStepDefinition[],
 ): ProgressSnapshot {
   if (!isRecord(value) || !hasOnlyKeys(value, PROGRESS_SNAPSHOT_KEYS)) {
-    throw new Error("Progress provider returned an invalid snapshot.");
+    throw new Error("Todo managed progress returned an invalid snapshot.");
   }
   if (value.executionId !== executionId) throw new Error("Progress snapshot executionId does not match the active Plan.");
   if (typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1) {
@@ -196,83 +124,52 @@ function definitionsFrom(steps: readonly ProgressStepDefinition[]): readonly Pro
   }));
 }
 
-export async function openProgressProvider(
-  events: EventBus,
+export async function openTodoProgress(
+  progress: TodoManagedProgressService,
   request: ProgressOpenRequest,
-): Promise<ProgressOpenAttempt> {
+): Promise<ProgressSnapshot> {
   const executionId = normalizedIdentifier(
     request.executionId,
     "Progress execution ID",
     MAX_PROGRESS_EXECUTION_ID_CHARS,
   );
   const definitions = definitionsFrom(request.steps);
-  const failures: string[] = [];
-  let providers: readonly ProgressProvider[];
-  try {
-    providers = discoverProgressProviders(events);
-  } catch (error) {
-    request.signal?.throwIfAborted();
-    return { failures: Object.freeze([`discovery: ${error instanceof Error ? error.message : String(error)}`]) };
-  }
-  for (const provider of providers) {
-    request.signal?.throwIfAborted();
-    try {
-      const value = await provider.open({ ...request, executionId, steps: definitions });
-      request.signal?.throwIfAborted();
-      if (value === undefined) continue;
-      return {
-        opened: Object.freeze({
-          providerId: provider.id,
-          snapshot: decodeProgressSnapshot(value, executionId, definitions),
-        }),
-        failures: Object.freeze(failures),
-      };
-    } catch (error) {
-      request.signal?.throwIfAborted();
-      failures.push(`${provider.id}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  return { failures: Object.freeze(failures) };
+  request.signal?.throwIfAborted();
+  const value = await progress.open({ ...request, executionId, steps: definitions });
+  request.signal?.throwIfAborted();
+  if (value === undefined) throw new Error(`Todo managed progress could not open execution ${executionId}.`);
+  return decodeProgressSnapshot(value, executionId, definitions);
 }
 
-function requireProgressProvider(events: EventBus, providerId: string): ProgressProvider {
-  const provider = discoverProgressProviders(events).find((candidate) => candidate.id === providerId);
-  if (!provider) throw new Error(`Progress provider ${providerId} is unavailable.`);
-  return provider;
-}
-
-export async function readProgressProvider(
-  events: EventBus,
-  providerId: string,
+export async function readTodoProgress(
+  progress: TodoManagedProgressService,
   request: ProgressReadRequest,
   definitions: readonly ProgressStepDefinition[],
 ): Promise<ProgressSnapshot> {
   request.signal?.throwIfAborted();
-  const value = await requireProgressProvider(events, providerId).read(request);
+  const value = await progress.read(request);
   request.signal?.throwIfAborted();
-  if (value === undefined) throw new Error(`Progress provider ${providerId} does not own execution ${request.executionId}.`);
+  if (value === undefined) throw new Error(`Todo managed progress does not own execution ${request.executionId}.`);
   return decodeProgressSnapshot(value, request.executionId, definitions);
 }
 
-export async function updateProgressProvider(
-  events: EventBus,
-  providerId: string,
+export async function updateTodoProgress(
+  progress: TodoManagedProgressService,
   request: ProgressUpdateRequest,
   definitions: readonly ProgressStepDefinition[],
 ): Promise<ProgressSnapshot> {
   request.signal?.throwIfAborted();
-  const value = await requireProgressProvider(events, providerId).update(request);
+  const value = await progress.update(request);
   request.signal?.throwIfAborted();
   return decodeProgressSnapshot(value, request.executionId, definitions);
 }
 
-export async function closeProgressProvider(
-  events: EventBus,
-  providerId: string,
+export async function closeTodoProgress(
+  progress: TodoManagedProgressService,
   request: ProgressCloseRequest,
 ): Promise<void> {
   request.signal?.throwIfAborted();
-  await requireProgressProvider(events, providerId).close(request);
+  await progress.close(request);
   request.signal?.throwIfAborted();
 }
 

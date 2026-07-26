@@ -385,24 +385,11 @@ export function refinePlan(state: PlanState, now = Date.now()): PlanState {
   return { ...planningState, phase: "planning", updatedAt: now };
 }
 
-function pendingProgress(steps: PlanStep[]): PlanStepProgress[] {
-  return steps.map((step) => ({ id: step.id, status: "pending" }));
-}
 
 function assertApprovable(state: PlanState): void {
   if (state.phase !== "awaitingApproval" || !state.plan || state.steps.length === 0) {
     throw new Error("No submitted plan is awaiting approval.");
   }
-}
-
-export function approvePlan(state: PlanState, now = Date.now()): PlanState {
-  assertApprovable(state);
-  return {
-    ...state,
-    phase: "executing",
-    progress: { kind: "local", steps: pendingProgress(state.steps) },
-    updatedAt: now,
-  };
 }
 
 export function approvePlanWithExternalProgress(
@@ -440,10 +427,6 @@ export function updatePlanStep(
   return { ...state, progress: { kind: "local", steps }, updatedAt: now };
 }
 
-export function allPlanStepsComplete(state: PlanState): boolean {
-  return state.phase === "executing" && state.progress?.kind === "local" &&
-    state.progress.steps.length > 0 && state.progress.steps.every((step) => step.status === "completed");
-}
 
 export function localPlanProgress(state: PlanState): readonly PlanStepProgress[] | undefined {
   return state.phase === "executing" && state.progress?.kind === "local" ? state.progress.steps : undefined;
