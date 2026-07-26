@@ -112,6 +112,10 @@ export class ExtensionHarness {
   abortCount = 0;
   waitForIdleCount = 0;
 
+  readonly toolRegistrationCounts = new Map<string, number>();
+  readonly commandRegistrationCounts = new Map<string, number>();
+  readonly lifecycleRegistrationCounts = new Map<string, number>();
+  readonly coordinationRegistrationCounts = new Map<string, number>();
   private readonly commands = new Map<string, unknown>();
   private readonly tools = new Map<string, unknown>();
   private readonly handlers = new Map<string, RegisteredHandler[]>();
@@ -262,6 +266,7 @@ export class ExtensionHarness {
 
     const eventBus = {
       on: (channel: string, handler: CoordinationHandler) => {
+        this.coordinationRegistrationCounts.set(channel, (this.coordinationRegistrationCounts.get(channel) ?? 0) + 1);
         const listeners = this.coordinationHandlers.get(channel) ?? [];
         listeners.push(handler);
         this.coordinationHandlers.set(channel, listeners);
@@ -277,15 +282,20 @@ export class ExtensionHarness {
     const apiDouble = {
       events: eventBus,
       on: (eventName: string, handler: RegisteredHandler) => {
+        this.lifecycleRegistrationCounts.set(eventName, (this.lifecycleRegistrationCounts.get(eventName) ?? 0) + 1);
         const listeners = this.handlers.get(eventName) ?? [];
         listeners.push(handler);
         this.handlers.set(eventName, listeners);
       },
-      registerCommand: (name: string, definition: unknown) => this.commands.set(name, definition),
+      registerCommand: (name: string, definition: unknown) => {
+        this.commandRegistrationCounts.set(name, (this.commandRegistrationCounts.get(name) ?? 0) + 1);
+        this.commands.set(name, definition);
+      },
       registerTool: (definition: unknown) => {
         if (!definition || typeof definition !== "object" || !("name" in definition) || typeof definition.name !== "string") {
           throw new Error("Invalid tool definition in test harness.");
         }
+        this.toolRegistrationCounts.set(definition.name, (this.toolRegistrationCounts.get(definition.name) ?? 0) + 1);
         this.tools.set(definition.name, definition);
         this.configuredToolSources.set(definition.name, "extension");
         if (!this.activeTools.includes(definition.name)) this.activeTools.push(definition.name);

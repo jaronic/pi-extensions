@@ -1,67 +1,47 @@
-export const PLAN_COORDINATION_CHANNEL = "pi-extensions:plan-state:v1";
-
-export type CoordinatedPlanPhase =
+export type TodoPlanPhase =
   | "off"
   | "planning"
+  | "awaitingClarification"
   | "awaitingApproval"
   | "blocked"
   | "executing";
 
-export interface PlanCoordinationSignal {
-  readonly version: 1;
+export interface TodoPlanPhaseSync {
   readonly sessionId: string;
-  readonly phase: CoordinatedPlanPhase;
-  readonly readOnly: boolean;
-  readonly awaitingApproval: boolean;
-  readonly willTriggerTurn: boolean;
-  readonly reason: string;
+  readonly phase: TodoPlanPhase;
 }
 
-const PLAN_PHASES: readonly CoordinatedPlanPhase[] = [
+const TODO_PLAN_PHASES: readonly TodoPlanPhase[] = [
   "off",
   "planning",
+  "awaitingClarification",
   "awaitingApproval",
   "blocked",
   "executing",
 ];
 
-export function decodePlanCoordinationSignal(value: unknown): PlanCoordinationSignal | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+export function decodeTodoPlanPhaseSync(value: unknown): TodoPlanPhaseSync {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Todo Plan phase sync must be an object.");
+  }
   const record = value as Record<string, unknown>;
-  const allowed = new Set([
-    "version",
-    "sessionId",
-    "phase",
-    "readOnly",
-    "awaitingApproval",
-    "willTriggerTurn",
-    "reason",
-  ]);
-  if (Object.keys(record).some((key) => !allowed.has(key))) return undefined;
+  if (Object.keys(record).some((key) => key !== "sessionId" && key !== "phase")) {
+    throw new Error("Todo Plan phase sync contains unknown fields.");
+  }
   if (
-    record.version !== 1 ||
     typeof record.sessionId !== "string" ||
-    !record.sessionId ||
-    record.sessionId.length > 256 ||
-    typeof record.phase !== "string" ||
-    !PLAN_PHASES.includes(record.phase as CoordinatedPlanPhase) ||
-    typeof record.readOnly !== "boolean" ||
-    typeof record.awaitingApproval !== "boolean" ||
-    typeof record.willTriggerTurn !== "boolean" ||
-    typeof record.reason !== "string" ||
-    record.reason.length > 500
-  ) return undefined;
-  return Object.freeze({
-    version: 1,
-    sessionId: record.sessionId,
-    phase: record.phase as CoordinatedPlanPhase,
-    readOnly: record.readOnly,
-    awaitingApproval: record.awaitingApproval,
-    willTriggerTurn: record.willTriggerTurn,
-    reason: record.reason,
-  });
+    record.sessionId.length === 0 ||
+    record.sessionId.trim() !== record.sessionId ||
+    [...record.sessionId].length > 256
+  ) {
+    throw new Error("Todo Plan phase sync session ID must be non-empty trimmed text within 256 characters.");
+  }
+  if (typeof record.phase !== "string" || !TODO_PLAN_PHASES.includes(record.phase as TodoPlanPhase)) {
+    throw new Error("Todo Plan phase sync contains an invalid phase.");
+  }
+  return Object.freeze({ sessionId: record.sessionId, phase: record.phase as TodoPlanPhase });
 }
 
-export function planBlocksTodoMutation(phase: CoordinatedPlanPhase): boolean {
+export function planBlocksTodoMutation(phase: TodoPlanPhase): boolean {
   return phase !== "off";
 }

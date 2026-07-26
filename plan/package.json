@@ -8,6 +8,8 @@
   ],
   "pi": {
     "extensions": [
+      "./node_modules/pi-request-ui-dev/src/index.ts",
+      "./node_modules/pi-todo-dev/src/index.ts",
       "./src/index.ts"
     ]
   },
@@ -33,7 +35,13 @@
   "engines": {
     "node": ">=22.19.0"
   },
+  "bundledDependencies": [
+    "pi-request-ui-dev",
+    "pi-todo-dev"
+  ],
   "dependencies": {
-    "marked": "18.0.5"
+    "marked": "18.0.5",
+    "pi-request-ui-dev": "file:../request",
+    "pi-todo-dev": "file:../todo"
   }
 }

@@ -1,6 +1,6 @@
 # Todo 插件
 
-`todo` 为 Pi 增加一张按 session branch 持久化的短期执行看板：它把多步骤工作拆成有序 phase 和稳定数字 ID 的任务，只允许一个当前活动项，并在完成、阻塞、放弃或重新打开时留下结构化状态。模型通过全局 `todo` 工具使用普通看板，任意扩展可通过版本化 Todo service 操作同一份状态；它还可以作为 Plan 执行期的可插拔进度 provider，但 managed Plan ledger 与普通 board 是两个独立状态域。
+`todo` 为 Pi 增加一张按 session branch 持久化的短期执行看板：它把多步骤工作拆成有序 phase 和稳定数字 ID 的任务，只允许一个当前活动项，并在完成、阻塞、放弃或重新打开时留下结构化状态。模型通过全局 `todo` 工具使用普通看板；明确声明 Todo package 依赖的 extension 通过 typed `installTodo(pi)` service 操作同一 runtime，独立 extension 仍可使用版本化兼容 channel。Plan 的 managed ledger 与普通 board 是两个独立状态域。
 
 普通 Todo 是执行账本，不是 Plan 审批、Goal 终态判断或项目级 issue tracker；managed ledger 也不把 Plan steps 复制进普通 board。
 
@@ -20,8 +20,8 @@ Todo 适合以下工作：
 启用后：
 
 - agent 获得一个顺序执行、带显式全局使用说明的 `todo` 工具；只要没有更严格的 active-tool lease 隐藏它，模型会从工具 schema、description、`promptSnippet` 和 `promptGuidelines` 感知其能力；
-- 当前 Pi 进程中的其他扩展可通过 `pi-extensions:todo-service:v1` 读写同一普通 board；service 复用模型工具的 reducer、校验、输出、Plan gate 和 branch persistence；
-- TUI 使用独立的 `todo` footer/status 和最多 12 行的 widget；被 Plan 选为 provider 时，同一个 UI key 临时投影 managed Plan progress，普通 board 保持冻结且不被覆盖；
+- 当前 Pi 进程中的其他扩展可通过 `pi-extensions:todo-service:v1` 读写同一普通 board；声明 Todo package 依赖的 extension 则直接持有同一 `TodoService`。两条入口复用模型工具的 reducer、校验、输出、Plan gate 和 branch persistence；
+- TUI 使用独立的 `todo` footer/status 和最多 12 行的 widget；Plan 通过 direct service 管理进度时，同一个 UI key 临时投影 managed Plan progress，普通 board 保持冻结且不被覆盖；
 - 普通 open task 或 managed Plan progress 的有界摘要会注入每轮 system prompt，所有文本按不可信数据处理；
 - 普通 board 的成功工具结果、用户命令和 service mutation 与 managed Plan ledger 分别写入 Pi session journal，切换 branch 时恢复各自最新有效快照；
 - 普通 settled 看板保留 footer，完成时的 widget 显示到下一轮开始；Plan terminal `off` 立即恢复普通投影，随后 managed `close` 成功时清除 ledger。
@@ -189,10 +189,13 @@ UI 只投影已验证状态，并只使用 Pi `Theme` 的 semantic tokens；它�
 
 ### 通用 Todo service
 
-`src/index.ts` 导出 `TODO_SERVICE_CHANNEL`、`requestTodoService()` 及其 TypeScript request/operation/result 类型。调用方提交当前 session ID、一个与模型工具同语义的 operation 和可选 `AbortSignal`：
+`src/index.ts` 导出 `installTodo()`、`TodoService`、`TODO_SERVICE_CHANNEL`、`requestTodoService()` 及其 TypeScript request/operation/result 类型。明确声明 package dependency 的调用方直接安装并使用 service：
 
 ```ts
-const result = await requestTodoService(pi, {
+import { installTodo } from "pi-todo-dev";
+
+const todo = installTodo(pi);
+const result = todo.execute({
   sessionId: ctx.sessionManager.getSessionId(),
   operation: {
     op: "append",
@@ -203,21 +206,20 @@ const result = await requestTodoService(pi, {
 });
 ```
 
-Service v1 支持 `init/append/start/done/block/drop/reopen/edit/get/view`，故意不暴露用户确认专属的 `clear`。返回 `{ content, details }`；`details` 与成功 `todo` tool result 使用同一严格解码的 `TodoToolDetails`。Mutation 在返回前同步完成 append `todo-state-v2`、内存/UI commit 和 result settlement：append 失败、提交前取消、非法输入、session 不匹配、extension 未 ready 或 active Plan gate 都拒绝且不改变状态；提交完成后发生的取消不会把已持久化成功误报成失败。`get/view` 不写 journal。`session_shutdown` 注销 listener。
+Service 支持 `init/append/start/done/block/drop/reopen/edit/get/view`，故意不暴露用户确认专属的 `clear`。返回 `{ content, details }`；`details` 与成功 `todo` tool result 使用同一严格解码的 `TodoToolDetails`。Mutation 在返回前同步完成 append `todo-state-v2`、内存/UI commit 和 result settlement：append 失败、提交前取消、非法输入、session 不匹配、extension 未 ready 或 active Plan gate 都拒绝且不改变状态；提交完成后发生的取消不会把已持久化成功误报成失败。`get/view` 不写 journal。
 
-同仓库独立 package 不做 production cross-import；消费者应独立定义并验证同一版本化 envelope，或在明确建立 package dependency 时使用导出的 helper。Channel 采用单接收者 `accept()` 仲裁，加载两个 Todo service provider 不会双写，但属于不受支持的安装组合。
+`pi-extensions:todo-service:v1` 保留给未声明 Todo package dependency 的独立 extension。它采用单接收者 `accept()` 仲裁并委托同一 direct board method；session shutdown 注销 listener，失效 service 引用 fail closed。
 
 ### Plan
 
-Todo 独立验证两个 channel，不从 `plan/` 做 production import：
+Plan 是 Todo 的声明依赖：Plan package 先加载 Request、Todo extension resource，再加载自身入口；三个包又被单独加载时，`installTodo()` 的 EventBus-scoped runtime registry 保证 tool、command、listener 和 journal runtime 仍只注册一次。
 
-- `pi-extensions:plan-state:v1` 对齐 session 与 phase。Plan 在 `planning`、`awaitingApproval`、`blocked` 或 `executing` 时，普通 Todo 的所有 mutation 都在 runtime fail closed；`view/get` 和 `/todos status` 仍可只读检查冻结 board。旧 `awaitingClarification` 信号不再属于协议并会被拒绝。
-- `pi-extensions:execution-progress:v1` 用同步 discover envelope 收集 provider。Todo 提供 ID `todo`、priority `100` 的 open/read/update/close 实现；Plan 只在 `/plan approve` 时选择一次 owner，没有选择 Todo 时它不会建立 managed ledger。
-- Todo 被选中后，`open` 原子写入完整 approved step definitions 和全 pending snapshot；`update` 以 Plan 传入的 tool-call request ID 幂等提交 status，保证最多一个 `inProgress`；`read` 返回有 revision 的完整 snapshot；`close` 清除 ledger。
+- Plan 在每次 phase transition 直接调用 `todo.syncPlanPhase({ sessionId, phase })`；Todo 不再监听或解码 `pi-extensions:plan-state:v1`。该 broadcast 仍供可选 Goal 消费。
+- `/plan approve` 始终直接调用 `todo.progress.open`，并在得到完整有效 snapshot 后才持久化 `providerId: "todo"` 与 execution ID。open/read/update 失败显式失败，不创建 local fallback，也不切换 owner。
+- `open` 原子写入完整 approved step definitions 和全 pending snapshot；`update` 以 Plan 传入的 tool-call request ID 幂等提交 status，保证最多一个 `inProgress`；`read` 返回有 revision 的完整 snapshot；`close` 清除 ledger。
 - Agent 始终调用 `update_plan_step`。普通 `todo` mutation 仍被冻结，且不能寻址 managed step；这是一份单向 ownership transfer，不是 Plan state 与普通 Todo board 的双写同步。
-- planning/approval/blocked 阶段隐藏普通 Todo prompt/footer/widget，Plan 在未批准阶段也不投影候选步骤看板；Request `ask` 在 planning 内完成，不引入额外 Plan phase。执行期若 Todo 是 owner，则 `todo` key 显示 managed footer/widget，并以普通 Todo 风格的 `#N` 顺序号呈现步骤；执行 prompt 和 `update_plan_step` 继续使用 Plan step ID。否则继续隐藏。Plan 只显示 provider owner，不再显示第二份步骤 widget。
-- Plan complete/cancel 先持久化自身 terminal tombstone、恢复工具并广播 `off`，再 best-effort `close` managed ledger。Todo 立即恢复原 branch board 和 widget 偏好；close 成功会 append null，失败时残留 ledger 不投影且下一次非 executing approval 可原子替换。已选 provider 的 read/update 不可用时显式失败，不创建本地 fallback，也不改普通 board。
-- `/plan cancel` 在 Plan 已为 `off` 时仍广播同 session 的 `off`，使陈旧普通投影可幂等解冻。
+- planning/clarification/approval/blocked 阶段隐藏普通 Todo prompt/widget。执行期 `todo` key 仅显示 managed widget，并注入唯一的 `<untrusted_execution_progress>`；Plan 与 Todo 都不写入底部状态栏。
+- Plan complete/cancel 先持久化 v3 terminal tombstone、恢复工具并直接同步 `off`，再 best-effort `close` managed ledger。Todo 立即恢复原 branch board 和 widget 偏好；close 成功会 append null，失败时残留 ledger 不投影且下一次 approval 可原子替换。
 
 普通 board 与 managed ledger 分别持久化和恢复；两者只共享 Todo 的 UI key，生命周期与 ID 空间不相交。
 

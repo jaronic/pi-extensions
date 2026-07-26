@@ -4,7 +4,6 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-
 import {
   boundPlanText,
   renderPlan,
-  renderPlanStepUpdate,
   renderPlanWidget,
   summarizePlanState,
 } from "../src/output.ts";
@@ -12,7 +11,7 @@ import type { PlanState } from "../src/state.ts";
 
 function planState(stepCount = 1, stepText = "Implement"): PlanState {
   return {
-    version: 4,
+    version: 3,
     phase: "executing",
     summary: "Ship safely",
     plan: "Implement and verify.",
@@ -45,40 +44,6 @@ test("Plan result details omit the full plan and step text", () => {
   const details = summarizePlanState(planState(), false);
   assert.equal("plan" in details, false);
   assert.deepEqual(details.steps, [{ id: "step-1", status: "pending" }]);
-});
-
-test("Plan step updates are compact and use Todo-style ordinals", () => {
-  const state: PlanState = {
-    ...planState(3),
-    steps: [
-      { id: "step-1", text: "Inspect" },
-      { id: "step-2", text: "Implement" },
-      { id: "step-3", text: "Verify" },
-    ],
-    progress: {
-      kind: "local",
-      steps: [
-        { id: "step-1", status: "completed" },
-        { id: "step-2", status: "inProgress" },
-        { id: "step-3", status: "pending" },
-      ],
-    },
-  };
-  const update = renderPlanStepUpdate(state, "step-2");
-  assert.equal(update, "Started #2: Implement.\nProgress: 1/3 completed · 0 blocked.");
-  assert.doesNotMatch(update, /Plan:|Execution steps:|Ship safely/);
-
-  const completed: PlanState = {
-    ...state,
-    progress: {
-      kind: "local",
-      steps: state.steps.map((step) => ({ id: step.id, status: "completed" as const })),
-    },
-  };
-  assert.equal(
-    renderPlanStepUpdate(completed, "step-3"),
-    "Completed #3: Verify.\nProgress: 3/3 completed · 0 blocked · Plan mode exited.",
-  );
 });
 
 test("Plan widgets bound both step count and displayed step text", () => {

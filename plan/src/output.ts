@@ -33,49 +33,14 @@ function displayedProgress(
   return state.steps.map((step) => ({ id: step.id, status: "pending" as const }));
 }
 
-function renderStepUpdateAction(ordinal: number, text: string, status: PlanStepProgress["status"]): string {
-  switch (status) {
-    case "pending":
-      return `Set #${ordinal} to pending: ${text}.`;
-    case "inProgress":
-      return `Started #${ordinal}: ${text}.`;
-    case "completed":
-      return `Completed #${ordinal}: ${text}.`;
-    case "blocked":
-      return `Blocked #${ordinal}: ${text}.`;
-  }
-}
-
-export function renderPlanStepUpdate(
-  state: PlanState,
-  id: string,
-  external?: readonly PlanStepProgress[],
-): string {
-  const index = state.steps.findIndex((step) => step.id === id);
-  const definition = state.steps[index];
-  if (!definition) throw new Error(`Unknown plan step: ${id}`);
-  const progress = displayedProgress(state, external);
-  const updated = progress.find((step) => step.id === id);
-  if (!updated) throw new Error(`Progress is missing plan step: ${id}`);
-  let completed = 0;
-  let blocked = 0;
-  for (const step of progress) {
-    if (step.status === "completed") completed += 1;
-    else if (step.status === "blocked") blocked += 1;
-  }
-  const exited = completed === state.steps.length ? " · Plan mode exited." : ".";
-  return [
-    renderStepUpdateAction(index + 1, definition.text, updated.status),
-    `Progress: ${completed}/${state.steps.length} completed · ${blocked} blocked${exited}`,
-  ].join("\n");
-}
-
 export function phaseLabel(phase: PlanPhase): string {
   switch (phase) {
     case "off":
       return "off";
     case "planning":
       return "planning";
+    case "awaitingClarification":
+      return "awaiting your decision";
     case "awaitingApproval":
       return "awaiting approval";
     case "blocked":
@@ -92,6 +57,14 @@ export function renderPlan(state: PlanState, external?: readonly PlanStepProgres
   ];
   if (state.phase === "executing" && state.progress?.kind === "external") {
     lines.push(`Progress provider: ${state.progress.providerId}`);
+  }
+  if (state.clarification) {
+    lines.push("", "User decision:", state.clarification.question);
+    for (const [index, option] of state.clarification.options.entries()) {
+      const selected = state.clarification.selection === index ? " (selected)" : "";
+      lines.push(`${index + 1}. ${option.label}${selected}`);
+      if (option.description) lines.push(`   ${option.description}`);
+    }
   }
   if (state.blocker) {
     lines.push("", "Planning blocked:", state.blocker.summary, "", "Verified blocking facts:");
@@ -157,9 +130,16 @@ export function summarizePlanState(
 
 export function renderPlanWidget(state: PlanState, external?: readonly PlanStepProgress[]): string[] {
   const lines = [state.phase === "blocked" ? "Plan blocked" : "Plan"];
+  if (state.phase === "awaitingClarification" && state.clarification) {
+    const text = [...state.clarification.question];
+    const boundedText = text.length > MAX_WIDGET_STEP_CHARS
+      ? `${text.slice(0, MAX_WIDGET_STEP_CHARS - 1).join("")}…`
+      : state.clarification.question;
+    lines.push(`? ${boundedText}`);
+  }
   if (state.blocker) lines.push(`! ${state.blocker.summary}`);
   const statusById = new Map(displayedProgress(state, external).map((step) => [step.id, step.status]));
-  for (const [index, step] of state.steps.slice(0, MAX_WIDGET_STEPS).entries()) {
+  for (const step of state.steps.slice(0, MAX_WIDGET_STEPS)) {
     const status = statusById.get(step.id) ?? "pending";
     const marker = status === "completed"
       ? "✓"
@@ -172,7 +152,7 @@ export function renderPlanWidget(state: PlanState, external?: readonly PlanStepP
     const boundedText = text.length > MAX_WIDGET_STEP_CHARS
       ? `${text.slice(0, MAX_WIDGET_STEP_CHARS - 1).join("")}…`
       : step.text;
-    lines.push(`${marker} #${index + 1} ${boundedText}`);
+    lines.push(`${marker} ${step.id} ${boundedText}`);
   }
   if (state.steps.length > MAX_WIDGET_STEPS) {
     lines.push(`… ${state.steps.length - MAX_WIDGET_STEPS} more step(s)`);

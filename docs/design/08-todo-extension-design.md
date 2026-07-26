@@ -103,22 +103,24 @@ v1 明确不做：
 
 ### 4.1 独立 package
 
-`todo/` 保持独立，不把 Todo 放入 `plan/` 或 `goal/`：
+`todo/` 保持可独立安装，但也提供可组合的 package API：
 
-- Plan 的状态生命周期受“审批”控制，普通 TODO 不应要求审批；
-- Goal 的状态是一个完整终态目标，不应承载任意数量的执行项；
-- TODO 可以单独安装，或与任一扩展组合；模型入口使用 Pi 全局 tool namespace，程序入口使用同进程 event bus，不跨进程、workspace 或 session；
-- 不建立跨 package production import。Todo service、Plan phase coordination 与 execution-progress provider 都使用独立定义和严格验证的版本化 channel。
+- 普通 TODO 不并入 `plan/` 或 `goal/`；Plan 的审批状态与普通 board、Goal 的终态均属于不同领域；
+- Todo 默认 entry 和 `installTodo(pi)` 共享同一个 EventBus-scoped runtime。Plan 将 Todo 声明为 package dependency、捆绑其 resource，并直接持有 typed service；
+- 未声明 Todo package dependency 的独立 extension 可继续通过 `todo-service:v1` compatibility channel；Plan phase broadcast 仅供可选 Goal 消费，Todo 不再监听它；
+- Todo service 与 managed progress 的输入、持久化和 snapshot 仍严格验证，且不跨进程、workspace 或 session。
 
 ### 4.2 数据流
 
 ```mermaid
 flowchart TB
     Model[模型] --> Tool[todo tool]
-    Extension[其他扩展] --> Service[todo-service-v1]
+    Independent[独立 extension] --> Compatibility[todo-service-v1]
+    Plan[Plan hard dependency] --> Direct[TodoService]
     User[用户] --> Cmd["/todos command"]
     Tool --> Gate{Plan active?}
-    Service --> Gate
+    Compatibility --> Gate
+    Direct --> Gate
     Cmd --> Gate
     Gate -->|ordinary read| Read[Read TodoSnapshot]
     Gate -->|ordinary mutation + off| Reducer[Pure board reducer]
@@ -126,10 +128,10 @@ flowchart TB
     Reducer --> ToolCommit[toolResult details v1]
     Reducer --> StateCommit[todo-state-v2 command/service]
 
-    PlanPhase[plan-state-v1] --> Gate
-    PlanApprove[Plan approve] --> Discover[execution-progress discover]
-    Discover --> Provider[Todo provider open/read/update/close]
-    Provider --> ManagedCommit[todo-managed-progress-v1]
+    Plan --> PhaseSync[syncPlanPhase]
+    PhaseSync --> Gate
+    Plan --> Managed[progress open/read/update/close]
+    Managed --> ManagedCommit[todo-managed-progress-v1]
 
     Branch[session_start / session_tree] --> BoardReplay[Replay ordinary board]
     Branch --> ManagedReplay[Replay managed execution]
@@ -588,11 +590,11 @@ interface TodoServiceEnvelope {
 }
 ```
 
-`TodoServiceOperation` 是 §7.2 每个 op 的 tagged object union，支持除用户确认专属 `clear` 外的全部模型 op。`requestTodoService()` 对 caller 输入做 snapshot/freeze，通过 `accept()` 确保最多一个 provider，严格解码返回的 bounded content/details，并把同步验证、取消和 emit 错误统一为 rejected promise。没有 receiver 时立即拒绝，不悬挂调用方。通用 envelope 为什么必须同步 accept、与 Request UI/provider discovery/state broadcast 有何区别，详见 [09 · 跨扩展通用协议](09-cross-extension-protocols.md)。
+`TodoServiceOperation` 是 §7.2 每个 op 的 tagged object union，支持除用户确认专属 `clear` 外的全部模型 op。未声明 Todo package dependency 的 caller 可用 `requestTodoService()`：它对输入做 snapshot/freeze，通过 `accept()` 确保最多一个 compatibility receiver，严格解码 bounded content/details，并把同步验证、取消和 emit 错误统一为 rejected promise。没有 receiver 时立即拒绝，不悬挂调用方。声明 Todo package dependency 的 Plan 则调用 `installTodo(pi)` 返回的 direct service，不走该 channel。
 
-Provider 只接受 active session 的精确 `sessionId`；`session_start/session_tree` 更新目标 branch，`session_shutdown` 清除 context 并注销 listener。请求复用 `executeTodoOperation()`，所以 raw event consumer 也不能绕过未知字段、领域上限、Plan mutation gate、abort checks 或 output/details decoder。`get/view` 只读；真实 mutation 在返回前先 append `todo-state-v2`，append 失败不更新 closure/UI。Service response 不是第三份事实源。
+Provider 只接受 active session 的精确 `sessionId`；`session_start/session_tree` 更新目标 branch，`session_shutdown` 清除 context 并注销 compatibility listener。请求复用 `executeTodoOperation()`，所以 raw event consumer 也不能绕过未知字段、领域上限、Plan mutation gate、abort checks 或 output/details decoder。`get/view` 只读；真实 mutation 在返回前先 append `todo-state-v2`，append 失败不更新 closure/UI。Service response 不是第三份事实源。
 
-“全局”只覆盖同一 Pi 进程的 tool namespace/event bus；不跨进程、workspace 或 session。同仓库 extension 独立定义协议，禁止通过 production relative import 耦合 package；导出的 helper/types 供显式 package dependency 和协议测试使用。
+“全局”只覆盖同一 Pi 进程的 tool namespace/event bus；不跨进程、workspace 或 session。同仓库 extension 的硬依赖通过正式 package dependency 和 package-root export 组合；独立 consumer 继续保持 wire contract 隔离。
 
 ## 8. 用户控制面与 UI
 
@@ -819,14 +821,17 @@ Provider `update` 可以 `await` journal append，且没有 ordinary tool 的 si
 
 ### 11.1 Plan：单向进度所有权
 
-TODO 独立定义并验证两个协议常量，不从 `plan/` production import：
+Plan 是 Todo 的硬依赖，不从 `plan/` production import 任何 Todo source path：
 
 ```ts
-export const PLAN_COORDINATION_CHANNEL = "pi-extensions:plan-state:v1";
-export const EXECUTION_PROGRESS_CHANNEL = "pi-extensions:execution-progress:v1";
+import { installTodo } from "pi-todo-dev";
+
+const todo = installTodo(pi);
+todo.syncPlanPhase({ sessionId, phase });
+await todo.progress.open({ sessionId, executionId, steps, signal });
 ```
 
-Phase channel 保存当前 session 的最后信号并控制普通 board gate。Progress channel 接收同步 `discover` envelope，Todo offer `{ id: "todo", priority: 100, open, read, update, close }`；Plan 在批准时按优先级选择一次，之后用 provider ID + execution ID 固定 owner，不在更新中动态切换。
+Plan manifest 先加载 Request 与 Todo resource；Todo default entry 和 Plan installer 由 EventBus-scoped registry 去重。Plan phase 每次转换直接同步到 Todo；Todo 不再订阅 `plan-state:v1`。`open` 成功且返回严格有效 snapshot 后，Plan 才持久化固定 owner `todo` 与 execution ID；`read/update/close` 始终调用同一 service。open/read/update 异常 fail closed，不存在 priority、discover、可替换 provider 或新的 local fallback。
 
 | Plan phase | 普通 Todo board | Todo managed progress |
 | --- | --- | --- |
@@ -834,8 +839,7 @@ Phase channel 保存当前 session 的最后信号并控制普通 board gate。P
 | `planning` | `view/get` 可读，mutation 拒绝；隐藏 prompt/UI | 不创建 |
 | `awaitingApproval` | 同上 | `open` 可在显式批准事务中创建，但在 phase 变为 executing 前不投影 |
 | `blocked` | `view/get` 可读，mutation 拒绝；隐藏 prompt/UI，等待用户补充前提或替代方向 | 不创建 |
-| `executing`，Todo 未被选中 | `view/get` 可读，mutation 拒绝；隐藏 prompt/UI | 不创建/不投影 |
-| `executing`，Todo 是 owner | `view/get` 可读，mutation 拒绝；普通 state 保持冻结 | provider read/update；投影 managed prompt/footer/widget |
+| `executing`，current Plan | `view/get` 可读，mutation 拒绝；普通 state 保持冻结 | Todo direct `read/update`；投影 managed prompt/footer/widget |
 
 Runtime gate 与 Plan tool lease 是两层独立保护；agent 和 `/todos clear|reopen` mutation 都必须拒绝。`/todos status` 仍只读展示冻结的普通 board；`show/hide/toggle` 的进程内偏好同时控制 managed widget 可见性，但不改变 owner/state。
 
@@ -862,7 +866,7 @@ v1 不新增 Goal/TODO event channel。没有真实消费者时，不预造协�
 
 - status/widget key 固定为 `todo`；不使用 `plan`、`goal` 或匿名 key；
 - TODO 不调用 `setActiveTools()`，因此不需要工具租约；
-- session shutdown 清除自己拥有的 status/widget，并 unsubscribe phase listener 与 progress-provider discovery listener；
+- session shutdown 清除自己拥有的 status/widget，abort installation lifetime，并注销 compatibility listener；installer registry 只在记录 identity 仍匹配时删除该 runtime；
 - 不启动 timer、process、watcher 或网络资源。
 
 ## 12. 安全、信任与隐私
@@ -1103,7 +1107,7 @@ pi --no-session -p --mode json --thinking off \
 | A · 纯领域层 | 完成 | package/tsconfig/lockfile、状态类型、硬上限、transition、严格 decoder 与 immutable/atomic 单元测试已落地。 |
 | B · Tool + branch persistence | 完成 | TypeBox nullable strict-provider schema、runtime op validation、有界 output/details、tool/custom mixed-carrier replay 与 no-UI lifecycle harness 已落地。 |
 | C · Prompt + UI + command | 完成 | 有界 XML-escaped context、footer/widget/renderer、响应式 `/todos` 看板、确认与 headless 路径已落地。 |
-| D · 共存与发布面 | 完成 | 全局 service v1、journal v2 迁移、Plan phase gate + execution-progress provider、managed persistence/UI、Goal/Request coexistence、README/设计文档、全局链接和 CI matrix 已落地；Todo package suite 与 ordinary Todo real lifecycle smoke 通过。 |
+| D · 共存与发布面 | 完成 | idempotent direct Todo service、compatibility channel、Plan direct phase/progress composition、managed persistence/UI、Goal/Request coexistence、README/设计文档、全局链接和 CI matrix 已落地；三种 package 加载顺序与 Todo package suite 已通过。 |
 
 实现采用一次 clean cutover，没有兼容 alias、旧格式双写、外部文件事实源或预留 stub。
 

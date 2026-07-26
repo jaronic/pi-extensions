@@ -12,9 +12,8 @@
 - `submit_plan` 成功后立即返回摘要与 Review 提示并进入 `awaitingApproval`；完整候选计划仅在 Review、Copy、`/plan status` 与 journal state 中呈现，工具调用不等待 UI。
 - 若已按比例完成只读调查仍无法形成可审批实施计划，agent 调用 `report_plan_blocked` 记录已验证阻塞事实、已查证据来源和用户可提供的前提或替代方向，进入 `blocked`；该结果不创建 artifact、不进入 Review，仍保持只读，用户补充信息后通过 `/plan resume` 回到规划。
 - 每次成功初次提交或 refinement 重提都会创建一份不可变、仅含 Plan body 的 Markdown artifact；同一绝对路径只写入持久 Plan state 与 machine-readable tool result details，不进入 model-visible content。
-- 批准后恢复进入 Plan 前的工具集，并额外启用 `update_plan_step`。
-- TUI footer 以独立 keyed status 横向显示 Plan 与 Goal；`planning` 与 `awaitingApproval` 不投影执行步骤 widget。批准后若无外部进度 provider，Plan 的本地 fallback widget 最多显示 20 个步骤；provider 接管后 Plan 只显示 owner，步骤 status/widget 由 provider 投影，避免双份进度面板。
-- `update_plan_step` 成功结果只返回本次变更的步骤、状态和 `completed/total`、`blocked` 进度，不重发完整 Plan；TUI 步骤以面向用户的 `#1`、`#2` 顺序号显示。
+- 批准后恢复进入 Plan 前的工具集，并额外启用 `update_plan_step`；每次新批准的执行由直接依赖的 Todo managed ledger 持有。
+- TUI footer 以独立 keyed status 横向显示 Plan 与 Goal；Plan 仅在非执行期显示状态，执行期清除 `plan` status。步骤 widget 仅由 Todo 投影，Todo 不使用 status bar，避免双份进度面板。
 - 状态写入 Pi session journal；切换 session tree 分支会恢复该分支最后的有效 Plan 状态。
 
 ## 安装与启用
@@ -28,7 +27,7 @@ mkdir -p "$HOME/.pi/agent/extensions"
 ln -sfn "$PWD" "$HOME/.pi/agent/extensions/plan"
 ```
 
-软链接必须指向 `plan/` 包根目录。Pi 根据 `package.json` 的 `pi.extensions` 加载 `./src/index.ts`。仓库移动后需重建链接；随后重启 Pi，或执行 `/reload`。
+软链接必须指向 `plan/` 包根目录。其 manifest 按 Request → Todo → Plan 顺序加载 `node_modules` 中捆绑的 dependency extension resource 与自身入口；因此只安装 Plan package 也会加载三者。开发时直接加载 `src/index.ts` 同样会通过 installer 组合 Request 和 Todo。仓库移动后需重建链接；随后重启 Pi，或执行 `/reload`。
 
 Plan 不实现用户问答 UI。需要交互式澄清时应同时加载 `request` 扩展，由其提供 `ask`；若没有外部问答工具，agent 以普通回复列出选项并等待用户下一条消息，Plan 保持 `planning`。
 
@@ -204,22 +203,20 @@ Plan 通过版本化 `pi.events` channel 广播 phase、只读状态及是否即
 
 ## 与 Todo 插件协作
 
-Plan 与 Todo 不做步骤双写。两者通过两个独立、版本化的 `pi.events` channel 协作，production code 不跨 package import：
+Plan 对 Todo 是硬依赖：`plan/package.json` 声明并捆绑 `pi-todo-dev`，Plan 在 factory 中通过 `installTodo(pi)` 取得 typed service。Todo 默认 entry 与 Plan installer 共享 EventBus-scoped installation registry，因此任意加载顺序都不会重复注册 tool、command、listener 或 runtime。
 
-- `pi-extensions:plan-state:v1` 继续广播 Plan phase。Todo 在所有活跃 phase 冻结普通 board mutation；planning/approval/blocked 阶段隐藏普通 Todo prompt/footer/widget。
-- `/plan approve` 通过 `pi-extensions:execution-progress:v1` 同步发现 provider，按 `priority` 降序、ID 升序尝试 `open`，使用第一个返回完整有效 snapshot 的 provider；重复 provider ID 被整体拒绝。没有 provider 或全部 decline/fail 时安全退回 Plan 本地进度。
-- Todo 安装时提供 ID `todo` 的 provider。Plan 不调用通用 `pi-extensions:todo-service:v1`，避免把 Plan steps 写入普通 board。接管后，Plan 只持久化不可变步骤定义、provider ID 和 execution ID；Todo 用独立 managed ledger 持久化 mutable status。agent 仍只调用 `update_plan_step`，不能用 `todo` 修改 managed ledger；managed footer/widget 使用普通 Todo 一致的 `#1` 顺序号，而 provider wire ID 仍是 Plan 的步骤 ID。
-- 未批准候选步骤只在 Review、`/plan status` 和持久状态中呈现，不生成执行看板。Todo 接管执行期时，Plan footer 显示 `Plan · todo` 且不显示自身步骤 widget；Todo 的 `todo` key 显示 managed Plan footer/widget，并注入唯一的有界 execution-progress prompt。原普通 Todo board 保持冻结且不被覆盖。
-- 全部步骤完成或 `/plan cancel` 时，Plan 先 append v2 terminal tombstone、恢复工具并广播 `off`，再 best-effort 调用已选 provider `close`。Todo 在 close 成功时清理 managed ledger；cleanup 失败只发 warning，不能回滚已经持久化的 Plan 终态，残留 ledger 在 `off` 时不投影且可被下一次 execution 原子替换。`/plan cancel` 在已为 `off` 时仍重发同 session 的权威 `off`。
-- 已选 provider 在 read/update 时不可用会显式失败；Plan 不切换 owner、不回退本地状态，也不伪造成功。terminal close 不可用按上一条作为 cleanup warning 处理。`/plan status` 尝试读取 provider，失败时显示最后一次有效 snapshot 和 unavailable 原因。
-
-`src/progress.ts` 定义 Plan 侧 discover/open/read/update/close 和严格 snapshot decoder；Todo 在 `../todo/src/progress-provider.ts` 独立定义并验证同一 v1 wire contract。改变任一 channel 或 payload 时必须同步两包 README、实现与 coexistence tests；`plan-state` payload 变化仍需同步 Goal。
+- `emitPlanState()` 继续广播 `pi-extensions:plan-state:v1` 给可选 Goal，同时直接调用 `todo.syncPlanPhase({ sessionId, phase })`。Todo 不消费该 broadcast。
+- `/plan approve` 直接调用 `todo.progress.open` 并严格校验完整 snapshot；失败时 Plan 保持 `awaitingApproval`，不排队执行轮、不创建 local fallback。
+- Plan 只接受持久化 owner `todo`。它固定通过同一 service read/update/close；恢复到非 Todo owner、Todo snapshot 无效或 Todo lifetime 已失效都会 fail closed，不会切换 owner 或伪造成功。
+- Todo managed ledger 持久化 mutable status；Plan 只持久化不可变步骤定义、owner ID 与 execution ID。agent 仍只调用 `update_plan_step`，不能用普通 `todo` 修改 managed ledger。
+- Todo 执行期投影 managed prompt/widget；Plan 与 Todo 都不在底部状态栏显示执行标识，普通 Todo board 保持冻结且不被覆盖。
+- 全部步骤完成或 `/plan cancel` 时，Plan 先 append v3 terminal tombstone、恢复工具、直接同步 `off`，再 best-effort 调用 `todo.progress.close`。close 失败只 warning，不能回滚已持久化 Plan 终态。
 
 ## 与 Request、RG 和 LSP 插件协作
 
-- Request 的 `ask` 是规划期用户问答的唯一仓库内 owner：Plan 只在工具租约中保留已启用的 `ask`，不调用 Request coordinator、不持久化答案，也没有内置 fallback UI。Plan Review 仍是审批领域专用的 `ctx.ui.custom()` 组件。
-- `rg`、`lsp` 与 `ast_grep_search` 都在 `planning`、`awaitingApproval` 的只读 allowlist 中。`ast_grep_edit` 不在 allowlist；只有批准并进入 executing、恢复原工具集后才能 preview/apply。RG 继续保持在 `grep` 前；LSP 的 rename/code action 只返回 preview，因此不会绕过 Plan 的工作区写保护。
-- 这些工具/UI 扩展不参与 execution-progress provider 选择，也不读取或更新 Plan mutable progress。进入执行期后，它们是否可用仍取决于进入 Plan 前的有效工具集；Plan 的 tool lease 会保留其他扩展在生命周期内对工具集做出的变化。
+- Plan 对 Request 也是硬依赖：factory 通过 `installRequest(pi)` 取得 typed service。Plan Review 仍使用领域组件；持久化 clarification 将 Plan choice 映射成 Request 单选结果，Plan 自己校验并写 journal。无界面时仍要求用户编号回复与 `answer_plan_choice`，绝不隐式选择。
+- `rg` 与 `lsp` 都在 `planning`、`awaitingClarification`、`awaitingApproval` 的只读 allowlist 中。RG 继续保持在 `grep` 前；LSP 的 rename/code action 只返回 preview，因此不会绕过 Plan 的工作区写保护。
+- 这些工具/UI 扩展不读取或更新 Plan managed progress。进入执行期后，它们是否可用仍取决于进入 Plan 前的有效工具集；Plan 的 tool lease 会保留其他扩展在生命周期内对工具集做出的变化。
 
 ## 配置与持久化
 
@@ -234,20 +231,20 @@ Plan 没有外部配置文件。状态完全来自命令、工具调用和 Pi se
 
 ## 实现原理与关键节点
 
-- `src/index.ts`：扩展入口和状态机编排；工具 lease、journal、provider lifecycle、UI、生命周期 hooks、显式 phase-transition 控制轮及 Goal 事件均在此汇合。
-- `src/state.ts`：纯状态转换、不可变步骤定义、本地/外部 owner、v1→v4 恢复校验。
-- `src/progress.ts`：可插拔进度 provider discovery、优先级选择、open/read/update/close 与严格 snapshot decoder。
-- `src/command.ts`：`/plan` 用户控制面和 abort-before-transition 顺序。
-- `src/review.ts`：`/plan review` 的可滚动 Markdown 审批窗口、响应式 Outline、焦点和复制行为。
+- `src/index.ts`：扩展入口和状态机编排；直接 Request/Todo service、工具 lease、journal、managed-progress lifecycle、UI、生命周期 hooks、显式 phase-transition 控制轮及 Goal event broadcast 均在此汇合。
+- `src/clarification.ts`：Plan clarification 到 Request question/result 的领域 adapter。
+- `src/progress.ts`：Todo managed snapshot 的请求边界、严格解码及 close/update 辅助。
+- `src/state.ts`：纯状态转移、v1/v2/v3 journal/state 解码与 legacy local progress 恢复。
+- `src/review.ts`：Plan 专用 Markdown Review、Copy 与 action UI。
 - `src/artifacts.ts`：private、原子、不可变的 body-only artifact writer 与临时目录清理。
 - `src/outline.ts`：Markdown heading 解析、渲染跳转 marker 与 marker 清理。
 - `src/tools.ts`、`src/tool-schema.ts`：提交、阻塞报告与统一步骤更新 facade。
 - `src/tool-policy.ts`：只读白名单、phase 判定及 RG 优先顺序。
 - `src/tool-lease.ts`：与其他扩展共存时的工具集合并算法。
-- `src/prompts.ts`：各 phase 注入的强制约束；外部 owner 模式不复制 provider 的动态步骤投影。
-- `src/protocol.ts`：Goal/Todo 消费的 Plan 版本化 phase 协调协议。
-- `src/output.ts`：footer 状态文本、本地步骤 widget、有界输出和 details。
-- `test/coexistence.test.ts`：Goal/Plan 端到端交互；Todo 对 Plan 各 phase 与双加载顺序的契约位于 `../todo/test/coexistence.test.ts`；`test/harness.ts` 提供 in-process Pi test double。
+- `src/prompts.ts`：各 phase 注入的强制约束；managed 状态由 Todo 单独投影。
+- `src/protocol.ts`：Goal 消费的 Plan 版本化 phase 广播协议。
+- `src/output.ts`：footer 状态文本、本地 legacy 步骤 widget、有界输出和 details。
+- `test/coexistence.test.ts`：Goal/Plan 生命周期、Request clarification 与 Todo direct service failure 的端到端交互；`../todo/test/coexistence.test.ts` 覆盖三种 package 加载顺序与 Todo managed ledger；两套 harness 都记录注册次数以防 Map 覆盖掩盖重复 surface。
 
 ## 开发与验证
 

@@ -22,10 +22,11 @@ export interface PlanCommandRuntime {
   syncPlanTools(): void;
   updateStatus(ctx: ExtensionContext): void;
   emitPlanState(ctx: ExtensionContext, willTriggerTurn: boolean, reason: string): void;
-  queueControlTurn(ctx: ExtensionContext, kind: "plan" | "refine" | "execute", content: string): void;
+  queueControlTurn(ctx: ExtensionContext, kind: "plan" | "refine" | "execute" | "clarification", content: string): void;
   approveAndQueue(ctx: ExtensionContext): Promise<void>;
   refineAndQueue(ctx: ExtensionContext): void;
   resumeBlockedAndQueue(ctx: ExtensionContext): void;
+  choosePlanClarification(ctx: ExtensionContext, beforeTransition?: () => Promise<void>): Promise<void>;
   reviewSubmittedPlan(ctx: ExtensionContext, beforeTransition?: () => Promise<void>): Promise<void>;
   renderCurrentPlan(ctx: ExtensionContext): Promise<string>;
   transitionOff(action: "cancel" | "complete", ctx: ExtensionContext, reason: string, signal?: AbortSignal): Promise<void>;
@@ -39,9 +40,9 @@ async function stopCurrentAgent(ctx: ExtensionCommandContext): Promise<void> {
 
 export function registerPlanCommand(pi: ExtensionAPI, runtime: PlanCommandRuntime): void {
   pi.registerCommand("plan", {
-    description: "Enter read-only planning, inspect or review a submission, resume planning or a blocked result, approve, refine, or cancel",
+    description: "Enter read-only planning, choose a pending decision, inspect or review a submission, resume planning or a blocked result, approve, refine, or cancel",
     getArgumentCompletions: (prefix) => {
-      const values = ["status", "review", "resume", "approve", "refine", "cancel"];
+      const values = ["status", "choose", "review", "resume", "approve", "refine", "cancel"];
       const filtered = values.filter((value) => value.startsWith(prefix.trim()));
       return filtered.length ? filtered.map((value) => ({ value, label: value })) : null;
     },
@@ -73,6 +74,19 @@ export function registerPlanCommand(pi: ExtensionAPI, runtime: PlanCommandRuntim
         await runtime.reviewSubmittedPlan(ctx, () => stopCurrentAgent(ctx));
         return;
       }
+      if (action === "choose") {
+        if (!current || current.phase !== "awaitingClarification") {
+          ctx.ui.notify("No Plan choice is awaiting a decision.", "warning");
+          return;
+        }
+        if (ctx.mode !== "tui") {
+          const choiceText = `${renderPlan(current)}\n\nReply with one option number. The agent will record it with answer_plan_choice.`;
+          ctx.ui.notify(boundPlanText(choiceText).text, "info");
+          return;
+        }
+        await runtime.choosePlanClarification(ctx, () => stopCurrentAgent(ctx));
+        return;
+      }
       if (action === "resume") {
         if (!current) {
           ctx.ui.notify("Plan mode is off. Use /plan to start.", "warning");
@@ -93,6 +107,10 @@ export function registerPlanCommand(pi: ExtensionAPI, runtime: PlanCommandRuntim
           ctx.ui.notify("The submitted plan needs /plan approve, /plan refine, or /plan cancel.", "warning");
           return;
         }
+        if (current.phase === "awaitingClarification") {
+          ctx.ui.notify("The pending Plan choice needs /plan choose or an explicit numbered reply.", "warning");
+          return;
+        }
         await stopCurrentAgent(ctx);
         const settled = runtime.getState();
         if (!settled) {
@@ -101,6 +119,10 @@ export function registerPlanCommand(pi: ExtensionAPI, runtime: PlanCommandRuntim
         }
         if (settled.phase === "awaitingApproval") {
           ctx.ui.notify("The submitted plan needs /plan approve, /plan refine, or /plan cancel.", "warning");
+          return;
+        }
+        if (settled.phase === "awaitingClarification") {
+          ctx.ui.notify("The pending Plan choice needs /plan choose or an explicit numbered reply.", "warning");
           return;
         }
         runtime.syncPlanTools();
@@ -164,7 +186,7 @@ export function registerPlanCommand(pi: ExtensionAPI, runtime: PlanCommandRuntim
         ctx.ui.notify("Plan cancelled; original tools restored.", "info");
         return;
       }
-      ctx.ui.notify("Usage: /plan [status|review|resume|approve|refine|cancel]", "warning");
+      ctx.ui.notify("Usage: /plan [status|choose|review|resume|approve|refine|cancel]", "warning");
     },
   });
 }

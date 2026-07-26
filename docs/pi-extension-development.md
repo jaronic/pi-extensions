@@ -315,17 +315,18 @@ npm test
 
 - 配置定义 schema、默认值、版本和明确的 global/project precedence。未知字段、非法 enum 和危险 fallback 应报错，不静默纠正。
 - Pi host 包与 `typebox` 按官方规则列为 peer dependency，不捆绑第二份 host runtime。第三方运行时库列入 `dependencies`。
-- 本仓库开发包直接加载 TypeScript；发布复杂插件也可以像 `pi-lens` 一样指向 `dist/index.js`，但必须做 production install smoke test，确保不依赖 dev-only 文件。
-- 发布时设置 `keywords: ["pi-package"]`、准确 `pi` manifest、`repository`、license、清晰 description 和 `files` allowlist。
-- npm 发布前检查 tarball 内容、lockfile、`npm install --omit=dev` 后加载、全新 Pi session 启动及卸载路径。
+- 一个 extension 对另一个 extension 有硬运行时依赖时，consumer 必须声明其 package dependency、将其列入 `bundledDependencies`，并在 `pi.extensions` 中先列出 `node_modules/<package>` 的 extension resource。producer 必须从 package root 导出幂等 installer 和 typed service；禁止 production code 通过 `../../other/src` 跨包 import。
+- installer 应按 `EventBus` 隔离 runtime：同一 bus 上默认 entry 与依赖 consumer 返回同一个 service，shutdown 后旧 service fail closed。验证 package-only、dependency-first 和 consumer-first 加载顺序的 tool、command、listener 注册次数。
+- 发布时设置 `keywords: ["pi-package"]`、准确 `pi` manifest、`repository`、license、清晰 description 和 `files` allowlist；npm 发布前检查 tarball 内容、lockfile、`npm install --omit=dev` 后加载、全新 Pi session 启动及卸载路径。
 
 ### 6.9 跨插件协作
 
-- 使用形如 `<owner>:<capability>:vN` 的事件名。本仓库 `pi-extensions:plan-state:v1` 是现有例子。
-- 接收方把 payload 当 `unknown` 并验证；发送方不要暴露可变内部对象。
+- 使用形如 `<owner>:<capability>:vN` 的事件名。本仓库 `pi-extensions:plan-state:v1` 是单向 broadcast 例子。
+- 仅把 EventBus 用于可选 capability 的兼容/发现或 state broadcast；硬依赖必须通过 package dependency 和 typed direct service 表达，不能伪装成可缺席 RPC。
+- 接收方把兼容 channel payload 当 `unknown` 并验证；发送方不要暴露可变内部对象。
 - handler 应对加载顺序和接收方缺失保持安全。需要恢复协作状态时，在 `session_start`/`session_tree` 重新广播快照。
 - 修改 active tools 时必须同时保留其他插件在 Plan 期间新增和移除的工具；`plan/src/tool-lease.ts` 展示了 snapshot、reconcile、restore 的完整租约模式。简单的只追加场景才可直接基于 `pi.getActiveTools()` 去重更新。
-- 跨插件协议变更同步更新每个生产者/消费者及对应 coexistence tests；不要用生产源码跨目录 import 偷渡耦合。
+- 跨插件协议变更同步更新每个生产者/消费者及对应 coexistence tests；硬依赖改动还必须检验 manifest bundle/load order 与重复 installation，不要用生产源码跨目录 import 偷渡耦合。
 
 ## 7. 测试与质量门槛
 

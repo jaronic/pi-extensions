@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  allPlanStepsComplete,
-  approvePlan,
+  approvePlanWithExternalProgress,
   createPlanningState,
   decodePlanJournalEntry,
   decodePlanState,
@@ -11,6 +10,7 @@ import {
   resumeBlockedPlan,
   submitPlan,
   updatePlanStep,
+  type PlanState,
 } from "../src/state.ts";
 
 function storedPlan(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -30,6 +30,16 @@ function storedPlan(overrides: Record<string, unknown> = {}): Record<string, unk
   };
 }
 
+function legacyExecuting(state: PlanState, now: number): PlanState {
+  if (state.phase !== "awaitingApproval") throw new Error("Expected a submitted Plan.");
+  return {
+    ...state,
+    phase: "executing",
+    progress: { kind: "local", steps: state.steps.map((step) => ({ id: step.id, status: "pending" })) },
+    updatedAt: now,
+  };
+}
+
 test("plan lifecycle preserves the pre-plan tool snapshot", () => {
   const planning = createPlanningState(["read", "bash", "read", "submit_plan"], 10);
   assert.equal(planning.phase, "planning");
@@ -43,7 +53,7 @@ test("plan lifecycle preserves the pre-plan tool snapshot", () => {
   assert.equal(awaiting.phase, "awaitingApproval");
   assert.deepEqual(awaiting.steps.map((step) => step.id), ["step-1", "step-2"]);
 
-  const executing = approvePlan(awaiting, 30);
+  const executing = approvePlanWithExternalProgress(awaiting, "todo", "execution", 30);
   assert.equal(executing.phase, "executing");
   assert.deepEqual(executing.enteredWithTools, ["read", "bash"]);
 });
@@ -81,7 +91,7 @@ test("step updates enforce execution phase, known IDs, and a single in-progress 
     20,
   );
   assert.throws(() => updatePlanStep(awaiting, "step-1", "inProgress"), /local execution/);
-  let executing = approvePlan(awaiting, 30);
+  let executing = legacyExecuting(awaiting, 30);
   executing = updatePlanStep(executing, "step-1", "inProgress", 40);
   executing = updatePlanStep(executing, "step-2", "inProgress", 50);
   assert.equal(executing.progress?.kind, "local");
@@ -91,15 +101,16 @@ test("step updates enforce execution phase, known IDs, and a single in-progress 
   assert.throws(() => updatePlanStep(executing, "missing", "completed"), /Unknown plan step/);
 });
 
-test("allPlanStepsComplete requires every submitted step", () => {
+test("legacy local progress updates preserve every submitted step", () => {
   const awaiting = submitPlan(
     createPlanningState([], 10),
     { summary: "Do it", plan: "Execute", steps: ["One"] },
     20,
   );
-  const executing = approvePlan(awaiting, 30);
-  assert.equal(allPlanStepsComplete(executing), false);
-  assert.equal(allPlanStepsComplete(updatePlanStep(executing, "step-1", "completed", 40)), true);
+  const executing = legacyExecuting(awaiting, 30);
+  const completed = updatePlanStep(executing, "step-1", "completed", 40);
+  assert.equal(completed.progress?.kind, "local");
+  assert.equal(completed.progress?.kind === "local" && completed.progress.steps.every((step) => step.status === "completed"), true);
 });
 
 test("refine returns an awaiting plan to read-only planning", () => {
@@ -166,7 +177,7 @@ test("decodePlanState accepts exact v1 state and rejects unsafe persisted data",
 });
 
 test("decodePlanState enforces exact current progress payloads", () => {
-  const executing = approvePlan(
+  const executing = legacyExecuting(
     submitPlan(createPlanningState(["read"], 1), { summary: "Strict", plan: "Execute", steps: ["Verify"] }, 2),
     3,
   );
@@ -196,32 +207,13 @@ test("decodePlanState accepts both new and submitted planning states", () => {
   assert.equal(decodePlanState(storedPlan({ phase: "planning" })).ok, true);
 });
 
-test("v4 removes persisted Plan choices while migrating compatible legacy states", () => {
-  const legacy = {
-    ...approvePlan(
-      submitPlan(createPlanningState(["read"], 1), { summary: "Legacy", plan: "Execute", steps: ["One", "Two"] }, 2),
-      3,
-    ),
-    version: 3,
-  };
-  const decoded = decodePlanState(legacy);
-  if (!decoded.ok) assert.fail(decoded.reason);
-  assert.equal(decoded.value.version, 4);
-  assert.equal(decodePlanState({
-    ...legacy,
-    phase: "awaitingClarification",
-    clarification: { question: "Choose?", options: [{ label: "A" }, { label: "B" }] },
-  }).ok, false);
-  assert.equal(decodePlanJournalEntry({ version: 3, action: "clarify", state: legacy }).ok, false);
-});
-
 test("decodePlanJournalEntry enforces version, tombstones, and action phase", () => {
   assert.equal(decodePlanJournalEntry({ version: 2, action: "step", state: storedPlan() }).ok, false);
   assert.equal(decodePlanJournalEntry({ version: 1, action: "complete", state: storedPlan() }).ok, false);
   assert.equal(decodePlanJournalEntry({ version: 1, action: "submit", state: storedPlan() }).ok, false);
   assert.deepEqual(decodePlanJournalEntry({ version: 1, action: "complete", state: null }), {
     ok: true,
-    value: { version: 4, action: "complete", state: null },
+    value: { version: 3, action: "complete", state: null },
   });
   assert.equal(decodePlanJournalEntry({ version: 1, action: "complete", state: null, forged: true }).ok, false);
 });
@@ -234,8 +226,8 @@ test("planPath restores cross-platform previews and clears only during refinemen
   assert.equal(decodePlanState(awaiting).ok, true);
   assert.equal(decodePlanState({ ...awaiting, planPath: "C:\\Plans\\preview.md" }).ok, true);
   assert.equal(refinePlan(awaiting, 3).planPath, undefined);
-  assert.equal(approvePlan(awaiting, 3).planPath, awaiting.planPath);
-  assert.equal(updatePlanStep({ ...approvePlan(awaiting, 3) }, "step-1", "inProgress", 4).planPath, awaiting.planPath);
+  assert.equal(approvePlanWithExternalProgress(awaiting, "todo", "execution", 3).planPath, awaiting.planPath);
+  assert.equal(updatePlanStep({ ...legacyExecuting(awaiting, 3) }, "step-1", "inProgress", 4).planPath, awaiting.planPath);
 
   for (const planPath of ["relative.md", "C:relative.md", "/tmp/preview.txt", "/tmp/preview\0.md", "x".repeat(4_097)]) {
     assert.equal(decodePlanState({ ...awaiting, planPath }).ok, false, planPath);

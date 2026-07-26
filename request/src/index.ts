@@ -1,7 +1,7 @@
 import type {
+  EventBus,
   ExtensionAPI,
   ExtensionContext,
-  ExtensionUIDialogOptions,
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import { installRequestUIAdapters, type InstalledRequestUIAdapters } from "./adapters.ts";
@@ -22,11 +22,46 @@ export type {
 } from "./request.ts";
 export type { AskAnswerDetails, AskToolDetails } from "./tool.ts";
 
-export default function requestUIExtension(pi: ExtensionAPI): void {
+export interface RequestService {
+  readonly lifetime: AbortSignal;
+  request(
+    questions: readonly RequestQuestion[],
+    options?: RequestDialogOptions,
+  ): Promise<RequestDialogResult>;
+}
+
+interface RequestInstallation {
+  service: RequestService;
+  dispose(): void;
+}
+
+const REQUEST_INSTALLATIONS = Symbol.for("pi-extensions:request-ui:installations:v1");
+
+function requestInstallations(): WeakMap<EventBus, RequestInstallation> {
+  const host = globalThis as { [key: symbol]: unknown };
+  const existing = host[REQUEST_INSTALLATIONS];
+  if (existing === undefined) {
+    const installations = new WeakMap<EventBus, RequestInstallation>();
+    host[REQUEST_INSTALLATIONS] = installations;
+    return installations;
+  }
+  if (!(existing instanceof WeakMap)) throw new Error("Request installation registry is invalid.");
+  return existing as WeakMap<EventBus, RequestInstallation>;
+}
+
+export function installRequest(pi: ExtensionAPI): RequestService {
+  const installations = requestInstallations();
+  const installed = installations.get(pi.events);
+  if (installed) return installed.service;
+
   const coordinator = new RequestCoordinator();
+  const lifetimeController = new AbortController();
   let currentUI: ExtensionUIContext | undefined;
   let adapters: InstalledRequestUIAdapters | undefined;
   let sessionAbortController: AbortController | undefined;
+  let disposed = false;
+  let unsubscribeChannel: () => void = () => undefined;
+  let installation: RequestInstallation;
 
   function sessionOptions(options: RequestDialogOptions = {}): RequestDialogOptions {
     const sessionSignal = sessionAbortController?.signal;
@@ -37,26 +72,39 @@ export default function requestUIExtension(pi: ExtensionAPI): void {
     };
   }
 
-  function nativeDialogOptions(options?: ExtensionUIDialogOptions): RequestDialogOptions {
-    return sessionOptions(options);
-  }
-
-  async function ask(
+  const request = async (
     questions: readonly RequestQuestion[],
-    ctx: ExtensionContext,
-    signal?: AbortSignal,
-  ): Promise<RequestDialogResult> {
-    if (ctx.mode !== "tui" || !ctx.hasUI) throw new Error("Request UI requires Pi's interactive TUI.");
-    return coordinator.request(ctx.ui, questions, sessionOptions({ signal }));
-  }
-
-  registerAskTool(pi, { ask });
-  const unsubscribeChannel = registerRequestUIChannel(pi.events, async (questions, options) => {
+    options: RequestDialogOptions = {},
+  ): Promise<RequestDialogResult> => {
+    if (lifetimeController.signal.aborted) throw new Error("Request UI installation has shut down.");
     if (!currentUI) throw new Error("Request UI is not ready for the current session.");
     return coordinator.request(currentUI, questions, sessionOptions(options));
+  };
+  const service = Object.freeze({ lifetime: lifetimeController.signal, request });
+
+  function dispose(): void {
+    if (disposed) return;
+    disposed = true;
+    lifetimeController.abort();
+    sessionAbortController?.abort();
+    sessionAbortController = undefined;
+    adapters?.restore();
+    adapters = undefined;
+    currentUI = undefined;
+    unsubscribeChannel();
+    if (installations.get(pi.events) === installation) installations.delete(pi.events);
+  }
+
+  installation = { service, dispose };
+  installations.set(pi.events, installation);
+
+  registerAskTool(pi, {
+    ask: (questions, _ctx, signal) => request(questions, { signal }),
   });
+  unsubscribeChannel = registerRequestUIChannel(pi.events, request);
 
   pi.on("session_start", (_event, ctx) => {
+    if (disposed) return;
     adapters?.restore();
     adapters = undefined;
     sessionAbortController?.abort();
@@ -64,15 +112,13 @@ export default function requestUIExtension(pi: ExtensionAPI): void {
     sessionAbortController = new AbortController();
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
     currentUI = ctx.ui;
-    adapters = installRequestUIAdapters(ctx.ui, coordinator, nativeDialogOptions);
+    adapters = installRequestUIAdapters(ctx.ui, service.request);
   });
 
-  pi.on("session_shutdown", () => {
-    sessionAbortController?.abort();
-    sessionAbortController = undefined;
-    adapters?.restore();
-    adapters = undefined;
-    currentUI = undefined;
-    unsubscribeChannel();
-  });
+  pi.on("session_shutdown", dispose);
+  return service;
+}
+
+export default function requestUIExtension(pi: ExtensionAPI): void {
+  installRequest(pi);
 }

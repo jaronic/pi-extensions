@@ -4,9 +4,12 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { installRequest, type RequestService } from "pi-request-ui-dev";
+import { installTodo, type TodoService } from "pi-todo-dev";
 import {
-  approvePlan,
+  answerPlanChoice,
   approvePlanWithExternalProgress,
+  consumePlanChoice,
   decodePlanJournalEntry,
   refinePlan,
   reportPlanBlocked,
@@ -26,10 +29,10 @@ import {
 } from "./output.ts";
 import {
   allProgressStepsComplete,
-  closeProgressProvider,
-  openProgressProvider,
-  readProgressProvider,
-  updateProgressProvider,
+  closeTodoProgress,
+  openTodoProgress,
+  readTodoProgress,
+  updateTodoProgress,
   type ProgressSnapshot,
 } from "./progress.ts";
 import { isPlanToolAllowed, selectPlanTools } from "./tool-policy.ts";
@@ -47,6 +50,7 @@ import {
 import { registerPlanCommand } from "./command.ts";
 import { registerPlanTools } from "./tools.ts";
 import { requestPlanReview } from "./review.ts";
+import { requestPlanChoice } from "./clarification.ts";
 import { createPlanArtifactStore, type PlanArtifactStore } from "./artifacts.ts";
 
 export { PLAN_COORDINATION_CHANNEL } from "./protocol.ts";
@@ -56,6 +60,8 @@ export { PLAN_COORDINATION_CHANNEL } from "./protocol.ts";
 export interface PlanExtensionDependencies {
   copyText(text: string): Promise<void>;
   artifactStore: PlanArtifactStore;
+  requestService: RequestService;
+  todoService: TodoService;
 }
 
 export default function planExtension(
@@ -64,13 +70,19 @@ export default function planExtension(
 ): void {
   const copyText = dependencies.copyText ?? copyToClipboard;
   const artifactStore = dependencies.artifactStore ?? createPlanArtifactStore();
+  const requestService = dependencies.requestService ?? installRequest(pi);
+  const todoService = dependencies.todoService ?? installTodo(pi);
   let state: PlanState | null = null;
   let externalSnapshot: ProgressSnapshot | undefined;
   let controlQueued = false;
   const toolLease = new PlanToolLease(PLAN_TOOL_NAMES);
   let automaticReviewUpdatedAt: number | undefined;
   let reviewOpen = false;
+  let automaticClarificationUpdatedAt: number | undefined;
+  let clarificationOpen = false;
+  let choiceAnswerQueuedAt: number | undefined;
   let submissionPending = false;
+  let externalProgressError: string | undefined;
 
   function getPlanState(): PlanState | null {
     return state;
@@ -115,14 +127,13 @@ export default function planExtension(
       ctx.ui.setWidget("plan", undefined);
       return;
     }
-    const color = current.phase === "executing" ? "success" : current.phase === "awaitingApproval" || current.phase === "blocked" ? "warning" : "accent";
+    const color = current.phase === "executing" ? "success" : current.phase === "awaitingApproval" || current.phase === "awaitingClarification" || current.phase === "blocked" ? "warning" : "accent";
     const providerId = current.phase === "executing" && current.progress?.kind === "external"
       ? current.progress.providerId
       : undefined;
-    const showWidget = current.phase === "blocked" || (current.phase === "executing" && providerId === undefined);
     const [heading, ...lines] = renderPlanWidget(current, externalSnapshot?.steps);
-    ctx.ui.setStatus("plan", ctx.ui.theme.fg(color, providerId ? `${heading} · ${providerId}` : heading));
-    ctx.ui.setWidget("plan", showWidget && lines.length > 0 ? lines : undefined);
+    ctx.ui.setStatus("plan", current.phase === "executing" ? undefined : ctx.ui.theme.fg(color, providerId ? `${heading} · ${providerId}` : heading));
+    ctx.ui.setWidget("plan", providerId ? undefined : lines.length > 0 ? lines : undefined);
   }
 
   function emitPlanState(ctx: ExtensionContext, willTriggerTurn: boolean, reason: string): void {
@@ -136,13 +147,14 @@ export default function planExtension(
       willTriggerTurn,
       reason,
     };
+    todoService.syncPlanPhase({ sessionId: signal.sessionId, phase });
     pi.events.emit(PLAN_COORDINATION_CHANNEL, signal);
   }
 
   function appendActive(action: PlanJournalEntry["action"]): void {
     if (!state) throw new Error("Cannot persist an inactive plan as active.");
     syncPlanTools();
-    pi.appendEntry<PlanJournalEntry>(PLAN_STATE_TYPE, { version: 4, action, state });
+    pi.appendEntry<PlanJournalEntry>(PLAN_STATE_TYPE, { version: 3, action, state });
   }
 
   function refreshPersistedActive(ctx: ExtensionContext, willTriggerTurn: boolean, reason: string): void {
@@ -159,6 +171,8 @@ export default function planExtension(
     if (!state) throw new Error("Cannot persist an inactive plan as active.");
     if (action === "submit") automaticReviewUpdatedAt = state.updatedAt;
     else if (state.phase !== "awaitingApproval") automaticReviewUpdatedAt = undefined;
+    if (action === "clarify") automaticClarificationUpdatedAt = state.updatedAt;
+    else if (state.phase !== "awaitingClarification") automaticClarificationUpdatedAt = undefined;
     appendActive(action);
     refreshPersistedActive(ctx, willTriggerTurn, reason);
   }
@@ -264,27 +278,34 @@ export default function planExtension(
     signal?: AbortSignal,
   ): Promise<void> {
     const current = state;
-    pi.appendEntry<PlanJournalEntry>(PLAN_STATE_TYPE, { version: 4, action, state: null });
+    pi.appendEntry<PlanJournalEntry>(PLAN_STATE_TYPE, { version: 3, action, state: null });
     const restoreTools = toolLease.active
       ? toolLease.finish(pi.getActiveTools())
       : current?.enteredWithTools;
     state = null;
+    externalProgressError = undefined;
     externalSnapshot = undefined;
     automaticReviewUpdatedAt = undefined;
+    automaticClarificationUpdatedAt = undefined;
+    choiceAnswerQueuedAt = undefined;
     if (restoreTools) pi.setActiveTools(restoreTools);
     else syncPlanTools();
     updateStatus(ctx);
     emitPlanState(ctx, false, reason);
     if (current?.phase !== "executing" || current.progress?.kind !== "external") return;
+    if (current.progress.providerId !== "todo") {
+      if (ctx.hasUI) ctx.ui.notify(`Plan progress owner ${current.progress.providerId} was not closed because Todo is the only supported owner.`, "warning");
+      return;
+    }
     try {
-      await closeProgressProvider(pi.events, current.progress.providerId, {
+      await closeTodoProgress(todoService.progress, {
         sessionId: ctx.sessionManager.getSessionId(),
         executionId: current.progress.executionId,
         outcome: action === "complete" ? "completed" : "cancelled",
         signal,
       });
     } catch (error) {
-      if (ctx.hasUI) ctx.ui.notify(`Progress provider close failed after Plan exited: ${error instanceof Error ? error.message : String(error)}`, "warning");
+      if (ctx.hasUI) ctx.ui.notify(`Todo managed progress close failed after Plan exited: ${error instanceof Error ? error.message : String(error)}`, "warning");
     }
   }
 
@@ -306,9 +327,14 @@ export default function planExtension(
       restoreWarning = undefined;
     }
     state = restored;
+    externalProgressError = state?.phase === "executing" && state.progress?.kind === "external" && state.progress.providerId !== "todo"
+      ? `Plan progress owner ${state.progress.providerId} is unsupported; only Todo can resume managed progress.`
+      : undefined;
     externalSnapshot = undefined;
     controlQueued = false;
     automaticReviewUpdatedAt = undefined;
+    automaticClarificationUpdatedAt = undefined;
+    choiceAnswerQueuedAt = undefined;
     if (state) toolLease.begin(state.enteredWithTools);
     else if (previousTools) pi.setActiveTools(previousTools);
     syncPlanTools();
@@ -317,7 +343,7 @@ export default function planExtension(
     if (restoreWarning && ctx.hasUI) ctx.ui.notify(`Stored Plan state was not restored: ${restoreWarning}`, "warning");
   }
 
-  function queueControlTurn(ctx: ExtensionContext, kind: "plan" | "refine" | "execute", content: string): boolean {
+  function queueControlTurn(ctx: ExtensionContext, kind: "plan" | "refine" | "execute" | "clarification", content: string): boolean {
     if (!state || controlQueued || ctx.hasPendingMessages()) return false;
     controlQueued = true;
     const message = {
@@ -329,6 +355,9 @@ export default function planExtension(
     try {
       if (ctx.isIdle()) pi.sendMessage(message, { triggerTurn: true });
       else pi.sendMessage(message, { triggerTurn: true, deliverAs: "followUp" });
+      if (kind === "clarification" || (kind === "plan" && state.phase === "planning" && state.clarification?.selection !== undefined)) {
+        choiceAnswerQueuedAt = state.updatedAt;
+      }
       return true;
     } catch (error) {
       controlQueued = false;
@@ -337,60 +366,69 @@ export default function planExtension(
     }
   }
 
+  function answerChoiceAndQueue(selection: number, ctx: ExtensionContext): PlanState {
+    if (!state) throw new Error("No plan is active.");
+    state = answerPlanChoice(state, selection);
+    persistActive("answer", ctx, true, "clarification-answered");
+    const selected = state.clarification?.options[selection];
+    if (!selected) throw new Error("Selected Plan choice was unexpectedly unavailable.");
+    queueControlTurn(
+      ctx,
+      "clarification",
+      `The user selected option ${selection + 1}: ${selected.label}${selected.description ? ` — ${selected.description}` : ""}. Continue read-only planning with that decision.`,
+    );
+    return state;
+  }
 
   async function approveAndQueue(ctx: ExtensionContext): Promise<void> {
     const current = state;
     if (!current || current.phase !== "awaitingApproval") throw new Error("No plan is active.");
     const executionId = randomUUID();
-    const attempt = await openProgressProvider(pi.events, {
+    const snapshot = await openTodoProgress(todoService.progress, {
       sessionId: ctx.sessionManager.getSessionId(),
       executionId,
       steps: current.steps,
       signal: ctx.signal,
     });
     if (state !== current || state.phase !== "awaitingApproval") {
-      if (attempt.opened) {
-        await closeProgressProvider(pi.events, attempt.opened.providerId, {
+      try {
+        await closeTodoProgress(todoService.progress, {
           sessionId: ctx.sessionManager.getSessionId(),
           executionId,
           outcome: "cancelled",
           signal: ctx.signal,
         });
+      } catch {
+        // The state change is authoritative; a stale acquisition cannot reopen it.
       }
-      throw new Error("Plan state changed while progress ownership was being acquired.");
+      throw new Error("Plan state changed while Todo progress ownership was being acquired.");
     }
-    const candidate = attempt.opened
-      ? approvePlanWithExternalProgress(current, attempt.opened.providerId, executionId)
-      : approvePlan(current);
+    const candidate = approvePlanWithExternalProgress(current, "todo", executionId);
     state = candidate;
-    externalSnapshot = attempt.opened?.snapshot;
+    externalSnapshot = snapshot;
+    externalProgressError = undefined;
     try {
       persistActive("approve", ctx, true, "approved-tools-restored");
     } catch (error) {
       state = current;
       externalSnapshot = undefined;
       syncPlanTools();
-      if (attempt.opened) {
-        try {
-          await closeProgressProvider(pi.events, attempt.opened.providerId, {
-            sessionId: ctx.sessionManager.getSessionId(),
-            executionId,
-            outcome: "cancelled",
-            signal: ctx.signal,
-          });
-        } catch (closeError) {
-          throw new AggregateError([error, closeError], "Failed to roll back Plan progress ownership.", { cause: error });
-        }
+      try {
+        await closeTodoProgress(todoService.progress, {
+          sessionId: ctx.sessionManager.getSessionId(),
+          executionId,
+          outcome: "cancelled",
+          signal: ctx.signal,
+        });
+      } catch (closeError) {
+        throw new AggregateError([error, closeError], "Failed to roll back Todo progress ownership.", { cause: error });
       }
       throw error;
-    }
-    if (!attempt.opened && attempt.failures.length > 0 && ctx.hasUI) {
-      ctx.ui.notify(`External progress providers declined; using Plan local progress. ${attempt.failures.join("; ")}`, "warning");
     }
     queueControlTurn(
       ctx,
       "execute",
-      `Execute the explicitly approved plan below. Update tracked steps as their observable state changes.\n\n${renderPlan(candidate, attempt.opened?.snapshot.steps)}`,
+      `Execute the explicitly approved plan below. Update tracked steps as their observable state changes.\n\n${renderPlan(candidate, snapshot.steps)}`,
     );
   }
 
@@ -398,8 +436,9 @@ export default function planExtension(
     const current = state;
     if (!current) return "Plan mode is off. Use /plan to start.";
     if (current.phase !== "executing" || current.progress?.kind !== "external") return renderPlan(current);
+    if (externalProgressError) return `${renderPlan(current, externalSnapshot?.steps)}\n\n${externalProgressError}`;
     try {
-      const snapshot = await readProgressProvider(pi.events, current.progress.providerId, {
+      const snapshot = await readTodoProgress(todoService.progress, {
         sessionId: ctx.sessionManager.getSessionId(),
         executionId: current.progress.executionId,
         signal: ctx.signal,
@@ -410,7 +449,7 @@ export default function planExtension(
       }
       return renderPlan(current, snapshot.steps);
     } catch (error) {
-      return `${renderPlan(current, externalSnapshot?.steps)}\n\nProgress provider unavailable: ${error instanceof Error ? error.message : String(error)}`;
+      return `${renderPlan(current, externalSnapshot?.steps)}\n\nTodo managed progress unavailable: ${error instanceof Error ? error.message : String(error)}`;
     }
   }
 
@@ -444,7 +483,10 @@ export default function planExtension(
       }
       return { state: next, progress, complete };
     }
-    const snapshot = await updateProgressProvider(pi.events, current.progress.providerId, {
+    if (current.progress.providerId !== "todo" || externalProgressError) {
+      throw new Error(externalProgressError ?? "Plan progress owner is not Todo.");
+    }
+    const snapshot = await updateTodoProgress(todoService.progress, {
       sessionId: ctx.sessionManager.getSessionId(),
       executionId: current.progress.executionId,
       requestId,
@@ -452,7 +494,7 @@ export default function planExtension(
       status,
       signal,
     }, current.steps);
-    if (state !== current) throw new Error("Plan state changed while its progress provider was updating.");
+    if (state !== current) throw new Error("Plan state changed while Todo managed progress was updating.");
     externalSnapshot = snapshot;
     updateStatus(ctx);
     const complete = allProgressStepsComplete(snapshot);
@@ -486,6 +528,42 @@ export default function planExtension(
     );
   }
 
+  async function choosePlanClarification(
+    ctx: ExtensionContext,
+    beforeTransition?: () => Promise<void>,
+  ): Promise<void> {
+    const current = state;
+    if (!current || current.phase !== "awaitingClarification" || !current.clarification) {
+      ctx.ui.notify("No Plan choice is awaiting a decision.", "warning");
+      return;
+    }
+    automaticClarificationUpdatedAt = undefined;
+    if (clarificationOpen) return;
+    clarificationOpen = true;
+    let selection: number | undefined;
+    try {
+      selection = await requestPlanChoice(requestService, current.clarification);
+    } finally {
+      clarificationOpen = false;
+    }
+    if (selection === undefined) {
+      ctx.ui.notify("Plan remains awaiting your decision.", "info");
+      return;
+    }
+    await beforeTransition?.();
+    const settled = state;
+    if (!settled || settled.phase !== "awaitingClarification" || settled.updatedAt !== current.updatedAt) {
+      ctx.ui.notify("Plan state changed while the choice dialog was open; inspect /plan status.", "warning");
+      return;
+    }
+    const selected = settled.clarification?.options[selection];
+    if (!selected) {
+      ctx.ui.notify("The selected Plan option is no longer available; inspect /plan status.", "warning");
+      return;
+    }
+    answerChoiceAndQueue(selection, ctx);
+    ctx.ui.notify(`Plan choice ${selection + 1} recorded: ${selected.label}. Read-only planning resumed.`, "info");
+  }
 
   async function reviewSubmittedPlan(
     ctx: ExtensionContext,
@@ -540,6 +618,8 @@ export default function planExtension(
     emitPlanState,
     queueControlTurn,
     approveAndQueue,
+    answerChoiceAndQueue,
+    choosePlanClarification,
     refineAndQueue,
     resumeBlockedAndQueue,
     transitionOff,
@@ -576,8 +656,34 @@ export default function planExtension(
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
+    if (
+      state?.phase === "planning" &&
+      state.clarification?.selection !== undefined &&
+      choiceAnswerQueuedAt === state.updatedAt &&
+      !controlQueued
+    ) {
+      const answered = state;
+      try {
+        state = consumePlanChoice(answered);
+        persistActive("resume", ctx, false, "clarification-consumed");
+        choiceAnswerQueuedAt = undefined;
+      } catch (error) {
+        state = answered;
+        syncPlanTools();
+        ctx.ui.notify(`Failed to finalize Plan choice: ${error instanceof Error ? error.message : String(error)}`, "error");
+      }
+    }
     if (ctx.mode !== "tui") {
       automaticReviewUpdatedAt = undefined;
+      automaticClarificationUpdatedAt = undefined;
+      return;
+    }
+    if (
+      state?.phase === "awaitingClarification" &&
+      automaticClarificationUpdatedAt === state.updatedAt &&
+      !clarificationOpen
+    ) {
+      await choosePlanClarification(ctx);
       return;
     }
     if (

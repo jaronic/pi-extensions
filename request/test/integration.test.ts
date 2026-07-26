@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import goalExtension from "../../goal/src/index.ts";
-import requestUIExtension from "../src/index.ts";
-import { requestFromUser } from "../src/protocol.ts";
+import requestUIExtension, { installRequest } from "../src/index.ts";
+import { REQUEST_UI_CHANNEL, requestFromUser } from "../src/protocol.ts";
 import type { AskAnswerDetails } from "../src/tool.ts";
+import type { RequestAnswer } from "../src/request.ts";
 import { requestFromExternalFixture } from "./external-fixture.ts";
 import { RequestHarness } from "./harness.ts";
 
@@ -257,4 +258,26 @@ test("missing and headless Request UI paths fail closed while compact rendering 
   narrow.queueDialog("\r");
   assert.equal(await narrow.context.ui.select("Narrow", ["Yes", "No"]), "Yes");
   assert.ok(narrow.customFrames.flat().every((line) => visibleWidth(line) <= 12));
+});
+
+test("direct Request service shares the single installation and fails closed after shutdown", async () => {
+  const harness = new RequestHarness();
+  const service = installRequest(harness.api);
+  assert.equal(installRequest(harness.api), service);
+  requestUIExtension(harness.api);
+  assert.ok(Object.isFrozen(service));
+  assert.equal(harness.toolRegistrationCounts.get("ask"), 1);
+  assert.equal(harness.eventListenerRegistrationCounts.get(REQUEST_UI_CHANNEL), 1);
+  assert.equal(harness.eventListenerCount(REQUEST_UI_CHANNEL), 1);
+
+  await harness.emit("session_start", { type: "session_start", reason: "startup" });
+  harness.queueDialog("\x1b[B", "\r");
+  const direct = await service.request([{ id: "direct", question: "Continue?", options: YES_NO, recommended: 0 }]);
+  assert.deepEqual(direct.results[0]?.selectedOptions, ["No"]);
+
+  await harness.emit("session_shutdown", { type: "session_shutdown", reason: "reload" });
+  assert.equal(service.lifetime.aborted, true);
+  assert.equal(harness.eventListenerCount(REQUEST_UI_CHANNEL), 0);
+  await assert.rejects(service.request([{ id: "closed", question: "Continue?", options: YES_NO }]), /shut down/);
+  await assert.rejects(requestFromUser(harness.api, [{ id: "closed", question: "Continue?", options: YES_NO }]), /not loaded or not ready/);
 });

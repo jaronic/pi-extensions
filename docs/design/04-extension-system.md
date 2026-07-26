@@ -326,41 +326,41 @@ sequenceDiagram
 
 Tradeoff：共享集合没有事务和所有权元数据，租约只能通过“上次自己写了什么”和当前差异推断外部变化。若多个扩展同时大范围接管工具，仍可能冲突；更可靠的组合是一个策略层统一管理，或让每个扩展只操作自己拥有的工具。
 
-## 8. 跨扩展通信：版本化事件，不偷渡生产依赖
+## 8. 跨扩展边界：direct service、compatibility channel 与 broadcast
 
-Plan、Goal、Todo、Request 都可独立安装，因此生产代码不应通过 `../../other-extension/src/...` 获得可选能力。它们共享的是同一个进程内 `pi.events`，并在其上定义三种不同协议：
+所有 package 都保持独立安装，但硬依赖不能通过 `../../other-extension/src/...` 或可缺席 EventBus RPC 偷渡。Plan 明确依赖 Request/Todo：其 manifest 声明、捆绑并先加载这两个 package resource，随后从 package root 调用幂等 installer，取得同 EventBus 上唯一的 typed service。未声明依赖的独立 consumer 才使用 compatibility channel。
 
-| 模式 | 当前实例 | 关键握手 |
+| 模式 | 当前实例 | 关键边界 |
 | --- | --- | --- |
-| 单接收者 request/response | Todo service、Request UI | listener 同步 `accept()`；完成时 `resolve/reject()` |
-| 多 provider discovery | Plan execution progress | provider 同步 `offer()`；consumer 校验、去重、排序和选主 |
-| 单向 state broadcast | Plan phase → Goal/Todo | sender 发 immutable snapshot；consumer 按 session 校验和 reconcile |
+| Direct service | Plan → Request/Todo | package dependency、manifest resource order、EventBus-scoped installer、typed method |
+| 单接收者 compatibility request/response | Todo service、Request UI | listener 同步 `accept()`；完成时 `resolve/reject()` |
+| 单向 state broadcast | Plan phase → Goal | sender 发 immutable snapshot；consumer 按 session 校验和 reconcile |
 
-Plan phase 广播是第三种模式：
+Plan phase 广播只服务 Goal；Todo 获得同一转换时由 Plan 直接调用 `todo.syncPlanPhase()`：
 
 ```mermaid
 flowchart LR
     Plan[Plan extension]
+    Todo[Todo direct service]
     Channel[pi-extensions:plan-state:v1]
     Goal[Goal extension]
-    Todo[Todo extension]
 
+    Plan -->|typed syncPlanPhase| Todo
     Plan -->|emit snapshot| Channel
     Channel -->|unknown → validate| Goal
-    Channel -->|unknown → validate| Todo
 ```
 
-协议字段包含 `version`、`sessionId`、phase、readOnly、awaitingApproval、是否会触发 turn 与 reason。设计规则：
+广播字段包含 `version`、`sessionId`、phase、readOnly、awaitingApproval、是否会触发 turn 与 reason。设计规则：
 
-1. channel 名带 namespace/capability/version，例如 `pi-extensions:<capability>:vN`；
-2. 接收 payload 一律视为 `unknown`，验证 discriminant、字段、上限与 session identity；
-3. 发送 immutable snapshot，不暴露内部可变状态；
-4. EventBus `emit()` 不等待异步 listener，因此 `accept()`/`offer()` 必须同步完成，异步结果走显式 completion callback；
-5. 接收方缺失或加载顺序不同必须有明确 fail/fallback 语义；
+1. 硬依赖只从 package root import public installer/types，并以 manifest 声明、捆绑和 resource order 落地；
+2. compatibility channel 名带 namespace/capability/version，例如 `pi-extensions:<capability>:vN`；
+3. 接收 payload 一律视为 `unknown`，验证 discriminant、字段、上限与 session identity；
+4. 发送 immutable snapshot，不暴露内部可变状态；
+5. EventBus `emit()` 不等待异步 listener，因此 `accept()` 必须同步完成，异步结果走显式 completion callback；
 6. Bus 不 replay；当前状态要在 `session_start` / `session_tree` 重发，早到信号要按 session 缓存后 reconcile；
-7. 协议变化同时更新所有发送方、接收方和 coexistence tests。
+7. protocol、installer 或 manifest 改动同时更新所有受影响的 package、README 和 coexistence tests。
 
-Tradeoff：事件总线保持包独立，却没有编译期跨包契约，也不是持久 service registry。复制最小 wire type 是有意隔离；runtime decoder 与跨包测试是防漂移成本。Todo/Request 的完整 request envelope、provider 选择与加载顺序分析见 [09 · 跨扩展通用协议](09-cross-extension-protocols.md)。
+Tradeoff：EventBus 兼容协议保持 package 独立，却没有编译期跨包契约；runtime decoder 与跨包测试是防漂移成本。直接 service 保留类型与调用路径，但仅适用于明确声明的同进程、同信任域 hard dependency。详见 [09 · 跨扩展通用协议](09-cross-extension-protocols.md)。
 
 ## 9. 长生命周期资源：懒加载、去重、按 cwd 轮换、有界关闭
 

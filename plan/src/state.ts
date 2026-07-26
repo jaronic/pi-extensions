@@ -1,6 +1,6 @@
 import { posix, win32 } from "node:path";
 
-export type PlanPhase = "off" | "planning" | "awaitingApproval" | "blocked" | "executing";
+export type PlanPhase = "off" | "planning" | "awaitingClarification" | "awaitingApproval" | "blocked" | "executing";
 export type ActivePlanPhase = Exclude<PlanPhase, "off">;
 export type PlanStepStatus = "pending" | "inProgress" | "completed" | "blocked";
 
@@ -13,6 +13,12 @@ export const MAX_PLAN_TOOLS = 256;
 export const MAX_PLAN_TOOL_NAME_CHARS = 128;
 export const MAX_PLAN_PAYLOAD_BYTES = 40 * 1024;
 export const MAX_PLAN_PATH_BYTES = 4_096;
+export const MAX_PLAN_CHOICE_QUESTION_CHARS = 1_000;
+export const MAX_PLAN_CHOICE_OPTIONS = 5;
+export const MIN_PLAN_CHOICE_OPTIONS = 2;
+export const MAX_PLAN_CHOICE_LABEL_CHARS = 160;
+export const MAX_PLAN_CHOICE_DESCRIPTION_CHARS = 500;
+export const MAX_PLAN_CHOICE_PAYLOAD_BYTES = 8 * 1024;
 export const MAX_PLAN_BLOCKING_FACTS = 10;
 export const MAX_PLAN_EVIDENCE_SOURCES = 10;
 export const MAX_PLAN_BLOCKER_RESOLUTIONS = 5;
@@ -44,6 +50,16 @@ export type PlanProgressTracking =
       executionId: string;
     };
 
+export interface PlanChoiceOption {
+  label: string;
+  description?: string;
+}
+
+export interface PlanClarification {
+  question: string;
+  options: PlanChoiceOption[];
+  selection?: number;
+}
 
 export type PlanBlockerResolutionKind = "prerequisite" | "alternative";
 
@@ -61,11 +77,12 @@ export interface PlanBlocker {
 }
 
 export interface PlanState {
-  version: 4;
+  version: 3;
   phase: ActivePlanPhase;
   summary?: string;
   plan?: string;
   planPath?: string;
+  clarification?: PlanClarification;
   blocker?: PlanBlocker;
   steps: PlanStep[];
   progress?: PlanProgressTracking;
@@ -75,8 +92,8 @@ export interface PlanState {
 }
 
 export interface PlanJournalEntry {
-  version: 4;
-  action: "start" | "resume" | "submit" | "block" | "approve" | "refine" | "cancel" | "step" | "complete";
+  version: 3;
+  action: "start" | "clarify" | "answer" | "resume" | "submit" | "block" | "approve" | "refine" | "cancel" | "step" | "complete";
   state: PlanState | null;
 }
 
@@ -93,6 +110,8 @@ export type PlanDecodeResult<T> =
 const VALID_PLAN_ACTIONS: Record<PlanJournalEntry["action"], true> = {
   start: true,
   submit: true,
+  clarify: true,
+  answer: true,
   resume: true,
   approve: true,
   refine: true,
@@ -105,6 +124,7 @@ const VALID_PLAN_ACTIONS: Record<PlanJournalEntry["action"], true> = {
 const VALID_PHASES: Record<ActivePlanPhase, true> = {
   planning: true,
   awaitingApproval: true,
+  awaitingClarification: true,
   executing: true,
   blocked: true,
 };
@@ -116,24 +136,19 @@ const VALID_STEP_STATUSES: Record<PlanStepStatus, true> = {
   blocked: true,
 };
 
-const PLAN_STATE_V1_KEYS: Record<string, true> = {
-  version: true, phase: true, summary: true, plan: true, planPath: true, clarification: true,
-  steps: true, enteredWithTools: true, createdAt: true, updatedAt: true,
-};
-const PLAN_STATE_V2_KEYS: Record<string, true> = { ...PLAN_STATE_V1_KEYS, progress: true };
-const PLAN_STATE_V3_KEYS: Record<string, true> = { ...PLAN_STATE_V2_KEYS, blocker: true };
-const PLAN_STATE_V4_KEYS: Record<string, true> = {
-  version: true, phase: true, summary: true, plan: true, planPath: true, steps: true,
-  progress: true, blocker: true, enteredWithTools: true, createdAt: true, updatedAt: true,
-};
-const PLAN_STEP_V1_KEYS: Record<string, true> = { id: true, text: true, status: true };
-const PLAN_STEP_V2_KEYS: Record<string, true> = { id: true, text: true };
-const PLAN_BLOCKER_KEYS: Record<string, true> = { summary: true, blockingFacts: true, evidenceSources: true, resolutions: true };
-const PLAN_BLOCKER_RESOLUTION_KEYS: Record<string, true> = { kind: true, label: true, description: true };
-const LOCAL_PROGRESS_KEYS: Record<string, true> = { kind: true, steps: true };
-const EXTERNAL_PROGRESS_KEYS: Record<string, true> = { kind: true, providerId: true, executionId: true };
-const PROGRESS_STEP_KEYS: Record<string, true> = { id: true, status: true };
-const PLAN_JOURNAL_KEYS: Record<string, true> = { version: true, action: true, state: true };
+const PLAN_STATE_V1_KEYS = new Set(["version", "phase", "summary", "plan", "planPath", "clarification", "steps", "enteredWithTools", "createdAt", "updatedAt"]);
+const PLAN_STATE_V2_KEYS = new Set([...PLAN_STATE_V1_KEYS, "progress"]);
+const PLAN_STATE_V3_KEYS = new Set([...PLAN_STATE_V2_KEYS, "blocker"]);
+const PLAN_STEP_V1_KEYS = new Set(["id", "text", "status"]);
+const PLAN_STEP_V2_KEYS = new Set(["id", "text"]);
+const PLAN_CLARIFICATION_KEYS = new Set(["question", "options", "selection"]);
+const PLAN_CHOICE_OPTION_KEYS = new Set(["label", "description"]);
+const PLAN_BLOCKER_KEYS = new Set(["summary", "blockingFacts", "evidenceSources", "resolutions"]);
+const PLAN_BLOCKER_RESOLUTION_KEYS = new Set(["kind", "label", "description"]);
+const LOCAL_PROGRESS_KEYS = new Set(["kind", "steps"]);
+const EXTERNAL_PROGRESS_KEYS = new Set(["kind", "providerId", "executionId"]);
+const PROGRESS_STEP_KEYS = new Set(["id", "status"]);
+const PLAN_JOURNAL_KEYS = new Set(["version", "action", "state"]);
 
 function isActivePlanPhase(value: unknown): value is ActivePlanPhase {
   return typeof value === "string" && Object.hasOwn(VALID_PHASES, value);
@@ -167,8 +182,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function hasOnlyKeys(value: Record<string, unknown>, allowed: Record<string, true>): boolean {
-  return Object.keys(value).every((key) => Object.hasOwn(allowed, key));
+function hasOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
+  return Object.keys(value).every((key) => allowed.has(key));
 }
 
 function decodeFailure<T>(reason: string): PlanDecodeResult<T> {
@@ -245,13 +260,43 @@ function validatePlanBlocker(value: PlanBlocker): PlanBlocker {
   return { summary, blockingFacts, evidenceSources, resolutions };
 }
 
+function validatePlanClarification(value: PlanClarification): PlanClarification {
+  const question = validatePlanText(value.question, "Plan choice question", MAX_PLAN_CHOICE_QUESTION_CHARS);
+  if (!Array.isArray(value.options) || value.options.length < MIN_PLAN_CHOICE_OPTIONS || value.options.length > MAX_PLAN_CHOICE_OPTIONS) {
+    throw new Error(`A Plan choice requires ${MIN_PLAN_CHOICE_OPTIONS} to ${MAX_PLAN_CHOICE_OPTIONS} options.`);
+  }
+  const labels = new Set<string>();
+  const options = value.options.map((option, index) => {
+    const label = validatePlanText(option.label, `Plan choice option ${index + 1} label`, MAX_PLAN_CHOICE_LABEL_CHARS);
+    if (labels.has(label)) throw new Error(`Plan choice option ${index + 1} duplicates an earlier label.`);
+    labels.add(label);
+    if (option.description === undefined) return { label };
+    return {
+      label,
+      description: validatePlanText(option.description, `Plan choice option ${index + 1} description`, MAX_PLAN_CHOICE_DESCRIPTION_CHARS),
+    };
+  });
+  const bytes = Buffer.byteLength(question) + options.reduce(
+    (total, option) => total + Buffer.byteLength(option.label) + Buffer.byteLength(option.description ?? ""),
+    0,
+  );
+  if (bytes > MAX_PLAN_CHOICE_PAYLOAD_BYTES) {
+    throw new Error(`Plan choice payload exceeds the ${MAX_PLAN_CHOICE_PAYLOAD_BYTES.toLocaleString()} byte limit.`);
+  }
+  if (value.selection !== undefined) {
+    if (!Number.isSafeInteger(value.selection) || value.selection < 0 || value.selection >= options.length) {
+      throw new Error("Plan choice selection is invalid.");
+    }
+  }
+  return value.selection === undefined ? { question, options } : { question, options, selection: value.selection };
+}
 
 export function createPlanningState(activeTools: string[], now = Date.now()): PlanState {
   const enteredWithTools = validateEnteredTools([
-    ...new Set(activeTools.filter((name) => name !== "submit_plan" && name !== "report_plan_blocked" && name !== "update_plan_step")),
+    ...new Set(activeTools.filter((name) => name !== "submit_plan" && name !== "request_plan_choice" && name !== "answer_plan_choice" && name !== "report_plan_blocked" && name !== "update_plan_step")),
   ]);
   return {
-    version: 4,
+    version: 3,
     phase: "planning",
     steps: [],
     enteredWithTools,
@@ -260,6 +305,32 @@ export function createPlanningState(activeTools: string[], now = Date.now()): Pl
   };
 }
 
+export function requestPlanChoice(state: PlanState, clarification: PlanClarification, now = Date.now()): PlanState {
+  if (state.phase !== "planning") throw new Error("A Plan choice can only be requested during planning.");
+  const validated = validatePlanClarification(clarification);
+  if (validated.selection !== undefined) throw new Error("A new Plan choice cannot include a selection.");
+  return { ...state, phase: "awaitingClarification", clarification: validated, updatedAt: now };
+}
+
+export function answerPlanChoice(state: PlanState, selection: number, now = Date.now()): PlanState {
+  if (state.phase !== "awaitingClarification" || !state.clarification) {
+    throw new Error("No Plan choice is awaiting an answer.");
+  }
+  return {
+    ...state,
+    phase: "planning",
+    clarification: validatePlanClarification({ ...state.clarification, selection }),
+    updatedAt: now,
+  };
+}
+
+export function consumePlanChoice(state: PlanState): PlanState {
+  if (state.phase !== "planning" || state.clarification?.selection === undefined) {
+    throw new Error("No answered Plan choice is ready to consume.");
+  }
+  const { clarification: _clarification, ...resumed } = state;
+  return resumed;
+}
 
 export function reportPlanBlocked(state: PlanState, blocker: PlanBlocker, now = Date.now()): PlanState {
   if (state.phase !== "planning") throw new Error("A Plan can only be blocked during planning.");
@@ -268,6 +339,7 @@ export function reportPlanBlocked(state: PlanState, blocker: PlanBlocker, now = 
     summary: _summary,
     plan: _plan,
     planPath: _planPath,
+    clarification: _clarification,
     blocker: _blocker,
     steps: _steps,
     progress: _progress,
@@ -296,7 +368,7 @@ export function submitPlan(state: PlanState, submitted: SubmittedPlan, now = Dat
     text: validatePlanText(text, `Step ${index + 1}`, MAX_PLAN_STEP_CHARS),
   }));
   validatePlanPayload(summary, plan, steps);
-  const { blocker: _blocker, ...submittedState } = state;
+  const { clarification: _clarification, blocker: _blocker, ...submittedState } = state;
   return {
     ...submittedState,
     phase: "awaitingApproval",
@@ -313,24 +385,11 @@ export function refinePlan(state: PlanState, now = Date.now()): PlanState {
   return { ...planningState, phase: "planning", updatedAt: now };
 }
 
-function pendingProgress(steps: PlanStep[]): PlanStepProgress[] {
-  return steps.map((step) => ({ id: step.id, status: "pending" }));
-}
 
 function assertApprovable(state: PlanState): void {
   if (state.phase !== "awaitingApproval" || !state.plan || state.steps.length === 0) {
     throw new Error("No submitted plan is awaiting approval.");
   }
-}
-
-export function approvePlan(state: PlanState, now = Date.now()): PlanState {
-  assertApprovable(state);
-  return {
-    ...state,
-    phase: "executing",
-    progress: { kind: "local", steps: pendingProgress(state.steps) },
-    updatedAt: now,
-  };
 }
 
 export function approvePlanWithExternalProgress(
@@ -368,10 +427,6 @@ export function updatePlanStep(
   return { ...state, progress: { kind: "local", steps }, updatedAt: now };
 }
 
-export function allPlanStepsComplete(state: PlanState): boolean {
-  return state.phase === "executing" && state.progress?.kind === "local" &&
-    state.progress.steps.length > 0 && state.progress.steps.every((step) => step.status === "completed");
-}
 
 export function localPlanProgress(state: PlanState): readonly PlanStepProgress[] | undefined {
   return state.phase === "executing" && state.progress?.kind === "local" ? state.progress.steps : undefined;
@@ -398,6 +453,41 @@ function decodePlanStep(value: unknown, legacy: boolean): PlanDecodeResult<PlanS
   return { ok: true, value: { id: value.id, text } };
 }
 
+function decodePlanClarification(value: unknown): PlanDecodeResult<PlanClarification> {
+  if (!isRecord(value) || typeof value.question !== "string" || !Array.isArray(value.options)) {
+    return decodeFailure("Plan choice must contain a question and options.");
+  }
+  if (!hasOnlyKeys(value, PLAN_CLARIFICATION_KEYS)) return decodeFailure("Plan choice contains unknown fields.");
+  const options: PlanChoiceOption[] = [];
+  for (const rawOption of value.options) {
+    if (!isRecord(rawOption) || !hasOnlyKeys(rawOption, PLAN_CHOICE_OPTION_KEYS) || typeof rawOption.label !== "string") {
+      return decodeFailure("Plan choice option must contain only a label and optional description.");
+    }
+    if (rawOption.description !== undefined && typeof rawOption.description !== "string") {
+      return decodeFailure("Plan choice option description must be a string.");
+    }
+    options.push(rawOption.description === undefined ? { label: rawOption.label } : { label: rawOption.label, description: rawOption.description });
+  }
+  if (value.selection !== undefined && (!Number.isSafeInteger(value.selection) || typeof value.selection !== "number")) {
+    return decodeFailure("Plan choice selection must be an integer.");
+  }
+  try {
+    const decoded = validatePlanClarification({
+      question: value.question,
+      options,
+      selection: value.selection as number | undefined,
+    });
+    if (
+      decoded.question !== value.question ||
+      decoded.options.some((option, index) => option.label !== options[index].label || option.description !== options[index].description)
+    ) {
+      return decodeFailure("Stored Plan choice is not normalized.");
+    }
+    return { ok: true, value: decoded };
+  } catch (error) {
+    return decodeFailure(error instanceof Error ? error.message : String(error));
+  }
+}
 
 function decodeLocalProgress(value: unknown, steps: readonly PlanStep[]): PlanDecodeResult<PlanStepProgress[]> {
   if (!Array.isArray(value) || value.length !== steps.length) {
@@ -447,22 +537,13 @@ function decodePlanProgress(value: unknown, steps: readonly PlanStep[]): PlanDec
 
 export function decodePlanState(value: unknown): PlanDecodeResult<PlanState> {
   if (!isRecord(value)) return decodeFailure("Plan state must be an object.");
-  if (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4) {
+  if (value.version !== 1 && value.version !== 2 && value.version !== 3) {
     return decodeFailure(`Unsupported Plan state version: ${String(value.version)}.`);
   }
   const legacy = value.version === 1;
-  const allowedKeys = value.version === 1
-    ? PLAN_STATE_V1_KEYS
-    : value.version === 2
-      ? PLAN_STATE_V2_KEYS
-      : value.version === 3
-        ? PLAN_STATE_V3_KEYS
-        : PLAN_STATE_V4_KEYS;
+  const allowedKeys = value.version === 1 ? PLAN_STATE_V1_KEYS : value.version === 2 ? PLAN_STATE_V2_KEYS : PLAN_STATE_V3_KEYS;
   if (!hasOnlyKeys(value, allowedKeys)) {
     return decodeFailure(`Plan state v${value.version} contains unknown fields.`);
-  }
-  if (value.clarification !== undefined) {
-    return decodeFailure("Stored Plan choices cannot be restored; restart Plan mode and use the external ask tool.");
   }
   if (!isActivePlanPhase(value.phase)) return decodeFailure("Plan state has an invalid phase.");
   if (!Array.isArray(value.enteredWithTools) || !value.enteredWithTools.every((tool) => typeof tool === "string")) {
@@ -510,10 +591,16 @@ export function decodePlanState(value: unknown): PlanDecodeResult<PlanState> {
     return decodeFailure(`Plan phase ${value.phase} cannot contain execution progress.`);
   }
 
+  let clarification: PlanClarification | undefined;
+  if (value.clarification !== undefined) {
+    const decoded = decodePlanClarification(value.clarification);
+    if (!decoded.ok) return decoded;
+    clarification = decoded.value;
+  }
   let blocker: PlanBlocker | undefined;
   if (value.blocker !== undefined) {
-    if ((value.version !== 3 && value.version !== 4) || !isRecord(value.blocker) || !hasOnlyKeys(value.blocker, PLAN_BLOCKER_KEYS)) {
-      return decodeFailure("Plan blocker must be an exact v3 or v4 object.");
+    if (value.version !== 3 || !isRecord(value.blocker) || !hasOnlyKeys(value.blocker, PLAN_BLOCKER_KEYS)) {
+      return decodeFailure("Plan blocker must be an exact v3 object.");
     }
     if (
       typeof value.blocker.summary !== "string" ||
@@ -567,7 +654,19 @@ export function decodePlanState(value: unknown): PlanDecodeResult<PlanState> {
   if (!hasSummary && steps.length > 0) return decodeFailure("Draft Plan state cannot contain steps without a plan.");
   if (value.phase === "blocked") {
     if (!blocker) return decodeFailure("Blocked Plan phase requires a blocker.");
-    if (hasSummary || steps.length > 0) return decodeFailure("Blocked Plan phase cannot contain a submitted plan.");
+    if (hasSummary || steps.length > 0 || clarification) return decodeFailure("Blocked Plan phase cannot contain a submitted plan or choice.");
+  }
+  if (value.phase === "awaitingClarification" && clarification?.selection !== undefined) {
+    return decodeFailure("An unanswered Plan choice must not contain a selection.");
+  }
+  if (value.phase === "awaitingClarification" && !clarification) {
+    return decodeFailure("Plan choice phase requires a pending choice.");
+  }
+  if (value.phase === "planning" && clarification && clarification.selection === undefined) {
+    return decodeFailure("Planning phase cannot contain an unanswered Plan choice.");
+  }
+  if ((value.phase === "awaitingApproval" || value.phase === "executing") && clarification) {
+    return decodeFailure(`Plan phase ${value.phase} cannot contain a choice.`);
   }
   if (value.phase !== "planning" && value.phase !== "blocked" && blocker) {
     return decodeFailure(`Plan phase ${value.phase} cannot contain a blocker.`);
@@ -611,11 +710,12 @@ export function decodePlanState(value: unknown): PlanDecodeResult<PlanState> {
   return {
     ok: true,
     value: {
-      version: 4,
+      version: 3,
       phase: value.phase,
       summary,
       plan,
       planPath,
+      clarification,
       blocker,
       steps,
       progress,
@@ -629,7 +729,7 @@ export function decodePlanState(value: unknown): PlanDecodeResult<PlanState> {
 export function decodePlanJournalEntry(value: unknown): PlanDecodeResult<PlanJournalEntry> {
   if (!isRecord(value)) return decodeFailure("Plan journal entry must be an object.");
   if (!hasOnlyKeys(value, PLAN_JOURNAL_KEYS)) return decodeFailure("Plan journal entry contains unknown fields.");
-  if (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4) {
+  if (value.version !== 1 && value.version !== 2 && value.version !== 3) {
     return decodeFailure(`Unsupported Plan journal version: ${String(value.version)}.`);
   }
   if (typeof value.action !== "string" || !Object.hasOwn(VALID_PLAN_ACTIONS, value.action)) {
@@ -638,7 +738,7 @@ export function decodePlanJournalEntry(value: unknown): PlanDecodeResult<PlanJou
   const action = value.action as PlanJournalEntry["action"];
   if (action === "cancel" || action === "complete") {
     if (value.state !== null) return decodeFailure(`Plan ${action} entry must contain null state.`);
-    return { ok: true, value: { version: 4, action, state: null } };
+    return { ok: true, value: { version: 3, action, state: null } };
   }
 
   if (!isRecord(value.state) || value.state.version !== value.version) {
@@ -650,6 +750,8 @@ export function decodePlanJournalEntry(value: unknown): PlanDecodeResult<PlanJou
     start: "planning",
     submit: "awaitingApproval",
     approve: "executing",
+    clarify: "awaitingClarification",
+    answer: "planning",
     resume: "planning",
     refine: "planning",
     step: "executing",
@@ -661,5 +763,5 @@ export function decodePlanJournalEntry(value: unknown): PlanDecodeResult<PlanJou
   if (action === "step" && decoded.value.progress?.kind !== "local") {
     return decodeFailure("Plan step entries require local progress ownership.");
   }
-  return { ok: true, value: { version: 4, action, state: decoded.value } };
+  return { ok: true, value: { version: 3, action, state: decoded.value } };
 }
