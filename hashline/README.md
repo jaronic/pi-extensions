@@ -11,6 +11,7 @@
 启用后：
 
 - `read` 保持 Pi 的 `path`、`offset`、`limit` 参数和图片能力；可编辑文本改为 `LINE:TEXT` 输出，并在顶部附带 `h1_…` snapshot；
+- 调用卡片分别显示 `Hashline read` 和 `Hashline edit`，使同名内建工具覆盖在 UI 中可见；
 - snapshot 是原始文件 bytes 的完整 SHA-256 base64url token，覆盖 BOM、LF/CRLF/CR、尾随空白和最终换行；
 - snapshot metadata 写入当前 Pi session branch 的版本化 custom journal；reload、resume 和 tree navigation 时从当前 branch 重放，不写项目 sidecar；
 - `edit` 一次修改一个已存在文件，支持最多 100 个互不冲突的 `replace`、`delete`、`insert_before` 和 `insert_after`；
