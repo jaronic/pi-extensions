@@ -105,6 +105,7 @@ export function createHashlineReadTool(runtime: HashlineRuntime) {
   const renderer = createReadToolDefinition(process.cwd());
   return {
     ...renderer,
+    label: "Hashline read",
     description: READ_DESCRIPTION,
     promptSnippet: READ_PROMPT_SNIPPET,
     promptGuidelines: [...READ_PROMPT_GUIDELINES],

@@ -135,7 +135,7 @@ export function createHashlineEditTool(
     renderCall: renderer.renderCall as ToolDefinition<typeof hashlineEditSchema, EditToolDetails>["renderCall"],
     renderResult: renderer.renderResult as ToolDefinition<typeof hashlineEditSchema, EditToolDetails>["renderResult"],
     name: "edit",
-    label: "edit",
+    label: "Hashline edit",
     parameters: hashlineEditSchema,
     description: EDIT_DESCRIPTION,
     promptSnippet: EDIT_PROMPT_SNIPPET,

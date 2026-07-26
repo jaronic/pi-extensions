@@ -26,6 +26,8 @@ for (const hashlineFirst of [true, false]) {
     assert.ok(editDefinition && typeof editDefinition === "object" && "description" in editDefinition);
     assert.match(String(readDefinition.description), /branch-local SHA-256 snapshot/);
     assert.match(String(editDefinition.description), /previously read lines/);
+    assert.equal("label" in readDefinition && readDefinition.label, "Hashline read");
+    assert.equal("label" in editDefinition && editDefinition.label, "Hashline edit");
     assert.ok("renderCall" in editDefinition && typeof editDefinition.renderCall === "function");
     assert.ok("renderResult" in editDefinition && typeof editDefinition.renderResult === "function");
 
