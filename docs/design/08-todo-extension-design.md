@@ -937,7 +937,7 @@ todo/
 
 - `.github/workflows/ci.yml` 的七 package matrix 包含 `todo`；
 - `scripts/pi-global-links.sh` 与测试把 `todo` 纳入 `make pi-on|off|toggle|status`；
-- `AGENTS.md`、`docs/pi-extension-development.md` 与设计索引描述七个 package；
+- `AGENTS.md`、`docs/pi-extension-development.md` 与设计索引描述当前八个 package；
 - `todo/README.md` 记录安装、工具 schema、命令、状态、持久化、Plan/Goal/Request 协作和限制；
 - `plan/README.md`、`goal/README.md` 与 `request/README.md` 记录各自可观察的 Todo 共存语义；
 - 测试使用 Todo 自有 harness；生产代码没有跨 package import。

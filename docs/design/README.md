@@ -1,6 +1,6 @@
 # Pi 底层设计与扩展实践
 
-> 研究基线：2026-07-24。本仓库实际安装 `@earendil-works/pi-coding-agent 0.81.1`，各扩展声明兼容 `>=0.81.0`。上游 `main` 仍在快速演进；本文会明确区分 0.81.1 可用契约、上游当前方向与历史设计动机。
+> 研究基线：2026-07-26。本仓库实际安装 `@earendil-works/pi-coding-agent 0.81.1`，各扩展声明兼容 `>=0.81.0`。上游 `main` 仍在快速演进；本文会明确区分 0.81.1 可用契约、上游当前方向与历史设计动机。
 
 Pi 最准确的定位不是“一个功能齐全的 Coding Agent”，而是一个把上下文、模型、工具、会话和交互界面暴露给使用者控制的 Agent Harness。它默认给出一条足够工作的窄路径，又允许通过 prompt、skill、extension、SDK 乃至 fork 逐层改造。
 
@@ -74,6 +74,7 @@ flowchart TB
 | [08 · Todo 扩展实现](08-todo-extension-design.md) | Pi 怎样用 branch-aware 状态机可靠追踪拆分任务、进度、阻塞与完成 | 状态机、原子提交、Plan 共存、验证矩阵 |
 | [09 · 跨扩展通用协议](09-cross-extension-protocols.md) | Todo、Request 等通用能力怎样被其他 extension 调用、发现和感知；EventBus 的同步边界是什么 | Request/response、provider discovery、state broadcast、UI adapter |
 | [10 · AST-Grep 扩展设计](10-ast-grep-extension-design.md) | Pi 怎样把 ast-grep 变成可取消、可审计的结构搜索与单文件改写工具 | 固定 native 引擎、流式输出、preview/apply、失效检测、生产级 Review |
+| [11 · Hashline 扩展设计与实现](11-hashline-extension-design.md) | 怎样用 branch-local 完整文件快照、已见行与同文件 CAS 实现精确编辑，并拒绝短 hash、stale merge 和路径猜测 | Read/Edit 数据流、快照生命周期、并发边界、实现与严格审查矩阵 |
 
 已有的 [Pi 插件开发参考与最佳实践](../pi-extension-development.md) 是 API/工程速查；本系列专注设计原理和选择依据，两者互补。
 
@@ -110,7 +111,7 @@ flowchart LR
 - **作者动机**：来自 Mario Zechner 的设计复盘或 Pi 官方说明，并附原始链接。
 - **设计解读**：由已观察机制推导出的工程含义，使用“本文判断”或“设计解读”明确标识，不冒充官方立场。
 
-社区项目只作为设计案例，不构成质量或安全背书。下载量、版本和架构均是 2026-07-24 快照；阅读时应重新核对项目当前状态。
+社区项目只作为设计案例，不构成质量或安全背书。下载量、版本和架构均是 2026-07-26 快照；阅读时应重新核对项目当前状态。
 
 ## 核心词汇
 

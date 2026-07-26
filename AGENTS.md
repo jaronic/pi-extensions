@@ -2,13 +2,14 @@
 
 ## Project Overview
 
-This repository contains eight independent, private TypeScript extensions for `@earendil-works/pi-coding-agent`:
+This repository contains nine independent, private TypeScript extensions for `@earendil-works/pi-coding-agent`:
 
 - `rg`: registers a ripgrep-backed `rg` alias and replaces duplicate active `grep` exposure while loaded.
 - `plan`: implements a planning/approval/execution state machine with tool restrictions.
 - `goal`: tracks a persistent objective and optional token budget, then coordinates automatic continuation with Plan.
 - `lsp`: exposes language-server navigation, diagnostics, symbols, rename previews, and code actions through one `lsp` tool.
 - `ast-grep`: provides pinned-native structural search plus preview-bound, atomic single-file AST rewriting.
+- `hashline`: overrides `read`/`edit` with branch-local SHA-256 snapshots, seen-line provenance, and same-file compare-and-set writes.
 - `request`: provides one responsive request UI for the `ask` tool, native extension dialogs, and versioned cross-extension requests.
 - `todo`: maintains a bounded, branch-local execution ledger with stable task IDs, one active task, and Plan-aware mutation gating.
 - `promptline-editor`: owns the themed custom editor, compact status line, and live Git branch indicator.
@@ -25,6 +26,7 @@ Each `<extension>/package.json` declares `pi.extensions: ["./src/index.ts"]`. Pi
 - Plan moves through `planning -> awaitingApproval -> executing`, leases the active tool set without losing external changes, and injects phase-specific context before agent turns. Goal injects objective context, accounts tokens/time, and queues continuation turns until completion or a terminal status.
 - Plan broadcasts `pi-extensions:plan-state:v1`; Goal and Todo independently define and validate the same versioned payload without production cross-imports. Keep all three protocol modules plus `plan/test/coexistence.test.ts` and `todo/test/coexistence.test.ts` synchronized.
 - LSP strictly decodes configuration, confines files to the workspace, routes by action/file type, reuses one client per server/workspace root, synchronizes documents, formats faithful bounded output, and terminates server process trees during shutdown. `tool_result` performs best-effort sync after built-in `edit`/`write` and strictly decoded successful `ast_grep_edit` apply results.
+- Hashline preserves Pi's `read`/`edit` names, schemas where applicable, renderers, result details, and shared mutation queue while adding strict byte snapshots and branch-local seen-line provenance. Snapshot metadata is replayed from versioned custom entries; stale, unknown, wrong-path, or unseen edits fail before writing.
 - Ast-grep resolves an exact platform package to a pinned native executable, confines every candidate and match to the canonical workspace, bounds traversal/output, and separates deterministic preview from fingerprint-bound atomic apply.
 - RG delegates execution and result rendering to Pi's grep definition using `ctx.cwd`, collapses simultaneous `rg`/`grep` active entries to `rg`, and restores `grep` on shutdown.
 - Request validates and serializes interactive questions through one responsive Question/Review component. It rejects terminal/bidirectional controls at external display boundaries, neutralizes them in free text, installs session-scoped adapters over the shared `ExtensionUIContext` `select`/`confirm`/`input` methods and exposes `pi-extensions:request-ui:v1` for richer independent callers; shutdown aborts pending dialogs and restores only wrappers it still owns.
@@ -37,6 +39,7 @@ Each `<extension>/package.json` declares `pi.extensions: ["./src/index.ts"]`. Pi
 | `plan/src/`, `plan/test/` | Plan lifecycle plus focused command, tool, prompt, protocol, output, tool-lease, and state-machine modules. |
 | `lsp/src/`, `lsp/test/` | LSP configuration, routing, JSON-RPC clients, formatting, and fake-server tests. |
 | `ast-grep/src/`, `ast-grep/test/` | Native CLI resolution, workspace scan, structural search, preview/apply rewrite pipeline, bounded output, and failure-path tests. |
+| `hashline/src/`, `hashline/test/` | Hashline read/edit overrides, byte-faithful lines, snapshot replay/LRU, guarded mutation pipeline, and coexistence tests. |
 | `rg/src/`, `rg/test/` | Ripgrep alias registration, active-tool replacement/restoration, and focused tests. |
 | `request/src/`, `request/test/` | Request schemas, responsive TUI, native adapters, event protocol, serialized coordinator, and tests. |
 | `todo/src/`, `todo/test/` | Todo state machine, bounded output, mixed-carrier branch persistence, TUI/command surfaces, and cross-extension coexistence tests. |
@@ -51,7 +54,7 @@ Each package owns its dependencies, lockfile, compiler configuration, and tests.
 Use Node.js `>=22.19.0` and npm. From one extension directory:
 
 ```sh
-cd promptline-editor       # or goal, plan, lsp, ast-grep, request, rg, todo
+cd promptline-editor       # or goal, plan, lsp, ast-grep, hashline, request, rg, todo
 npm ci
 npm run check              # tsc --noEmit
 npm test                   # node --import tsx --test test/*.test.ts
@@ -62,16 +65,16 @@ Ast-grep additionally provides `npm run release-smoke`, which packs the extensio
 To check every package from the repository root:
 
 ```sh
-for dir in goal plan lsp ast-grep request rg todo promptline-editor; do
+for dir in goal plan lsp ast-grep hashline request rg todo promptline-editor; do
   (cd "$dir" && npm run check && npm test) || exit 1
 done
 ```
 
-GitHub Actions runs `npm ci`, `npm run check`, and `npm test` for all eight packages. Ast-grep runs that suite on its five accepted native OS/architecture/libc tuples and gates its packed clean-install Pi smoke separately.
+GitHub Actions runs `npm ci`, `npm run check`, and `npm test` for all nine packages. Ast-grep runs that suite on its five accepted native OS/architecture/libc tuples and gates its packed clean-install Pi smoke separately.
 
 There are no `build`, `lint`, `format`, `start`, or `dev` scripts. TypeScript is loaded directly by Pi and tests; `npm run check` intentionally emits no build artifacts.
 
-For global development use, enable this repository's eight extensions and six themes from the repository root:
+For global development use, enable this repository's nine extensions and six themes from the repository root:
 
 ```sh
 make pi-on
@@ -85,7 +88,7 @@ Pi follows each linked package's manifest to `src/index.ts`; use `/reload` after
 For an isolated load smoke test that does not use the current session or global links:
 
 ```sh
-for name in goal plan lsp ast-grep request rg todo promptline-editor; do
+for name in goal plan lsp ast-grep hashline request rg todo promptline-editor; do
   pi --no-session -p --extension "$PWD/$name" "Reply with exactly: SMOKE_OK"
 done
 ```
@@ -107,16 +110,17 @@ done
 ## Important Files
 
 - `docs/pi-extension-development.md`: versioned Pi API reference, ecosystem examples, extension design rules, security guidance, and pre-merge checklist; read it before adding or materially changing an extension.
-- `goal/README.md`, `plan/README.md`, `lsp/README.md`, `ast-grep/README.md`, `request/README.md`, `rg/README.md`, `todo/README.md`, `promptline-editor/README.md`: user-facing installation, global symlink integration, usage, configuration, effects, implementation principles, and key code nodes. Keep each aligned with its extension.
+- `goal/README.md`, `plan/README.md`, `lsp/README.md`, `ast-grep/README.md`, `hashline/README.md`, `request/README.md`, `rg/README.md`, `todo/README.md`, `promptline-editor/README.md`: user-facing installation, global symlink integration, usage, configuration, effects, implementation principles, and key code nodes. Keep each aligned with its extension.
 - `themes/README.md`: global palette installation, activation lifecycle, semantic roles, and extension integration contract.
 - `*/package.json`: Pi entry metadata, Node requirement, scripts, and package-local dependencies.
 - `*/tsconfig.json`: shared strict `NodeNext`, `noEmit` TypeScript contract covering `src/**/*.ts` and `test/**/*.ts`.
-- `.github/workflows/ci.yml`: dependency-free theme/link validation, a seven-package general Node 22.19 matrix, a five-tuple ast-grep native matrix, and a gated packed Pi smoke; together they cover all eight extensions.
+- `.github/workflows/ci.yml`: dependency-free theme/link validation, an eight-package general Node 22.19 matrix, a five-tuple ast-grep native matrix, and a gated packed Pi smoke; together they cover all nine extensions.
 - `plan/src/index.ts`, `plan/src/command.ts`, `plan/src/tools.ts`, `plan/src/state.ts`, `plan/src/tool-lease.ts`: Plan lifecycle wiring, user/tool boundaries, state machine, and coexistence-safe active-tool leasing.
 - `goal/src/index.ts`, `goal/src/command.ts`, `goal/src/tools.ts`, `goal/src/state.ts`: Goal lifecycle wiring, user/tool boundaries, persistence, continuation, and accounting rules.
 - `lsp/src/index.ts`, `lsp/src/config.ts`, `lsp/src/server-manager.ts`, `lsp/src/lsp-client.ts`, `lsp/src/tool-sync.ts`: LSP API boundary, layered configuration, routing/lifecycle, protocol transport, and successful edit synchronization.
 - `lsp/src/roots.ts`, `lsp/src/positions.ts`, `lsp/src/format.ts`: workspace confinement, position conversion, and bounded output formatting.
 - `ast-grep/src/index.ts`, `ast-grep/src/runner.ts`, `ast-grep/src/workspace.ts`, `ast-grep/src/edit.ts`: tool wiring, native process control, path traversal/confinement, and preview-bound atomic edit semantics.
+- `hashline/src/index.ts`, `hashline/src/read-tool.ts`, `hashline/src/edit-tool.ts`, `hashline/src/operations.ts`: snapshot lifecycle, read capture, guarded compare-and-set mutation, and deterministic line operations.
 - `rg/src/index.ts`: complete RG extension and exported active-alias replacement helper.
 - `request/src/index.ts`, `request/src/component.ts`, `request/src/adapters.ts`, `request/src/protocol.ts`: Request lifecycle wiring, responsive renderer, native UI compatibility layer, and shared request channel.
 - `todo/src/index.ts`, `todo/src/state.ts`, `todo/src/tools.ts`, `todo/src/persistence.ts`, `todo/src/output.ts`: Todo lifecycle wiring, immutable transitions, bounded tool contract, branch replay, and TUI/model projections.
@@ -131,7 +135,7 @@ done
 - Package manager: npm, evidenced by one lockfile v3 per package. No exact npm version or `packageManager` field is pinned; update the affected package's lockfile when dependencies change.
 - Pi compatibility: common host packages and TypeBox are peer dependencies at `>=0.81.0` and development dependencies for local checking. Keep Pi host libraries as peers rather than ordinary bundled runtime dependencies.
 - `lsp` ships `vscode-jsonrpc` and `vscode-languageserver-protocol`; `ast-grep` ships five exact-pinned `@ast-grep/cli-*` platform packages as optional dependencies. New third-party runtime code belongs in the owning package's `dependencies`; test/type tooling belongs in `devDependencies`.
-- CI contains a dependency-free resource job, a seven-package general matrix, and a five-tuple ast-grep native matrix in `.github/workflows/ci.yml`; together they cover all eight extensions. There is still no repository-level npm package, formatter, linter, bundler, or generated-output workflow; do not invent shared dependency resolution unless deliberately converting to a workspace.
+- CI contains a dependency-free resource job, an eight-package general matrix, and a five-tuple ast-grep native matrix in `.github/workflows/ci.yml`; together they cover all nine extensions. There is still no repository-level npm package, formatter, linter, bundler, or generated-output workflow; do not invent shared dependency resolution unless deliberately converting to a workspace.
 
 ## Testing & QA
 
@@ -143,5 +147,6 @@ Tests use Node's built-in `node:test` runner, `node:assert/strict`, and `tsx`. T
 - Ast-grep tests use isolated workspaces plus fake and pinned-native runners. Cover every accepted platform package and language, trusted config isolation, raw filename/symlink/identity boundaries, traversal/output/heap limits, malformed or flooded CLI streams, scheduler/operation cancellation and shutdown, complete preview fingerprints, all synchronous commit deadline guards, temp/parent/workspace inode races, permissions, and atomic rename failures. Run `npm run release-smoke` for package or release-boundary changes.
 - Request tests drive the real component through tool, native UI, external event, and Goal confirmation paths. Cover single/multi/Other/Review behavior, serialization, abort/timeout/shutdown, headless rejection, fallback semantics, and bounded narrow-terminal rendering.
 - Todo tests cover pure transitions, strict mixed-carrier replay, bounded prompt/output, command and TUI/headless behavior, and Plan/Goal/Request coexistence in both load orders.
-- Run `node themes/validate.mjs` for any palette change and `make pi-links-test` for global-link-manager changes. Run `npm run check` and `npm test` in every affected package. For Plan coordination protocol changes, run Goal, Plan, and Todo plus both coexistence suites; CI repeats the resource gates and all eight package checks from clean installs.
+- Hashline tests cover byte-precise digest/line behavior, strict snapshot replay/LRU, operation conflicts and limits, stale/unseen/path failures, concurrent mutation, cancellation/commit boundaries, symlink/hardlink policy, lifecycle recovery, and Plan/LSP/RG coexistence.
+- Run `node themes/validate.mjs` for any palette change and `make pi-links-test` for global-link-manager changes. Run `npm run check` and `npm test` in every affected package. For Plan coordination protocol changes, run Goal, Plan, and Todo plus both coexistence suites; CI repeats the resource gates and all nine package checks from clean installs.
 - No coverage tool, threshold, skipped-test convention, or focused-test script is configured. Add tests for new observable contracts and plausible regressions; do not assert incidental implementation details merely to increase coverage.

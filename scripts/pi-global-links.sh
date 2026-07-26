@@ -10,7 +10,7 @@ case "$AGENT_DIRECTORY" in
   *) AGENT_DIRECTORY="$PWD/$AGENT_DIRECTORY" ;;
 esac
 
-EXTENSION_NAMES="goal plan lsp ast-grep request rg todo promptline-editor"
+EXTENSION_NAMES="goal plan lsp ast-grep hashline request rg todo promptline-editor"
 
 usage() {
   cat <<'EOF'
@@ -25,8 +25,8 @@ Actions:
   status            Show link and active-theme state (default)
 
 Scopes:
-  all               Eight extensions and every pi-extensions-*.json theme (default)
-  extensions        goal, plan, lsp, ast-grep, request, rg, todo, and promptline-editor
+  all               Nine extensions and every pi-extensions-*.json theme (default)
+  extensions        goal, plan, lsp, ast-grep, hashline, request, rg, todo, and promptline-editor
   themes            Repository-owned global themes
 
 Conflicting files, directories, and foreign symlinks are never overwritten or
