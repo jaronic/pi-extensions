@@ -790,6 +790,7 @@ Hashline 自定义的 validation/state/resource/mutation 失败全部 `throw Err
 | Plan | 工具名仍是 `read`/`edit`，active-tool lease 无需认识新名字；顶层 `path` 继续可用于门禁 |
 | Goal | 无协议耦合；snapshot journal 不注入 Goal prompt，不触发 continuation |
 | Todo/Request | 无事件、UI key、active-tool mutation 或 production import 冲突 |
+| Promptline Editor | 仅接管 editor，不注册或覆盖 `read`/`edit`，可与 Hashline 同时加载 |
 | LSP | 成功 edit 保留 `event.input.path`；标准 `tool_result` 后 LSP 可重新 sync |
 | RG | v1 不覆盖 grep/rg；grep 行号没有 snapshot provenance，编辑前必须 read |
 | 内建 write | 仍使用同一 mutation queue；write 后旧 hashline snapshot 在下一 edit 时 stale |

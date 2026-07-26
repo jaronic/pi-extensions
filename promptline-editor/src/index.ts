@@ -1,15 +1,12 @@
 import {
-	createReadToolDefinition,
 	CustomEditor,
 	type ExtensionAPI,
 	type ExtensionContext,
 	type KeybindingsManager,
-	type ReadToolDetails,
 	type ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, EditorTheme, TUI } from "@earendil-works/pi-tui";
-import { truncateToWidth, visibleWidth, Text } from "@earendil-works/pi-tui";
-import { relative, resolve } from "node:path";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { BranchMonitor } from "./branch.ts";
 
 const SPINNER = ["◐", "◓", "◑", "◒"];
@@ -27,148 +24,6 @@ function compactCwd(cwd: string): string {
 		return `~/${parts.slice(-3).join("/")}`;
 	if (parts.length > 4) return `…/${parts.slice(-4).join("/")}`;
 	return display;
-}
-const readToolCache = new Map<
-	string,
-	ReturnType<typeof createReadToolDefinition>
->();
-
-function getReadTool(cwd: string) {
-	let tool = readToolCache.get(cwd);
-	if (!tool) {
-		tool = createReadToolDefinition(cwd);
-		readToolCache.set(cwd, tool);
-	}
-	return tool;
-}
-function shortenReadPath(path: string, cwd?: string): string {
-	const absolutePath = cwd ? resolve(cwd, path) : resolve(path);
-	let display = path;
-	let relativeMatched = false;
-	if (cwd) {
-		const relativePath = relative(cwd, absolutePath);
-		if (
-			relativePath &&
-			!relativePath.startsWith("..") &&
-			relativePath !== "."
-		) {
-			display = relativePath;
-			relativeMatched = true;
-		}
-	}
-	const home = process.env.HOME;
-	if (!relativeMatched && home && absolutePath.startsWith(home))
-		display = `~${absolutePath.slice(home.length)}`;
-	const normalized = display.replace(/\\/g, "/");
-	const parts = normalized.split("/").filter(Boolean);
-	const prefix = normalized.startsWith("~/")
-		? "~/"
-		: normalized.startsWith("/")
-			? "/"
-			: "";
-	if (parts.length > 4) display = `…/${parts.slice(-4).join("/")}`;
-	else display = `${prefix}${parts.join("/")}` || normalized;
-	if (visibleWidth(display) <= 56) return display;
-	return `…${display.slice(-55).replace(/^\//, "")}`;
-}
-
-function formatReadLineRange(args: Record<string, unknown>): string {
-	const offset = typeof args.offset === "number" ? args.offset : undefined;
-	const limit = typeof args.limit === "number" ? args.limit : undefined;
-	if (offset === undefined && limit === undefined) return "";
-	const start = offset ?? 1;
-	if (limit === undefined) return `:${start}`;
-	return `:${start}-${start + limit - 1}`;
-}
-
-function getReadTargets(args: Record<string, unknown>, cwd?: string): string[] {
-	const lineRange = formatReadLineRange(args);
-	const rawPaths = Array.isArray(args.path)
-		? args.path.filter((value): value is string => typeof value === "string")
-		: typeof args.path === "string"
-			? [args.path]
-			: typeof args.file_path === "string"
-				? [args.file_path]
-				: [];
-	if (rawPaths.length === 0) return ["..."];
-	return rawPaths.map(
-		(rawPath) => `${shortenReadPath(rawPath, cwd)}${lineRange}`,
-	);
-}
-
-function registerCompactReadTool(pi: ExtensionAPI): void {
-	const baseTool = getReadTool(process.cwd());
-	pi.registerTool({
-		name: "read",
-		label: "read",
-		description: baseTool.description,
-		promptSnippet: baseTool.promptSnippet,
-		promptGuidelines: baseTool.promptGuidelines,
-		parameters: baseTool.parameters,
-		renderShell: "self",
-		async execute(toolCallId, params, signal, onUpdate, ctx) {
-			return getReadTool(ctx.cwd).execute(
-				toolCallId,
-				params,
-				signal,
-				onUpdate,
-				ctx,
-			);
-		},
-		renderCall(_args, _theme, context) {
-			return (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-		},
-		renderResult(result, { expanded, isPartial }, theme, context) {
-			const text =
-				(context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			const args = (context.args ?? {}) as Record<string, unknown>;
-			const targets = getReadTargets(args, context.cwd);
-			const content = result.content.find((item) => item.type === "text");
-			const body = content?.type === "text" ? content.text : "";
-			const hasImage = result.content.some((item) => item.type === "image");
-			const details = result.details as ReadToolDetails | undefined;
-			const header =
-				targets.length === 1
-					? `${theme.fg("dim", "read")} ${theme.fg("accent", targets[0])}`
-					: `${theme.fg("dim", "read")} ${theme.fg("accent", `${targets.length} paths`)}`;
-			let summary = header;
-
-			if (isPartial) {
-				text.setText(`${summary}${theme.fg("muted", " …")}`);
-				return text;
-			}
-
-			if (hasImage) summary += theme.fg("muted", " · image");
-			if (body)
-				summary += theme.fg("muted", ` · ${body.split("\n").length} lines`);
-			if (details?.truncation?.truncated)
-				summary += theme.fg("warning", " · truncated");
-			if (context.isError) summary += theme.fg("error", " · error");
-			if (targets.length > 1) {
-				const listedTargets = targets
-					.slice(0, expanded ? targets.length : 4)
-					.map(
-						(target) =>
-							`${theme.fg("dim", "  · ")}${theme.fg("accent", target)}`,
-					);
-				summary += `\n${listedTargets.join("\n")}`;
-				if (!expanded && targets.length > 4)
-					summary += `\n${theme.fg("muted", `  … ${targets.length - 4} more`)}`;
-			}
-			if (!expanded || !body) {
-				text.setText(summary);
-				return text;
-			}
-
-			const preview = body
-				.split("\n")
-				.slice(0, 8)
-				.map((line) => theme.fg(context.isError ? "error" : "dim", line))
-				.join("\n");
-			text.setText(`${summary}\n${preview}`);
-			return text;
-		},
-	});
 }
 
 function stripAnsi(text: string): string {
@@ -291,7 +146,6 @@ export default function promptlineEditor(pi: ExtensionAPI): void {
 	let branch: string | undefined;
 	let branchMonitor: BranchMonitor | undefined;
 	let footerData: ReadonlyFooterDataProvider | undefined;
-	registerCompactReadTool(pi);
 
 	function stopTimer(): void {
 		if (!timer) return;
