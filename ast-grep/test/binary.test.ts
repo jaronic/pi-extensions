@@ -16,6 +16,10 @@ const glibcReport = {
   getReport: () => ({ header: { glibcVersionRuntime: "2.36" } }),
 } as unknown as typeof process.report;
 
+const nonGlibcReport = {
+  getReport: () => ({ header: {} }),
+} as unknown as typeof process.report;
+
 function requirePosixExecutableFixture(t: TestContext): boolean {
   if (process.platform !== "win32") {
     return true;
@@ -48,7 +52,7 @@ test("platform resolver accepts only the pinned supported tuples", () => {
   assert.equal(platformPackage("win32", "x64"), "@ast-grep/cli-win32-x64-msvc");
   assert.equal(platformPackage("linux", "arm64", glibcReport), "@ast-grep/cli-linux-arm64-gnu");
   assert.equal(platformPackage("linux", "x64", glibcReport), "@ast-grep/cli-linux-x64-gnu");
-  assert.throws(() => platformPackage("linux", "x64", undefined), /glibc is required/u);
+  assert.throws(() => platformPackage("linux", "x64", nonGlibcReport), /glibc is required/u);
   assert.throws(() => platformPackage("freebsd", "x64"), /unsupported on freebsd\/x64/u);
   assert.throws(() => platformPackage("darwin", "ppc64"), /unsupported/u);
 });
