@@ -8,6 +8,7 @@ import {
   type ReadToolDetails,
   type ReadToolInput,
 } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { snapshotTokenForBytes } from "./digest.ts";
 import { abortIfNeeded, fail } from "./errors.ts";
 import { assertEditableLineSizes, decodeEditableBytes } from "./lines.ts";
@@ -103,9 +104,21 @@ function textResult(text: string, details: ReadToolDetails | undefined): AgentTo
 
 export function createHashlineReadTool(runtime: HashlineRuntime) {
   const renderer = createReadToolDefinition(process.cwd());
+  const renderCall: NonNullable<typeof renderer.renderCall> = (args, theme, context) => {
+    const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
+    const start = args.offset ?? 1;
+    const range = args.offset === undefined && args.limit === undefined
+      ? ""
+      : args.limit === undefined ? `:${start}` : `:${start}-${start + args.limit - 1}`;
+    text.setText(
+      `${theme.fg("toolTitle", theme.bold("Hashline"))}${theme.fg("muted", " · read ")}${theme.fg("accent", `${args.path}${range}`)}`,
+    );
+    return text;
+  };
   return {
     ...renderer,
     label: "Hashline read",
+    renderCall,
     description: READ_DESCRIPTION,
     promptSnippet: READ_PROMPT_SNIPPET,
     promptGuidelines: [...READ_PROMPT_GUIDELINES],

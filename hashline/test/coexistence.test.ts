@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Type } from "typebox";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import lspExtension from "../../lsp/src/index.ts";
 import planExtension from "../../plan/src/index.ts";
 import { ExtensionHarness, InMemoryPlanArtifactStore } from "../../plan/test/harness.ts";
@@ -28,6 +29,12 @@ for (const hashlineFirst of [true, false]) {
     assert.match(String(editDefinition.description), /previously read lines/);
     assert.equal("label" in readDefinition && readDefinition.label, "Hashline read");
     assert.equal("label" in editDefinition && editDefinition.label, "Hashline edit");
+    const theme = { fg: (_color: string, value: string) => value, bold: (value: string) => value } as never;
+    const context = { lastComponent: undefined } as never;
+    const readCall = (readDefinition as ToolDefinition).renderCall?.({ path: "fixture.txt" } as never, theme, context).render(120).join("\n");
+    const editCall = (editDefinition as ToolDefinition).renderCall?.({ path: "fixture.txt" } as never, theme, context).render(120).join("\n");
+    assert.match(readCall ?? "", /Hashline.*read.*fixture\.txt/);
+    assert.match(editCall ?? "", /Hashline.*edit.*fixture\.txt/);
     assert.ok("renderCall" in editDefinition && typeof editDefinition.renderCall === "function");
     assert.ok("renderResult" in editDefinition && typeof editDefinition.renderResult === "function");
 
