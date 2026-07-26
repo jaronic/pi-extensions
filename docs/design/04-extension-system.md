@@ -409,7 +409,7 @@ sequenceDiagram
 本仓库 Request、Plan、Goal 展示了三种模式：
 
 - Request：一个串行 `RequestCoordinator`，把并发 dialog 排成 promise tail，处理 abort/timeout；
-- Plan：审批 overlay + step widget + keyed footer status；
+- Plan：审批 overlay + keyed footer status；step widget 仅作为无外部 provider 时的本地执行 fallback；
 - Goal：根据持久状态重建 footer，active turn 中刷新耗时。
 
 ```mermaid

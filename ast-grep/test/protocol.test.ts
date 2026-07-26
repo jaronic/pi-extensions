@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { decodeMatch } from "../src/protocol.ts";
-import { normalizeEditInput, normalizeSearchInput } from "../src/schema.ts";
+import { EditParameters, normalizeEditInput, normalizeSearchInput } from "../src/schema.ts";
 
 function rawMatch(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -53,6 +53,18 @@ test("schema normalization applies stable defaults and action contracts", () => 
   });
   assert.equal(preview.maxReplacements, 20);
   assert.equal(preview.timeoutMs, 20_000);
+  assert.deepEqual(EditParameters.required, ["action", "path", "language", "pattern", "rewrite"]);
+  for (const previewId of [null, ""] as const) {
+    const placeholderPreview = normalizeEditInput({
+      action: "preview",
+      path: "sample.ts",
+      language: "typescript",
+      pattern: "foo($A)",
+      rewrite: "bar($A)",
+      previewId,
+    });
+    assert.equal("previewId" in placeholderPreview, false);
+  }
   assert.throws(() => normalizeSearchInput({ pattern: " ", language: "typescript" }), /pattern must not be empty/u);
   assert.throws(() => normalizeSearchInput({ pattern: "x", language: "typescript", path: "~/src" }), /does not expand '~'/u);
   assert.throws(() => normalizeSearchInput({ pattern: "x", language: "typescript", path: "https://example.test/x" }), /filesystem path/u);
@@ -64,7 +76,7 @@ test("schema normalization applies stable defaults and action contracts", () => 
     pattern: "x",
     rewrite: "y",
     previewId: "a".repeat(64),
-  }), /preview must not include previewId/u);
+  }), /preview must omit previewId/u);
   assert.throws(() => normalizeEditInput({
     action: "apply",
     path: "sample.ts",
@@ -72,6 +84,16 @@ test("schema normalization applies stable defaults and action contracts", () => 
     pattern: "x",
     rewrite: "y",
   }), /apply requires previewId/u);
+  for (const previewId of [null, ""] as const) {
+    assert.throws(() => normalizeEditInput({
+      action: "apply",
+      path: "sample.ts",
+      language: "typescript",
+      pattern: "x",
+      rewrite: "y",
+      previewId,
+    }), /apply requires previewId/u);
+  }
 });
 
 test("protocol decoder accepts bounded search and rewrite records", () => {

@@ -2,9 +2,9 @@ export const PLAN_COORDINATION_CHANNEL = "pi-extensions:plan-state:v1";
 export const GOAL_STATE_TYPE = "goal-state-v1";
 export const GOAL_CONTINUATION_TYPE = "goal-continuation-v1";
 
-export type CoordinatedPlanPhase = "off" | "planning" | "awaitingClarification" | "awaitingApproval" | "blocked" | "executing";
+export type CoordinatedPlanPhase = "off" | "planning" | "awaitingApproval" | "blocked" | "executing";
 
-const PLAN_PHASES: readonly CoordinatedPlanPhase[] = ["off", "planning", "awaitingClarification", "awaitingApproval", "blocked", "executing"];
+const PLAN_PHASES: readonly CoordinatedPlanPhase[] = ["off", "planning", "awaitingApproval", "blocked", "executing"];
 
 export interface PlanCoordinationSignal {
   version: 1;

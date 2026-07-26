@@ -100,7 +100,7 @@ stateDiagram-v2
 
 Goal 通过 `pi.events` 监听 Plan 的版本化协调信号：
 
-- Plan 处于 `planning`、`awaitingClarification`、`awaitingApproval` 或 `blocked` 时，Goal 保持状态但不自动执行，也不暴露 `update_goal`；`blocked` 会一直保持该门控，直到用户补齐 Plan 前提或指定替代方向并由 `/plan resume` 恢复规划，或取消 Plan。
+- Plan 处于 `planning`、`awaitingApproval` 或 `blocked` 时，Goal 保持状态但不自动执行，也不暴露 `update_goal`；规划期通过外部 Request `ask` 进行的问答不改变 Plan phase。`blocked` 会一直保持该门控，直到用户补齐 Plan 前提或指定替代方向并由 `/plan resume` 恢复规划，或取消 Plan。
 - `/plan approve` 恢复执行工具并由 Plan 排队执行轮，Goal 不额外重复排队。
 - `/plan cancel` 保持 Goal active；Plan 不再阻塞且无需发起 Plan turn 时，Goal 依既有门控规则续跑。
 - Goal 与 Plan 通过 session ID 隔离信号，避免其他 session 的 Plan 状态污染当前目标。

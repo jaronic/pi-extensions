@@ -114,7 +114,7 @@ ln -sfn "$PWD" "$HOME/.pi/agent/extensions/ast-grep"
 | `strictness` | `smart` | 与 search 相同。 |
 | `maxReplacements` | `20` | 1–50；限制dedupe/no-op归一化后的有效替换，超过即零写入失败；raw CLI records另有固定50条硬上限。 |
 | `timeoutMs` | `20000` | 1000–120000 ms。 |
-| `previewId` | 无 | Preview 禁止传入；apply 必须传入 64 位 lower-case hex。 |
+| `previewId` | 无 | Preview 默认省略；若工具适配器强制填充该字段，只接受 `null` 或空字符串 placeholder，并在执行前移除。非空值仅供 apply 使用，且必须是 64 位 lower-case hex。 |
 
 正确流程：
 
@@ -153,7 +153,7 @@ Atomic rename 若抛错，扩展不会直接猜测失败：只有 target 的全�
 
 ## 共存
 
-- Plan 的 planning、clarification、approval 和 blocked 只允许只读 `ast_grep_search`；`ast_grep_edit` 仅在执行阶段恢复。
+- Plan 的 planning、approval 和 blocked 只允许只读 `ast_grep_search`；`ast_grep_edit` 仅在执行阶段恢复。
 - LSP 只在成功返回严格 v1 `edit-apply` details 后，以 details 中未经显示转义的 canonical workspace-relative path 同步已启动的 client；preview、错误或 malformed details 不触发同步。
 - 插件不监听 Goal/Todo/Request channel，不修改它们的状态。
 - 后加载的第三方 extension 若注册同名工具，Pi 没有原子 name reservation；不要共载其他 `ast_grep_search`/`ast_grep_edit` provider。

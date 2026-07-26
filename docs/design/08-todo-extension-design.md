@@ -148,7 +148,7 @@ flowchart TB
 
 - 普通 board 的持久事实源：扫描当前 branch 得到最高有效 `sequence` 的 `TodoSnapshot`；候选来自成功 `todo` tool result details v1、legacy `todo-state-v1` command entry 或当前 `todo-state-v2` command/service entry，同 sequence 必须指向相同 state。
 - Managed Plan progress 的持久事实源：`todo-managed-progress-v1` custom entry 中当前 session/execution 的最后一个严格有效 state；它保存 approved step definitions、mutable status、revision 和最后 request ID，不使用普通 board 的 sequence、boardId 或数字 task ID。
-- Plan v3 state 只持久化 immutable step definitions 与外部 owner/execution 引用；外部 mutable snapshot 由选中的 provider 持久化。两边不会同时写同一 status。
+- Plan v4 state 只持久化 immutable step definitions 与外部 owner/execution 引用；外部 mutable snapshot 由选中的 provider 持久化。两边不会同时写同一 status。
 - 运行时分别保有不可变 `TodoSnapshot` 与 `ManagedProgressState | null`；phase/owner 决定哪一个投影到 `setStatus("todo")`、`setWidget("todo")` 和 `before_agent_start`。
 - 普通 board 的 agent tool 由 Pi 持久化成功 `TodoToolDetails.state`；用户命令与 service mutation 在返回成功前由 `pi.appendEntry()` 写 v2 state entry。Managed provider 同样先 append 自己的 custom entry，再切换 closure state。
 - UI、prompt、renderer 和 service response 都不是独立状态存储；外部文件仍不写入。
@@ -622,7 +622,7 @@ Provider 只接受 active session 的精确 `sessionId`；`session_start/session
 - settled：`Todo 6/7 · settled · 1 dropped`；全完成且无 dropped 用 `success`；
 - empty：清除 status。
 - future-version barrier：`Todo unavailable · newer state vN`，颜色 `error`；不显示旧进度。
-- managed Plan owner：`Todo · Plan 1/4 · step-2 Implement`；完成/阻塞计数使用同一 semantic `accent`/`success`/`warning`，不显示普通 board 计数。
+- managed Plan owner：`Todo · Plan 1/4 · #2 Implement`；完成/阻塞计数使用同一 semantic `accent`/`success`/`warning`，不显示普通 board 计数。`#2` 是用户可读的顺序号；provider 和 `update_plan_step` 仍使用 Plan step ID。
 
 分母始终是当前 board 累计记录过的 task 总数（包括 append 与 dropped tombstone），`dropped` 单列，不伪装成 completed。
 
@@ -636,7 +636,7 @@ Provider 只接受 active session 的精确 `sessionId`；`session_start/session
 4. blocked 项及截断 reason；
 5. `… N more` 汇总。
 
-Managed 模式仍使用同一个 `todo` component factory：heading 为 `Todo · Plan · completed/total`，按“当前 inProgress → pending → blocked”显示 Plan step ID 与文本，不列 completed；最多 12 行。Plan 同时移除自己的步骤 widget，因此 UI 只有一个 mutable progress projection。
+Managed 模式仍使用同一个 `todo` component factory：heading 为 `Todo · Plan · completed/total`，按“当前 inProgress → pending → blocked”显示普通 Todo 风格的 `#N` 顺序号与文本，不列 completed；执行 prompt 和 `update_plan_step` 继续使用 Plan step ID；最多 12 行。Plan 同时移除自己的步骤 widget，因此 UI 只有一个 mutable progress projection。
 
 默认不列 completed/dropped 详情；刚完成项由 tool result 留在 transcript，footer 保留计数。这样不会让长期看板垂直增长。
 
@@ -832,7 +832,6 @@ Phase channel 保存当前 session 的最后信号并控制普通 board gate。P
 | --- | --- | --- |
 | `off` | 正常读写、prompt、footer/widget | 应已 close；残留 state 不投影 |
 | `planning` | `view/get` 可读，mutation 拒绝；隐藏 prompt/UI | 不创建 |
-| `awaitingClarification` | 同上 | 不创建 |
 | `awaitingApproval` | 同上 | `open` 可在显式批准事务中创建，但在 phase 变为 executing 前不投影 |
 | `blocked` | `view/get` 可读，mutation 拒绝；隐藏 prompt/UI，等待用户补充前提或替代方向 | 不创建 |
 | `executing`，Todo 未被选中 | `view/get` 可读，mutation 拒绝；隐藏 prompt/UI | 不创建/不投影 |
@@ -840,7 +839,7 @@ Phase channel 保存当前 session 的最后信号并控制普通 board gate。P
 
 Runtime gate 与 Plan tool lease 是两层独立保护；agent 和 `/todos clear|reopen` mutation 都必须拒绝。`/todos status` 仍只读展示冻结的普通 board；`show/hide/toggle` 的进程内偏好同时控制 managed widget 可见性，但不改变 owner/state。
 
-所有 mutable status 只存在 provider ledger；Plan v3 state 保存 immutable definitions 和 owner reference。Agent 的唯一 API 是 `update_plan_step`，Plan 转发并严格验证完整 snapshot。Plan footer 显示 owner 且关闭本地步骤 widget；Todo 使用自己的 UI key。完成或取消时 Plan 先持久化 terminal tombstone并广播 `off`，Todo 立即恢复普通 board；随后 best-effort `close` append null。Provider read/update unavailable 或返回坏 snapshot 必须显式失败，不能静默创建本地副本；terminal close 失败只警告且残留 state 不投影。
+所有 mutable status 只存在 provider ledger；Plan v4 state 保存 immutable definitions 和 owner reference。Agent 的唯一 API 是 `update_plan_step`，Plan 转发并严格验证完整 snapshot。Plan footer 显示 owner 且关闭本地步骤 widget；Todo 使用自己的 UI key。完成或取消时 Plan 先持久化 terminal tombstone并广播 `off`，Todo 立即恢复普通 board；随后 best-effort `close` append null。Provider read/update unavailable 或返回坏 snapshot 必须显式失败，不能静默创建本地副本；terminal close 失败只警告且残留 state 不投影。
 
 这是已落地的单向所有权转移，不是把 Plan steps 复制到普通 Todo board。若普通 board 有“执行经批准方案”父任务，Plan 退出后 agent 再依据整体结果更新该普通任务。
 

@@ -220,7 +220,7 @@ Server patch 除 `initOptions` 外是浅合并。修改嵌套对象时应提供�
 
 ## 与 Plan、Goal 和 Todo 的关系
 
-- Plan 的 `planning`、`awaitingClarification`、`awaitingApproval` 只读 allowlist 显式允许 `lsp` 与 `ast_grep_search`，不允许 `ast_grep_edit`。Navigation、diagnostics、symbols、rename preview 和 code-action preview 不写工作区；批准进入执行期后，各工具是否继续可用取决于进入 Plan 前的有效工具集。
+- Plan 的 `planning`、`awaitingApproval` 只读 allowlist 显式允许 `lsp` 与 `ast_grep_search`，不允许 `ast_grep_edit`。规划期 Request `ask` 不改变 Plan phase。Navigation、diagnostics、symbols、rename preview 和 code-action preview 不写工作区；批准进入执行期后，各工具是否继续可用取决于进入 Plan 前的有效工具集。
 - LSP 不监听 Plan/Goal/Todo channel，也不调用 `pi-extensions:todo-service:v1`。Goal continuation 和普通 Todo 工作流可以使用模型当前可见的 `lsp` 工具，但 diagnostics、references 或 preview 结果不会自动改变 Goal、Plan step 或 Todo task 状态。
 - Todo 不接管 LSP client 生命周期；Plan 的 tool lease 只影响工具可见性，Todo 的 progress provider 只影响进度投影，已启动 client 仍由 LSP 自己在 idle、session reload 和 shutdown 时清理。
 

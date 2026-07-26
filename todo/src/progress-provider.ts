@@ -384,6 +384,12 @@ function progressCounts(state: ManagedProgressState): Record<ManagedProgressStat
   return counts;
 }
 
+function managedStepLabel(state: ManagedProgressState, step: ManagedProgressStep): string {
+  const index = state.steps.indexOf(step);
+  if (index < 0) throw new Error("Managed progress step is not part of its state.");
+  return `#${index + 1}`;
+}
+
 export function managedProgressFooter(state: ManagedProgressState): { text: string; color: "accent" | "warning" | "success" } {
   const counts = progressCounts(state);
   const active = state.steps.find((step) => step.status === "inProgress");
@@ -392,7 +398,7 @@ export function managedProgressFooter(state: ManagedProgressState): { text: stri
     return { text: `Todo · Plan ${counts.completed}/${state.steps.length} · ${counts.blocked} blocked`, color: "warning" };
   }
   return {
-    text: `Todo · Plan ${counts.completed}/${state.steps.length}${active ? ` · ${active.id} ${active.text}` : ""}`,
+    text: `Todo · Plan ${counts.completed}/${state.steps.length}${active ? ` · ${managedStepLabel(state, active)} ${active.text}` : ""}`,
     color: "accent",
   };
 }
@@ -411,7 +417,7 @@ export function managedProgressWidget(state: ManagedProgressState, theme: Theme,
   for (const step of visible) {
     const symbol = step.status === "inProgress" ? "→" : step.status === "blocked" ? "!" : "·";
     const color = step.status === "inProgress" ? "accent" : step.status === "blocked" ? "warning" : "dim";
-    lines.push(truncateToWidth(`${theme.fg(color, symbol)} ${theme.fg("accent", step.id)} ${theme.fg(step.status === "inProgress" ? "text" : "muted", step.text)}`, width, ""));
+    lines.push(truncateToWidth(`${theme.fg(color, symbol)} ${theme.fg("accent", managedStepLabel(state, step))} ${theme.fg(step.status === "inProgress" ? "text" : "muted", step.text)}`, width, ""));
   }
   if (ordered.length > visible.length && lines.length < MAX_WIDGET_ROWS) {
     lines.push(theme.fg("dim", `… ${ordered.length - visible.length} more`));

@@ -60,6 +60,7 @@ test("Todo managed progress is durable, idempotent, and separate from the ordina
     ],
   });
   assert.equal(commits.length, 2);
+  assert.match(managedProgressFooter(state!).text, /#1 Inspect/);
 
   assert.deepEqual(await provider.update({
     sessionId: "session",

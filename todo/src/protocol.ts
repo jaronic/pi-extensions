@@ -3,7 +3,6 @@ export const PLAN_COORDINATION_CHANNEL = "pi-extensions:plan-state:v1";
 export type CoordinatedPlanPhase =
   | "off"
   | "planning"
-  | "awaitingClarification"
   | "awaitingApproval"
   | "blocked"
   | "executing";
@@ -21,7 +20,6 @@ export interface PlanCoordinationSignal {
 const PLAN_PHASES: readonly CoordinatedPlanPhase[] = [
   "off",
   "planning",
-  "awaitingClarification",
   "awaitingApproval",
   "blocked",
   "executing",

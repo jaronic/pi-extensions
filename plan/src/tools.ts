@@ -1,7 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { boundPlanText, renderPlan, summarizePlanState } from "./output.ts";
+import { boundPlanText, renderPlan, renderPlanStepUpdate, summarizePlanState } from "./output.ts";
 import {
-  requestPlanChoice,
   reportPlanBlocked,
   submitPlan,
   type PlanJournalEntry,
@@ -10,8 +9,6 @@ import {
   type PlanStepStatus,
 } from "./state.ts";
 import {
-  AnswerPlanChoiceParams,
-  RequestPlanChoiceParams,
   SubmitPlanParams,
   ReportPlanBlockedParams,
   UpdatePlanStepParams,
@@ -19,7 +16,6 @@ import {
 
 export interface PlanToolRuntime {
   getState(): PlanState | null;
-  setState(next: PlanState): void;
   commitSubmittedPlan(
     current: PlanState,
     candidate: PlanState,
@@ -33,7 +29,6 @@ export interface PlanToolRuntime {
     willTriggerTurn: boolean,
     reason: string,
   ): void;
-  answerChoiceAndQueue(selection: number, ctx: ExtensionContext): PlanState;
   updateStep(
     requestId: string,
     id: string,
@@ -99,67 +94,6 @@ export function registerPlanTools(pi: ExtensionAPI, runtime: PlanToolRuntime): v
     },
   });
 
-  pi.registerTool({
-    name: "request_plan_choice",
-    label: "Request Plan Choice",
-    description: "Pause read-only planning for a material user decision with 2 to 5 selectable options.",
-    promptSnippet: "Request a material planning choice from the user",
-    promptGuidelines: [
-      "Resolve questions from repository evidence before asking the user.",
-      "Use only for a material decision with distinct options that would change the submitted plan.",
-      "Provide 2 to 5 concise options with tradeoffs in their descriptions.",
-    ],
-    parameters: RequestPlanChoiceParams,
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      signal?.throwIfAborted();
-      const current = runtime.getState();
-      if (!current || current.phase !== "planning") {
-        throw new Error("Plan mode is not in its planning phase.");
-      }
-      const responseState = requestPlanChoice(current, params);
-      runtime.setState(responseState);
-      runtime.persistActive("clarify", ctx, false, "clarification-requested");
-      const choiceText = ctx.mode === "tui"
-        ? "Plan needs a user decision. The choice dialog opens after this turn settles."
-        : `${renderPlan(responseState)}\n\nReply with one option number, then call answer_plan_choice.`;
-      const bounded = boundPlanText(choiceText);
-      return {
-        content: [{ type: "text", text: bounded.text }],
-        details: summarizePlanState(responseState, false, bounded.truncation),
-        terminate: true,
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "answer_plan_choice",
-    label: "Answer Plan Choice",
-    description: "Record the user's one-based answer to a pending Plan choice and resume read-only planning.",
-    promptSnippet: "Record the user's pending Plan choice",
-    promptGuidelines: [
-      "Use only after the user explicitly identifies one pending option number.",
-      "Do not infer a choice from ambiguous text; ask the user to choose a number instead.",
-    ],
-    parameters: AnswerPlanChoiceParams,
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      signal?.throwIfAborted();
-      const current = runtime.getState();
-      if (!current || current.phase !== "awaitingClarification") {
-        throw new Error("No Plan choice is awaiting an answer.");
-      }
-      const responseState = runtime.answerChoiceAndQueue(params.selection - 1, ctx);
-      const selected = responseState.clarification?.options[params.selection - 1];
-      if (!selected) throw new Error("Selected Plan choice was unexpectedly unavailable.");
-      const bounded = boundPlanText(
-        `Plan choice ${params.selection} recorded: ${selected.label}. Read-only planning resumes after this turn settles.`,
-      );
-      return {
-        content: [{ type: "text", text: bounded.text }],
-        details: summarizePlanState(responseState, false, bounded.truncation),
-        terminate: true,
-      };
-    },
-  });
 
   pi.registerTool({
     name: "update_plan_step",
@@ -174,16 +108,9 @@ export function registerPlanTools(pi: ExtensionAPI, runtime: PlanToolRuntime): v
         throw new Error("No approved plan is currently executing.");
       }
       const updated = await runtime.updateStep(toolCallId, params.id, params.status, signal, ctx);
-      if (updated.complete) {
-        return {
-          content: [{ type: "text", text: "All approved plan steps are complete; Plan mode exited." }],
-          details: summarizePlanState(updated.state, true, undefined, updated.progress),
-        };
-      }
-      const bounded = boundPlanText(renderPlan(updated.state, updated.progress));
       return {
-        content: [{ type: "text", text: bounded.text }],
-        details: summarizePlanState(updated.state, false, bounded.truncation, updated.progress),
+        content: [{ type: "text", text: renderPlanStepUpdate(updated.state, params.id, updated.progress) }],
+        details: summarizePlanState(updated.state, updated.complete, undefined, updated.progress),
       };
     },
   });

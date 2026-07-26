@@ -4,7 +4,7 @@ import goalExtension from "../../goal/src/index.ts";
 import planExtension from "../../plan/src/index.ts";
 import requestExtension from "../../request/src/index.ts";
 import todoExtension from "../src/index.ts";
-import { PLAN_COORDINATION_CHANNEL, type PlanCoordinationSignal } from "../src/protocol.ts";
+import { decodePlanCoordinationSignal, PLAN_COORDINATION_CHANNEL, type PlanCoordinationSignal } from "../src/protocol.ts";
 import { TodoHarness } from "./harness.ts";
 
 const BOARD = "00000000-0000-4000-8000-000000000051";
@@ -34,12 +34,24 @@ function planSignal(sessionId: string, phase: PlanCoordinationSignal["phase"]): 
     version: 1,
     sessionId,
     phase,
-    readOnly: phase === "planning" || phase === "awaitingClarification" || phase === "awaitingApproval" || phase === "blocked",
+    readOnly: phase === "planning" || phase === "awaitingApproval" || phase === "blocked",
     awaitingApproval: phase === "awaitingApproval",
     willTriggerTurn: false,
     reason: "test",
   };
 }
+
+test("removed Plan clarification phase is rejected by the coordination decoder", () => {
+  assert.equal(decodePlanCoordinationSignal({
+    version: 1,
+    sessionId: "session",
+    phase: "awaitingClarification",
+    readOnly: true,
+    awaitingApproval: false,
+    willTriggerTurn: false,
+    reason: "legacy",
+  }), undefined);
+});
 
 for (const order of ["todo-first", "plan-first"] as const) {
   test(`Plan coexistence freezes Todo mutation and restores it (${order})`, async () => {
@@ -81,6 +93,47 @@ for (const order of ["todo-first", "plan-first"] as const) {
   });
 }
 
+test("Plan delegates planning questions to the external Request ask tool", async () => {
+  const harness = new TodoHarness({
+    initialTools: ["read", "grep", "find", "ls", "bash", "edit", "write"],
+  });
+  loadTodo(harness);
+  requestExtension(harness.api);
+  loadPlan(harness);
+  await harness.startSession();
+  await harness.command("plan");
+
+  assert.ok(harness.getActiveTools().includes("ask"));
+  assert.equal(harness.getActiveTools().includes("request_plan_choice"), false);
+  assert.equal(harness.getActiveTools().includes("answer_plan_choice"), false);
+  harness.queueCustomDialog("\u001b[B", "\r");
+  const answer = await harness.executeTool("ask", {
+    questions: [{
+      id: "path",
+      question: "Which implementation path?",
+      options: [{ label: "First" }, { label: "Second" }],
+      recommended: 0,
+    }],
+  });
+  assert.equal(answer.content[0]?.text, "User selected: Second");
+
+  const actionsAfterAsk = harness.entries.flatMap((entry) => {
+    if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== "plan-state-v4") return [];
+    return isRecord(entry.data) && typeof entry.data.action === "string" ? [entry.data.action] : [];
+  });
+  assert.deepEqual(actionsAfterAsk, ["start"]);
+  await harness.executeTool("submit_plan", {
+    summary: "Use the selected path",
+    plan: "Implement the path selected through Request.",
+    steps: ["Implement"],
+  });
+  const actionsAfterSubmit = harness.entries.flatMap((entry) => {
+    if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== "plan-state-v4") return [];
+    return isRecord(entry.data) && typeof entry.data.action === "string" ? [entry.data.action] : [];
+  });
+  assert.deepEqual(actionsAfterSubmit, ["start", "submit"]);
+});
+
 for (const order of ["todo-first", "plan-first"] as const) {
   test(`Todo owns approved Plan progress without duplicating its ordinary board (${order})`, async () => {
     const harness = new TodoHarness({
@@ -116,7 +169,8 @@ for (const order of ["todo-first", "plan-first"] as const) {
     assert.equal(prompt.systemPrompt.includes("<untrusted_todo_state"), false);
 
     await harness.executeTool("update_plan_step", { id: "step-1", status: "inProgress" }, { toolCallId: "progress-1" });
-    assert.match(harness.statuses.get("todo") ?? "", /step-1 Inspect/);
+    assert.match(harness.statuses.get("todo") ?? "", /#1 Inspect/);
+    assert.match(harness.widgets.get("todo")?.join("\n") ?? "", /#1.*Inspect/);
     await harness.executeTool("update_plan_step", { id: "step-1", status: "completed" }, { toolCallId: "progress-2" });
     assert.match(harness.statuses.get("todo") ?? "", /Plan 1\/2/);
     await harness.executeTool("update_plan_step", { id: "step-2", status: "completed" }, { toolCallId: "progress-3" });

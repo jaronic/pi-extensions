@@ -38,7 +38,7 @@ function scriptedStream(model, context) {
       const step = toolResultCount(context);
       const calls = [
         { name: "ast_grep_search", arguments: { path: "sample.ts", language: "typescript", pattern: "oldName($A)" } },
-        { name: "ast_grep_edit", arguments: { action: "preview", path: "sample.ts", language: "typescript", pattern: "oldName($A)", rewrite: "newName($A)" } },
+        { name: "ast_grep_edit", arguments: { action: "preview", path: "sample.ts", language: "typescript", pattern: "oldName($A)", rewrite: "newName($A)", previewId: null } },
         { name: "write", arguments: { path: "sample.ts", content: "// concurrent change\nconst value = oldName(first);\n" } },
         { name: "ast_grep_edit", arguments: { action: "apply", path: "sample.ts", language: "typescript", pattern: "oldName($A)", rewrite: "newName($A)", previewId: step >= 3 ? previewId(context) : "" } },
         { name: "write", arguments: { path: "sample.ts", content: "const value = oldName(first);\n" } },

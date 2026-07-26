@@ -5,7 +5,7 @@ import type { PlanState } from "../src/state.ts";
 
 function state(phase: PlanState["phase"], plan?: string): PlanState {
   return {
-    version: 3,
+    version: 4,
     phase,
     plan,
     steps: phase === "executing"
@@ -20,7 +20,7 @@ function state(phase: PlanState["phase"], plan?: string): PlanState {
   };
 }
 
-test("planning prompt defines evidence, clarification, and submission contracts", () => {
+test("planning prompt delegates clarification and defines submission contracts", () => {
   const prompt = planSystemPrompt(state("planning"));
 
   assert.match(prompt, /Plan mode does not depend on Goal mode/);
@@ -31,6 +31,8 @@ test("planning prompt defines evidence, clarification, and submission contracts"
   assert.match(prompt, /2 to 5 concrete, mutually distinct options/);
   assert.match(prompt, /Preserve a free-text choice/);
   assert.match(prompt, /Never ask for information that can be obtained from these sources/);
+  assert.match(prompt, /external Request extension's ask tool/);
+  assert.doesNotMatch(prompt, /request_plan_choice|answer_plan_choice|awaitingClarification/);
   assert.match(prompt, /call submit_plan exactly once/);
   assert.match(prompt, /map one-to-one to the top-level implementation phases/);
   assert.match(prompt, /report_plan_blocked exactly once/);

@@ -144,7 +144,6 @@ test("Goal and Plan coexist through planning, approval, execution, and continuat
     "get_goal",
     "submit_plan",
     "report_plan_blocked",
-    "request_plan_choice",
   ]);
 
   for (const toolName of ["bash", "edit", "write", "unknown_writer", "update_goal"]) {
@@ -177,7 +176,7 @@ test("Goal and Plan coexist through planning, approval, execution, and continuat
     steps: ["Inspect", "Implement", "Verify"],
   });
   assert.equal(harness.statuses.get("plan"), "Plan");
-  assert.deepEqual(harness.widgets.get("plan"), ["· step-1 Inspect", "· step-2 Implement", "· step-3 Verify"]);
+  assert.equal(harness.widgets.get("plan"), undefined);
   assert.deepEqual(harness.getActiveTools(), ["read", "grep", "find", "ls", "create_goal", "get_goal"]);
   assert.equal(
     blockedDecision(
@@ -189,7 +188,7 @@ test("Goal and Plan coexist through planning, approval, execution, and continuat
   harness.clearPendingMessages();
   await harness.command("plan", "approve");
   assert.equal(harness.statuses.get("plan"), "Plan");
-  assert.deepEqual(harness.widgets.get("plan"), ["· step-1 Inspect", "· step-2 Implement", "· step-3 Verify"]);
+  assert.deepEqual(harness.widgets.get("plan"), ["· #1 Inspect", "· #2 Implement", "· #3 Verify"]);
   assert.equal(harness.sentMessages.length, 2, "approval queues only the structured execution turn");
   for (const toolName of ["bash", "edit", "write", "unknown_writer", "update_goal", "update_plan_step"]) {
     assert.ok(harness.getActiveTools().includes(toolName), `${toolName} must be active during approved execution`);
@@ -295,7 +294,6 @@ test("mode switches settle the current agent before queuing the next phase", asy
     "get_goal",
     "submit_plan",
     "report_plan_blocked",
-    "request_plan_choice",
   ]);
 
   harness.releaseWaitForIdle();
@@ -623,7 +621,7 @@ test("submit_plan returns a compact summary before awaiting explicit approval", 
   assert.equal(harness.widgets.get("plan"), undefined);
 
   await harness.command("plan");
-  assert.deepEqual(harness.getActiveTools(), ["read", "grep", "find", "ls", "submit_plan", "report_plan_blocked", "request_plan_choice"]);
+  assert.deepEqual(harness.getActiveTools(), ["read", "grep", "find", "ls", "submit_plan", "report_plan_blocked"]);
   assert.equal(harness.statuses.get("plan"), "Plan");
   assert.equal(harness.widgets.get("plan"), undefined);
   harness.clearPendingMessages();
@@ -648,7 +646,7 @@ test("submit_plan returns a compact summary before awaiting explicit approval", 
   if (typeof details.planPath !== "string") throw new Error("Submitted Plan details must expose an artifact path.");
   assert.equal(approvalPreview.includes(details.planPath), false);
   assert.equal(harness.statuses.get("plan"), "Plan");
-  assert.deepEqual(harness.widgets.get("plan"), ["· step-1 Implement and verify"]);
+  assert.equal(harness.widgets.get("plan"), undefined);
 
   const messagesBeforeResume = harness.sentMessages.length;
   const abortsBeforeResume = harness.abortCount;
@@ -662,9 +660,14 @@ test("submit_plan returns a compact summary before awaiting explicit approval", 
 
   await harness.command("plan", "approve");
   assert.equal(harness.statuses.get("plan"), "Plan");
-  assert.deepEqual(harness.widgets.get("plan"), ["· step-1 Implement and verify"]);
-  await harness.tool("update_plan_step", { id: "step-1", status: "inProgress" });
-  assert.deepEqual(harness.widgets.get("plan"), ["→ step-1 Implement and verify"]);
+  assert.deepEqual(harness.widgets.get("plan"), ["· #1 Implement and verify"]);
+  const stepUpdate = await harness.tool("update_plan_step", { id: "step-1", status: "inProgress" });
+  assert.ok(stepUpdate && typeof stepUpdate === "object" && "content" in stepUpdate);
+  assert.ok(Array.isArray(stepUpdate.content));
+  const stepUpdateContent = stepUpdate.content[0];
+  assert.ok(stepUpdateContent && typeof stepUpdateContent === "object" && "text" in stepUpdateContent);
+  assert.equal(stepUpdateContent.text, "Started #1: Implement and verify.\nProgress: 0/1 completed · 0 blocked.");
+  assert.deepEqual(harness.widgets.get("plan"), ["→ #1 Implement and verify"]);
   await harness.tool("update_plan_step", { id: "step-1", status: "completed" });
   assert.equal(harness.statuses.get("plan"), undefined);
   assert.equal(harness.widgets.get("plan"), undefined);
@@ -712,6 +715,7 @@ test("/plan review reopens a submitted plan after Stay and can approve it", asyn
   assert.equal(harness.notifications.at(-1)?.message, "Plan remains awaiting approval.");
   assert.equal(harness.sentMessages.length, messagesBeforeReview);
   assert.deepEqual(harness.getActiveTools(), ["read", "grep", "find", "ls"]);
+  assert.equal(harness.widgets.get("plan"), undefined);
 
   harness.setCustomResponses("Execute plan");
   await harness.command("plan", "review");
@@ -829,7 +833,7 @@ test("submit_plan returns without waiting and remains recoverable until an expli
   assert.equal(harness.sentMessages.length, messagesBeforeSubmission);
   assert.deepEqual(harness.getActiveTools(), ["read", "grep", "find", "ls"]);
   assert.equal(harness.statuses.get("plan"), "Plan");
-  assert.match(harness.widgets.get("plan")?.[0] ?? "", /^· step-1 Execute$/);
+  assert.equal(harness.widgets.get("plan"), undefined);
 
   await harness.command("plan", "approve");
   assert.ok(harness.getActiveTools().includes("update_plan_step"));
@@ -946,7 +950,7 @@ test("artifact persistence failures roll back planning state and retry safely", 
   await harness.command("plan");
   const submission = { summary: "Transactional", plan: "## Transactional", steps: ["Verify"] };
   const submitEntries = () => harness.entries.filter((entry) => {
-    return entry.customType === "plan-state-v3"
+    return entry.customType === "plan-state-v4"
       && entry.data && typeof entry.data === "object"
       && "action" in entry.data && entry.data.action === "submit";
   });
@@ -982,7 +986,7 @@ test("artifact persistence rejects concurrent and stale Plan submissions", async
   deferred.resolve();
   await first;
   const submitEntries = harness.entries.filter((entry) => {
-    return entry.customType === "plan-state-v3"
+    return entry.customType === "plan-state-v4"
       && entry.data && typeof entry.data === "object"
       && "action" in entry.data && entry.data.action === "submit";
   });
@@ -1001,7 +1005,7 @@ test("artifact persistence rejects concurrent and stale Plan submissions", async
   await assert.rejects(staleSubmission, /Plan state changed while the submitted Plan was being persisted\./);
   assert.equal(staleStore.files.size, 0);
   assert.equal(
-    staleHarness.entries.some((entry) => entry.customType === "plan-state-v3" && entry.data && typeof entry.data === "object" && "action" in entry.data && entry.data.action === "submit"),
+    staleHarness.entries.some((entry) => entry.customType === "plan-state-v4" && entry.data && typeof entry.data === "object" && "action" in entry.data && entry.data.action === "submit"),
     false,
   );
 });
@@ -1017,24 +1021,24 @@ test("Plan step journal failures preserve the prior executable state and retry s
     steps: ["Verify"],
   });
   await harness.command("plan", "approve");
-  assert.deepEqual(harness.widgets.get("plan"), ["· step-1 Verify"]);
+  assert.deepEqual(harness.widgets.get("plan"), ["· #1 Verify"]);
 
   harness.failNextAppendEntry(new Error("step append failed"));
   await assert.rejects(
     harness.tool("update_plan_step", { id: "step-1", status: "inProgress" }),
     /step append failed/,
   );
-  assert.deepEqual(harness.widgets.get("plan"), ["· step-1 Verify"]);
+  assert.deepEqual(harness.widgets.get("plan"), ["· #1 Verify"]);
   assert.ok(harness.getActiveTools().includes("update_plan_step"));
 
   await harness.tool("update_plan_step", { id: "step-1", status: "inProgress" });
-  assert.deepEqual(harness.widgets.get("plan"), ["→ step-1 Verify"]);
+  assert.deepEqual(harness.widgets.get("plan"), ["→ #1 Verify"]);
   harness.failNextAppendEntry(new Error("terminal append failed"));
   await assert.rejects(
     harness.tool("update_plan_step", { id: "step-1", status: "completed" }),
     /terminal append failed/,
   );
-  assert.deepEqual(harness.widgets.get("plan"), ["→ step-1 Verify"]);
+  assert.deepEqual(harness.widgets.get("plan"), ["→ #1 Verify"]);
   assert.ok(harness.getActiveTools().includes("update_plan_step"));
 
   await harness.tool("update_plan_step", { id: "step-1", status: "completed" });
@@ -1042,7 +1046,7 @@ test("Plan step journal failures preserve the prior executable state and retry s
   assert.equal(harness.getActiveTools().includes("update_plan_step"), false);
 });
 
-test("legacy v1 local progress restores and completes through the v3 journal", async () => {
+test("legacy v1 local progress restores and completes through the v4 journal", async () => {
   const harness = new ExtensionHarness(["read", "bash", "edit"]);
   registerTestPlan(harness);
   harness.entries.push({
@@ -1064,14 +1068,14 @@ test("legacy v1 local progress restores and completes through the v3 journal", a
     },
   });
   await harness.emit("session_start", { type: "session_start", reason: "resume" });
-  assert.deepEqual(harness.widgets.get("plan"), ["→ step-1 Verify"]);
+  assert.deepEqual(harness.widgets.get("plan"), ["→ #1 Verify"]);
   assert.ok(harness.getActiveTools().includes("update_plan_step"));
 
   await harness.tool("update_plan_step", { id: "step-1", status: "completed" });
   assert.equal(harness.widgets.get("plan"), undefined);
   assert.deepEqual(harness.getActiveTools(), ["read", "bash", "edit"]);
-  assert.equal(harness.entries.at(-1)?.customType, "plan-state-v3");
-  assert.deepEqual(harness.entries.at(-1)?.data, { version: 3, action: "complete", state: null });
+  assert.equal(harness.entries.at(-1)?.customType, "plan-state-v4");
+  assert.deepEqual(harness.entries.at(-1)?.data, { version: 4, action: "complete", state: null });
 });
 
 test("provider close failure cannot roll back a durable Plan cancellation", async () => {
@@ -1123,5 +1127,5 @@ test("provider close failure cannot roll back a durable Plan cancellation", asyn
   assert.equal(harness.statuses.get("plan"), undefined);
   assert.deepEqual(harness.getActiveTools(), originalTools);
   assert.ok(harness.notifications.some((notification) => notification.message.includes("Progress provider close failed after Plan exited: cleanup unavailable")));
-  assert.deepEqual(harness.entries.at(-1)?.data, { version: 3, action: "cancel", state: null });
+  assert.deepEqual(harness.entries.at(-1)?.data, { version: 4, action: "cancel", state: null });
 });

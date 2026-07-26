@@ -102,7 +102,7 @@ TUI `session_start` 时，Request 在共享 `ExtensionUIContext` 实例上安装
 ### 与 Goal、Plan 和 Todo 的边界
 
 - Goal 的 active-objective replacement 与 Todo 的 `/todos clear` 通过标准 `ctx.ui.confirm()` 自动获得 Request renderer；调用方仍拥有确认后的状态转换与 journal 写入。
-- Plan Review、Plan clarification 和 Todo managed Plan progress 都有各自的领域状态机与组件，不经 Request coordinator，也不会被 native adapter 替换。Plan 只读阶段若暴露 `ask`，它仍是一次性用户问答，不会写入 Plan clarification state。
+- Plan 的规划期问答直接调用 Request `ask`：Request 独占问题 UI、取消和答案返回，Plan 始终保持 `planning`，不再拥有 clarification phase、选择组件或问答 journal。Plan Review 与 Todo managed Plan progress 仍有各自的领域状态机和组件，不经 Request coordinator。
 - Request 不调用 `pi-extensions:todo-service:v1`，不创建普通 Todo task，也不读取或更新 managed Plan ledger。它只负责交互结果；Goal、Plan、Todo 分别校验结果并提交自己的状态。
 
 ### 版本化事件协议

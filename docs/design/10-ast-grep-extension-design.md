@@ -1066,7 +1066,7 @@ Extension 不 append entry。Session 中自然持久化的 tool call/result只�
 
 ### 17.6 Cross-extension tests
 
-- Plan先/后加载ast-grep；planning/clarification/approval/blocked只暴露并允许`ast_grep_search`，拦截`ast_grep_edit`；executing恢复二者；
+- Plan先/后加载ast-grep；planning/approval/blocked只暴露并允许`ast_grep_search`，拦截`ast_grep_edit`；executing恢复二者；
 - LSP 只在成功 `edit-apply` sync，preview/no-op/error/malformed details不 sync；
 - extension shutdown不覆盖其他 active tools、status、UI 或 listener。
 - factory harness将所有action methods设为throw，证明加载阶段只做register；工具名不覆盖仓库现有surface。

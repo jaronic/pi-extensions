@@ -196,13 +196,32 @@ test("decodePlanState accepts both new and submitted planning states", () => {
   assert.equal(decodePlanState(storedPlan({ phase: "planning" })).ok, true);
 });
 
+test("v4 removes persisted Plan choices while migrating compatible legacy states", () => {
+  const legacy = {
+    ...approvePlan(
+      submitPlan(createPlanningState(["read"], 1), { summary: "Legacy", plan: "Execute", steps: ["One", "Two"] }, 2),
+      3,
+    ),
+    version: 3,
+  };
+  const decoded = decodePlanState(legacy);
+  if (!decoded.ok) assert.fail(decoded.reason);
+  assert.equal(decoded.value.version, 4);
+  assert.equal(decodePlanState({
+    ...legacy,
+    phase: "awaitingClarification",
+    clarification: { question: "Choose?", options: [{ label: "A" }, { label: "B" }] },
+  }).ok, false);
+  assert.equal(decodePlanJournalEntry({ version: 3, action: "clarify", state: legacy }).ok, false);
+});
+
 test("decodePlanJournalEntry enforces version, tombstones, and action phase", () => {
   assert.equal(decodePlanJournalEntry({ version: 2, action: "step", state: storedPlan() }).ok, false);
   assert.equal(decodePlanJournalEntry({ version: 1, action: "complete", state: storedPlan() }).ok, false);
   assert.equal(decodePlanJournalEntry({ version: 1, action: "submit", state: storedPlan() }).ok, false);
   assert.deepEqual(decodePlanJournalEntry({ version: 1, action: "complete", state: null }), {
     ok: true,
-    value: { version: 3, action: "complete", state: null },
+    value: { version: 4, action: "complete", state: null },
   });
   assert.equal(decodePlanJournalEntry({ version: 1, action: "complete", state: null, forged: true }).ok, false);
 });

@@ -41,7 +41,12 @@ export const EditParameters = Type.Object(
     strictness: Type.Optional(StringEnum(STRICTNESSES)),
     maxReplacements: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_REPLACEMENTS })),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1000, maximum: MAX_TIMEOUT_MS })),
-    previewId: Type.Optional(Type.String()),
+    previewId: Type.Optional(Type.Union([
+      Type.String(),
+      Type.Null(),
+    ], {
+      description: "Apply requires the returned 64-character ID. Preview should omit this field; use null or an empty string only when a tool adapter requires a placeholder.",
+    })),
   },
   { additionalProperties: false },
 );
@@ -135,16 +140,19 @@ export function normalizeEditInput(input: EditInput): NormalizedEditInput {
   if (input.selector !== undefined) {
     validateText(input.selector, "selector", MAX_SELECTOR_BYTES, false);
   }
-  if (input.action === "preview" && input.previewId !== undefined) {
-    throw new Error("preview must not include previewId; preview returns a new ID when changes exist.");
+  const { previewId: rawPreviewId, ...withoutPreviewId } = input;
+  const previewId = rawPreviewId ?? undefined;
+  if (input.action === "preview" && previewId !== undefined && previewId !== "") {
+    throw new Error("preview must omit previewId or use null/empty only as an adapter placeholder; preview returns a new ID when changes exist.");
   }
-  if (input.action === "apply" && !/^[a-f0-9]{64}$/u.test(input.previewId ?? "")) {
+  if (input.action === "apply" && !/^[a-f0-9]{64}$/u.test(previewId ?? "")) {
     throw new Error("apply requires previewId as exactly 64 lower-case hexadecimal characters.");
   }
-  return {
-    ...input,
+  const normalized = {
+    ...withoutPreviewId,
     strictness: input.strictness ?? "smart",
     maxReplacements: input.maxReplacements ?? 20,
     timeoutMs: input.timeoutMs ?? 20_000,
   };
+  return input.action === "apply" ? { ...normalized, previewId } : normalized;
 }
