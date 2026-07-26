@@ -19,7 +19,10 @@ export async function materializeFakeAstGrep(root: string): Promise<string> {
   const template = await readFile(new URL("./fake-ast-grep.mjs", import.meta.url), "utf8");
   const script = join(root, "run");
   const source = template.replace(/^#![^\n]*\n?/u, "");
-  await writeFile(script, source, "utf8");
+  await Promise.all([
+    writeFile(script, source, "utf8"),
+    writeFile(join(root, "package.json"), JSON.stringify({ private: true, type: "module" }), "utf8"),
+  ]);
   return process.execPath;
 }
 
