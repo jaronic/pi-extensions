@@ -800,7 +800,7 @@ Hashline 自定义的 validation/state/resource/mutation 失败全部 `throw Err
 
 ### 12.3 Renderer 与 headless
 
-- 不实现自定义 renderer；复用 Pi 同名 slot 的内建 renderer，并以 UI label `Hashline read` / `Hashline edit` 标识安全覆盖；
+- 为 `read` 与 `edit` 提供自定义 `renderCall`，使用 host theme 显示 `Hashline · read` / `Hashline · edit` 与路径；`renderResult` 继续复用 Pi 同名 slot 的内建 renderer；
 - read details 只用 `truncation?`，edit details 严格为 diff/patch/firstChangedLine；
 - edit renderCall 若不能从新 schema提前计算 preview，仍应安全显示 path；settled result 通过标准 diff details 展示；
 - TUI、RPC、JSON、print 核心行为完全一致；没有 UI 时无需降级或确认；

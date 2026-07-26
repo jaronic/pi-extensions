@@ -9,6 +9,7 @@ import {
   type EditToolDetails,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { digestBytes, snapshotTokenForBytes, type SnapshotToken } from "./digest.ts";
 import { abortIfNeeded, fail, hashlineError } from "./errors.ts";
 import { decodeEditableBytes, serializePhysicalLines } from "./lines.ts";
@@ -127,12 +128,19 @@ export function createHashlineEditTool(
   dependencies: HashlineEditDependencies = {},
 ): ToolDefinition<typeof hashlineEditSchema, EditToolDetails> {
   const renderer = createEditToolDefinition(process.cwd());
+  const renderCall: NonNullable<ToolDefinition<typeof hashlineEditSchema, EditToolDetails>["renderCall"]> = (args, theme, context) => {
+    const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
+    text.setText(
+      `${theme.fg("toolTitle", theme.bold("Hashline"))}${theme.fg("muted", " · edit ")}${theme.fg("accent", args.path)}`,
+    );
+    return text;
+  };
   const buildDetails = dependencies.buildDetails ?? buildDefaultDetails;
   const commitWrite = dependencies.commitWrite ?? commitDefaultWrite;
   const closeHandle = dependencies.closeHandle ?? ((handle: FileHandle) => handle.close());
   return {
     renderShell: renderer.renderShell,
-    renderCall: renderer.renderCall as ToolDefinition<typeof hashlineEditSchema, EditToolDetails>["renderCall"],
+    renderCall,
     renderResult: renderer.renderResult as ToolDefinition<typeof hashlineEditSchema, EditToolDetails>["renderResult"],
     name: "edit",
     label: "Hashline edit",
