@@ -78,6 +78,35 @@ test("rg extension exposes one honest search contract and restores grep on shutd
   ).render(80).join("\n");
   assert.match((renderedCall ?? "").trimEnd(), /^rg \/needle\/ in src$/);
 
+  const resultPath =
+    "digital-person-core/src/test/java/com/yiwise/digitalperson/task/SimpleGoodsImportTaskTest.java";
+  const groupedResult = registered.renderResult?.(
+    {
+      content: [
+        {
+          type: "text",
+          text: [
+            `${resultPath}-194- *Product Link`,
+            `${resultPath}-195- *Product Name`,
+            `${resultPath}:196: Product Selling Points`,
+            `${resultPath}-197- Benefit`,
+          ].join("\n"),
+        },
+      ],
+    },
+    { expanded: true, isPartial: false },
+    theme,
+    { lastComponent: undefined, showImages: false, isError: false },
+  ) as { render(width: number): string[] } | undefined;
+  assert.ok(groupedResult);
+  assert.deepEqual(groupedResult.render(200).map((line) => line.trimEnd()), [
+    resultPath,
+    "  194- *Product Link",
+    "  195- *Product Name",
+    "  196: Product Selling Points",
+    "  197- Benefit",
+  ]);
+
   const sessionStart = handlers.get("session_start");
   assert.ok(sessionStart);
   await sessionStart({ type: "session_start", reason: "startup" }, {} as ExtensionContext);

@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createGrepToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { renderGrepOutput } from "./result-renderer.ts";
 
 const grepDefinition = createGrepToolDefinition(process.cwd());
 type GrepRenderResult = Parameters<NonNullable<typeof grepDefinition.renderResult>>[0];
@@ -56,9 +57,14 @@ export default function rgExtension(pi: ExtensionAPI): void {
       return text;
     },
     renderResult(result, options, theme, context) {
-      // Execution delegates to this same definition, so its result details have the renderer's contract.
+      // Grep execution remains byte-for-byte unchanged; only its text presentation is grouped.
       const grepResult = result as GrepRenderResult;
-      return grepDefinition.renderResult!(grepResult, options, theme, context);
+      const output = grepResult.content
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("\n")
+        .trim();
+      return renderGrepOutput(output, { expanded: options.expanded, isError: context.isError }, theme);
     },
   });
 
