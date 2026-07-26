@@ -1,4 +1,4 @@
-# 10 · Hashline 扩展设计：用可重放快照约束精确行编辑
+# 11 · Hashline 扩展设计：用可重放快照约束精确行编辑
 
 > 文档状态：**Hashline v1 已实现并完成生产级严格代码审查**。顶层 `hashline/` package 的运行 API 基线为本仓库锁定的 `@earendil-works/pi-coding-agent 0.81.1`，兼容下限为 `>=0.81.0`。调研、设计、实现与审查更新至 2026-07-26；发布门禁证据见 §13、§15.4 与 §17。Oh My Pi 依据提交 `ba7db9943d0f58499b24c1f6bd64722580f772a5`，`pi-hashline-edit` 依据 `0.8.3` / 提交 `667111575ebba136dadfd6989379e7f67e0d40d9`。
 
@@ -790,6 +790,7 @@ Hashline 自定义的 validation/state/resource/mutation 失败全部 `throw Err
 | Plan | 工具名仍是 `read`/`edit`，active-tool lease 无需认识新名字；顶层 `path` 继续可用于门禁 |
 | Goal | 无协议耦合；snapshot journal 不注入 Goal prompt，不触发 continuation |
 | Todo/Request | 无事件、UI key、active-tool mutation 或 production import 冲突 |
+| Promptline Editor | 仅接管 editor，不注册或覆盖 `read`/`edit`，可与 Hashline 同时加载 |
 | LSP | 成功 edit 保留 `event.input.path`；标准 `tool_result` 后 LSP 可重新 sync |
 | RG | v1 不覆盖 grep/rg；grep 行号没有 snapshot provenance，编辑前必须 read |
 | 内建 write | 仍使用同一 mutation queue；write 后旧 hashline snapshot 在下一 edit 时 stale |

@@ -4,7 +4,7 @@
 
 它解决的是 stale state、盲改未读区域和并行 lost update，不是模糊 patch、自动 merge 或安全沙箱。任何前置条件不成立都会在写入前拒绝，并要求重新读取。
 
-> 维护约束：凡是改变 Hashline 的 `read`/`edit` schema、snapshot/journal 协议、物理行或 EOL 语义、并发/取消/写入边界、输出上限、与 Plan/LSP/RG 的共存或安装方式，都必须在同一改动中同步本 README 和 [`../docs/design/10-hashline-extension-design.md`](../docs/design/10-hashline-extension-design.md)。
+> 维护约束：凡是改变 Hashline 的 `read`/`edit` schema、snapshot/journal 协议、物理行或 EOL 语义、并发/取消/写入边界、输出上限、与 Plan/LSP/RG 的共存或安装方式，都必须在同一改动中同步本 README 和 [`../docs/design/11-hashline-extension-design.md`](../docs/design/11-hashline-extension-design.md)。
 
 ## 效果与边界
 
@@ -178,7 +178,7 @@ LRU 只限制内存中当前可用的 projection，不删除 session journal；�
 - Plan：Hashline 不修改 active tool 集。Plan planning/approval 阶段可保留 Hashline `read` 并隐藏 `edit`；退出 lease 后恢复原 definition。
 - LSP：成功工具名仍为 `edit`，输入仍有顶层 `path`，details 保持内建形状，因此 LSP 的 `tool_result` 同步路径继续工作。
 - RG：搜索结果不构成 snapshot provenance；grep/rg 后仍需 `read`。Hashline 不改变 RG/grep 定义或顺序。
-- Goal、Todo、Request、Promptline Editor：没有 production import、共享 UI key 或私有事件协议。
+- Goal、Todo、Request：没有 production import、共享 UI key 或私有事件协议。Promptline Editor 只接管 editor，不注册或覆盖 `read`/`edit`，可与 Hashline 同时加载。
 - 内建 `write`：继续使用 Pi 的同文件 mutation queue；它在 snapshot 后改文件时，下一次 Hashline edit 必定 stale。
 
 ## 安全与残余风险

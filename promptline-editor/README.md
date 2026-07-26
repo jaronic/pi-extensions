@@ -4,7 +4,7 @@
 
 ## 特性
 
-- 替换默认 editor，不改变输入、提交、粘贴图片、快捷键等行为。
+- 替换默认 editor，不改变输入、提交、粘贴图片、快捷键等行为，也不注册或覆盖任何工具。
 - 输入区使用包含四角、上下边和左右边的完整闭合边框；Goal 状态嵌入上边框。
 - 输入框下方单独显示：当前 model、思考等级、Plan 状态、项目路径、git branch 和 context window 占用。
 - 监视当前 worktree 的 Git `HEAD`；执行 `git switch`、`git checkout` 或外部切换分支后，分支标签会自动刷新。
