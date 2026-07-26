@@ -83,9 +83,13 @@ test("POSIX directory validation rejects a non-UTF-8 and U+FFFD lossy twin", asy
     t.skip(`filesystem rejected the invalid-byte fixture: ${error instanceof Error ? error.message : String(error)}`);
     return;
   }
-  const scope = await resolveWorkspaceTarget("src", root, "directory");
-  const validator = new LosslessDirectoryValidator(scope, operationRecord());
-  await assert.rejects(validator.validate("src/collision-�.ts"), /non-UTF-8 filename/u);
+  try {
+    const scope = await resolveWorkspaceTarget("src", root, "directory");
+    const validator = new LosslessDirectoryValidator(scope, operationRecord());
+    await assert.rejects(validator.validate("src/collision-�.ts"), /non-UTF-8 filename/u);
+  } finally {
+    await unlink(invalidPath);
+  }
 });
 
 if (process.platform === "win32") {
