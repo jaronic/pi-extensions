@@ -7,6 +7,7 @@ const READ_ONLY_PLAN_TOOLS: Record<string, true> = {
   find: true,
   ls: true,
   lsp: true,
+  ast_grep_search: true,
   questionnaire: true,
   ask: true,
   create_goal: true,

@@ -159,7 +159,7 @@ status 可为 `pending`、`inProgress`、`completed`、`blocked`。`update_plan_
 
 | Phase | 可用工具 | 写入能力 |
 | --- | --- | --- |
-| `planning` | `read`、`rg` 或 `grep`（同时存在时仅 `rg`）、`find`、`ls`、`lsp`、`questionnaire`、`ask`、`create_goal`、`get_goal`、`submit_plan`、`report_plan_blocked`、`request_plan_choice` | 禁止工作区修改和任意 shell。 |
+| `planning` | `read`、`rg` 或 `grep`（同时存在时仅 `rg`）、`find`、`ls`、`lsp`、`ast_grep_search`、`questionnaire`、`ask`、`create_goal`、`get_goal`、`submit_plan`、`report_plan_blocked`、`request_plan_choice` | 禁止工作区修改和任意 shell；`ast_grep_edit` 即使是 preview 也保持禁用。 |
 | `awaitingClarification` | 同一只读集合，但无提交、新选择或阻塞报告；额外启用 `answer_plan_choice` | 等待明确选择或 cancel。 |
 | `awaitingApproval` | 同一只读集合，但无 `submit_plan`、阻塞报告或选择工具 | 等待用户批准、refine 或 cancel。 |
 | `blocked` | 同一只读集合，但无提交、阻塞报告或选择工具 | 等待用户补充前提或指定替代方向，再使用 `/plan resume` 重新规划。 |
@@ -219,7 +219,7 @@ Plan 与 Todo 不做步骤双写。两者通过两个独立、版本化的 `pi.e
 ## 与 Request、RG 和 LSP 插件协作
 
 - Request 只包装标准 `select`/`confirm`/`input`；Plan Review 和持久化 clarification 使用自己的领域组件与状态机，不会被 Request 替换。Request 的 `ask` 若原本在 active tools 中，仍属于 Plan 只读 allowlist；需要写入 Plan journal 的方案取舍必须使用 `request_plan_choice`。
-- `rg` 与 `lsp` 都在 `planning`、`awaitingClarification`、`awaitingApproval` 的只读 allowlist 中。RG 继续保持在 `grep` 前；LSP 的 rename/code action 只返回 preview，因此不会绕过 Plan 的工作区写保护。
+- `rg`、`lsp` 与 `ast_grep_search` 都在 `planning`、`awaitingClarification`、`awaitingApproval` 的只读 allowlist 中。`ast_grep_edit` 不在 allowlist；只有批准并进入 executing、恢复原工具集后才能 preview/apply。RG 继续保持在 `grep` 前；LSP 的 rename/code action 只返回 preview，因此不会绕过 Plan 的工作区写保护。
 - 这些工具/UI 扩展不参与 execution-progress provider 选择，也不读取或更新 Plan mutable progress。进入执行期后，它们是否可用仍取决于进入 Plan 前的有效工具集；Plan 的 tool lease 会保留其他扩展在生命周期内对工具集做出的变化。
 
 ## 配置与持久化

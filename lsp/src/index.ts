@@ -33,6 +33,7 @@ import { resolveWorkspaceFile } from "./roots.ts";
 import { ServerManager } from "./server-manager.ts";
 import { LspOutputStore, type LspTruncationSummary } from "./output.ts";
 import type { LspAction } from "./types.ts";
+import { syncSuccessfulToolResult } from "./tool-sync.ts";
 
 const ACTIONS = [
   "status",
@@ -156,16 +157,7 @@ export default function lspExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("tool_result", async (event, ctx) => {
-    if (!manager || manager.cwd !== ctx.cwd || event.isError) return;
-    if (event.toolName !== "edit" && event.toolName !== "write") return;
-    const rawPath = event.input.path;
-    if (typeof rawPath !== "string") return;
-    try {
-      const file = await resolveWorkspaceFile(rawPath, ctx.cwd);
-      await manager.syncActiveFile(file);
-    } catch {
-      // The next explicit LSP request performs a full disk sync and reports errors.
-    }
+    await syncSuccessfulToolResult(manager, event, ctx.cwd);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {

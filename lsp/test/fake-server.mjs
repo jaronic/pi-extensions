@@ -7,6 +7,7 @@ import {
 } from "vscode-jsonrpc/node";
 
 const mode = process.argv[2] ?? "normal";
+const notificationLogPath = mode === "document-content" ? process.argv[3] : undefined;
 
 if (mode === "stubborn-tree") {
   const pidPath = process.argv[3];
@@ -30,6 +31,9 @@ const connection = createMessageConnection(
 const documents = new Map();
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const recordDocumentNotification = (method, text) => {
+  if (notificationLogPath) appendFileSync(notificationLogPath, `${JSON.stringify({ method, text })}\n`);
+};
 const diagnostic = (message) => ({
   range: { start: { line: 0, character: 4 }, end: { line: 0, character: 9 } },
   severity: 2,
@@ -66,6 +70,7 @@ connection.onRequest("initialize", async () => {
 
 connection.onNotification("textDocument/didOpen", async ({ textDocument }) => {
   documents.set(textDocument.uri, textDocument.text);
+  recordDocumentNotification("didOpen", textDocument.text);
   if (mode === "no-diagnostics") return;
   await connection.sendNotification("textDocument/publishDiagnostics", {
     uri: textDocument.uri,
@@ -85,7 +90,10 @@ connection.onNotification("textDocument/didOpen", async ({ textDocument }) => {
 
 connection.onNotification("textDocument/didChange", ({ textDocument, contentChanges }) => {
   const replacement = contentChanges.at(-1)?.text;
-  if (typeof replacement === "string") documents.set(textDocument.uri, replacement);
+  if (typeof replacement === "string") {
+    documents.set(textDocument.uri, replacement);
+    recordDocumentNotification("didChange", replacement);
+  }
 });
 
 connection.onRequest("textDocument/definition", ({ textDocument }) => ({
@@ -105,6 +113,9 @@ connection.onRequest("textDocument/references", ({ textDocument }) => [
   { uri: textDocument.uri, range: { start: { line: 1, character: 0 }, end: { line: 1, character: 5 } } },
 ]);
 connection.onRequest("textDocument/hover", async (_params, token) => {
+  if (mode === "document-content") {
+    return { contents: { kind: "plaintext", value: documents.get(_params.textDocument.uri) ?? "<missing>" } };
+  }
   if (mode === "crash-hover") {
     process.stderr.write("synthetic hover crash\n");
     process.exit(19);

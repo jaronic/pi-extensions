@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import goalExtension from "../../goal/src/index.ts";
+import astGrepExtension from "../../ast-grep/src/index.ts";
 import planExtension from "../src/index.ts";
 import { blockedDecision, ExtensionHarness } from "./harness.ts";
 import type { PlanExtensionDependencies } from "../src/index.ts";
@@ -893,6 +894,48 @@ test("Plan preserves observable external tool additions and removals", async () 
 
   await harness.command("plan", "cancel");
   assert.deepEqual(harness.getActiveTools(), ["bash", "lsp", "external_writer"]);
+});
+
+test("Plan exposes ast-grep search but blocks edit in both extension load orders", async () => {
+  for (const loadOrder of ["ast-first", "plan-first"] as const) {
+    const harness = new ExtensionHarness(["read"]);
+    if (loadOrder === "ast-first") astGrepExtension(harness.api);
+    registerTestPlan(harness);
+    await harness.emit("session_start", { type: "session_start", reason: "startup" });
+    await harness.command("plan");
+    if (loadOrder === "plan-first") {
+      astGrepExtension(harness.api);
+      await harness.emit("before_agent_start", { type: "before_agent_start", systemPrompt: "base" });
+    }
+
+    assert.equal(harness.getActiveTools().includes("ast_grep_search"), true, loadOrder);
+    assert.equal(harness.getActiveTools().includes("ast_grep_edit"), false, loadOrder);
+    assert.equal(blockedDecision(await harness.emit("tool_call", {
+      type: "tool_call",
+      toolName: "ast_grep_search",
+      toolCallId: `${loadOrder}-search`,
+      input: {},
+    })), undefined, loadOrder);
+    assert.equal(blockedDecision(await harness.emit("tool_call", {
+      type: "tool_call",
+      toolName: "ast_grep_edit",
+      toolCallId: `${loadOrder}-edit`,
+      input: {},
+    }))?.block, true, loadOrder);
+
+    await harness.tool("submit_plan", {
+      summary: `Ast-grep ${loadOrder}`,
+      plan: "Search, edit, and verify.",
+      steps: ["Search", "Edit", "Verify"],
+    });
+    assert.equal(harness.getActiveTools().includes("ast_grep_search"), true, loadOrder);
+    assert.equal(harness.getActiveTools().includes("ast_grep_edit"), false, loadOrder);
+
+    await harness.command("plan", "approve");
+    assert.equal(harness.getActiveTools().includes("ast_grep_search"), true, loadOrder);
+    assert.equal(harness.getActiveTools().includes("ast_grep_edit"), true, loadOrder);
+    await harness.emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
+  }
 });
 
 test("artifact persistence failures roll back planning state and retry safely", async () => {

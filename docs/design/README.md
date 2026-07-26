@@ -73,6 +73,7 @@ flowchart TB
 | [07 · 生产级最佳实践](07-production-checklist.md) | 状态、并发、取消、安全、输出、UI、测试和发布有哪些硬约束 | 威胁模型、测试分层、反模式对照、检查表 |
 | [08 · Todo 扩展实现](08-todo-extension-design.md) | Pi 怎样用 branch-aware 状态机可靠追踪拆分任务、进度、阻塞与完成 | 状态机、原子提交、Plan 共存、验证矩阵 |
 | [09 · 跨扩展通用协议](09-cross-extension-protocols.md) | Todo、Request 等通用能力怎样被其他 extension 调用、发现和感知；EventBus 的同步边界是什么 | Request/response、provider discovery、state broadcast、UI adapter |
+| [10 · AST-Grep 扩展设计](10-ast-grep-extension-design.md) | Pi 怎样把 ast-grep 变成可取消、可审计的结构搜索与单文件改写工具 | 固定 native 引擎、流式输出、preview/apply、失效检测、生产级 Review |
 
 已有的 [Pi 插件开发参考与最佳实践](../pi-extension-development.md) 是 API/工程速查；本系列专注设计原理和选择依据，两者互补。
 

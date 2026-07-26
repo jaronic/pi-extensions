@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { findWorkspaceRoot, resolveWorkspaceFile } from "../src/roots.ts";
+import { findWorkspaceRoot, resolveWorkspaceFile, resolveWorkspaceMachineFile } from "../src/roots.ts";
 
 test("higher-priority root marker wins over a nearer module marker", async (context) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "pi-lsp-root-"));
@@ -36,14 +36,20 @@ test("resolveWorkspaceFile rejects traversal, directories, and escaping symlinks
   const root = await realpath(temporaryRoot);
   const file = join(root, "sample.ts");
   const externalFile = join(externalRoot, "secret.ts");
+  const mentionLiteralFile = join(root, "@sample.ts");
+  const dotPrefixedFile = join(root, "..foo.ts");
   await Promise.all([
     writeFile(file, "const safe = true;\n", "utf8"),
+    writeFile(mentionLiteralFile, "const mention = true;\n", "utf8"),
+    writeFile(dotPrefixedFile, "const dots = true;\n", "utf8"),
     writeFile(externalFile, "const secret = true;\n", "utf8"),
   ]);
   const escapingLink = join(root, "escaping.ts");
   await symlink(externalFile, escapingLink);
 
   assert.equal(await resolveWorkspaceFile("@sample.ts", root), file);
+  assert.equal(await resolveWorkspaceMachineFile("@sample.ts", root), mentionLiteralFile);
+  assert.equal(await resolveWorkspaceMachineFile("..foo.ts", root), dotPrefixedFile);
   await assert.rejects(resolveWorkspaceFile(externalFile, root), /stay inside the workspace/);
   await assert.rejects(resolveWorkspaceFile(escapingLink, root), /stay inside the workspace/);
   await assert.rejects(resolveWorkspaceFile(root, root), /not a file/);

@@ -705,4 +705,4 @@ Pi 官方：
 - [Inter-extension event bus example](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/examples/extensions/event-bus.ts)
 - [TUI components](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/tui.md)
 
-[上一篇：Todo 扩展实现](08-todo-extension-design.md)
+[上一篇：Todo 扩展实现](08-todo-extension-design.md) · [下一篇：AST-Grep 扩展设计](10-ast-grep-extension-design.md)

@@ -11,7 +11,7 @@
 - 按文件后缀和 server role 路由到匹配的 language server；多个候选按 priority 从高到低尝试。
 - client 按 `server + workspace root` 懒启动并复用，空闲后自动 shutdown。
 - diagnostics 对所有匹配服务器并行请求，保留成功结果并单独报告局部失败。
-- `edit`/`write` 工具成功后，已启动且覆盖该文件的 client 会同步最新磁盘内容。
+- `edit`/`write` 工具成功后，已启动且覆盖该文件的 client 会同步最新磁盘内容；`ast_grep_edit` 仅在成功返回严格的 v1 `edit-apply` details 时触发同样同步，并把 details path 当作 literal machine path（不会剥离 `@`），preview、错误结果和 malformed details 均忽略。
 - 工具运行时 TUI status 显示当前 action；`/lsp` 显示已配置和活跃的 client。
 - `server` 通常应省略；指定时优先按配置的 server ID 路由。若没有同名 ID，唯一的 LSP language ID 也可作为别名，例如 `java` 解析为 `jdtls`；多个候选会明确报歧义，不会任意选择。
 - 输出受 Pi 的 2,000 行/50 KiB 上限约束；formatter 在全局限额前保留每个原始 replacement，截断时完整格式化结果写入权限为 `0600` 的临时文件，并在 session reload/shutdown 时清理。
@@ -113,7 +113,7 @@ position 有两种写法：
 }
 ```
 
-`file` 可为 workspace 相对路径、绝对路径或带 `@` 前缀的路径，但解析后的真实文件必须位于当前 workspace。`limit` 控制格式化结果数，默认来自配置，单次最多 500。
+`file` 可为 workspace 相对路径、绝对路径或带 `@` 前缀的用户 mention 路径，但解析后的真实文件必须位于当前 workspace。`@` 剥离只属于直接 `lsp` 工具输入；外部成功 edit details 的 canonical relative path 按字面解析，因此根目录中的 `@sample.ts`、`..foo.ts` 等合法名称不会被改写。`limit` 控制格式化结果数，默认来自配置，单次最多 500。
 
 ## 配置位置与优先级
 
@@ -220,20 +220,21 @@ Server patch 除 `initOptions` 外是浅合并。修改嵌套对象时应提供�
 
 ## 与 Plan、Goal 和 Todo 的关系
 
-- Plan 的 `planning`、`awaitingClarification`、`awaitingApproval` 只读 allowlist 显式允许 `lsp`。Navigation、diagnostics、symbols、rename preview 和 code-action preview 不写工作区；批准进入执行期后，`lsp` 是否继续可用取决于进入 Plan 前的有效工具集。
+- Plan 的 `planning`、`awaitingClarification`、`awaitingApproval` 只读 allowlist 显式允许 `lsp` 与 `ast_grep_search`，不允许 `ast_grep_edit`。Navigation、diagnostics、symbols、rename preview 和 code-action preview 不写工作区；批准进入执行期后，各工具是否继续可用取决于进入 Plan 前的有效工具集。
 - LSP 不监听 Plan/Goal/Todo channel，也不调用 `pi-extensions:todo-service:v1`。Goal continuation 和普通 Todo 工作流可以使用模型当前可见的 `lsp` 工具，但 diagnostics、references 或 preview 结果不会自动改变 Goal、Plan step 或 Todo task 状态。
 - Todo 不接管 LSP client 生命周期；Plan 的 tool lease 只影响工具可见性，Todo 的 progress provider 只影响进度投影，已启动 client 仍由 LSP 自己在 idle、session reload 和 shutdown 时清理。
 
 ## 实现原理与关键节点
 
-- `src/index.ts`：`lsp` 工具 schema、action dispatch、`/lsp`、状态 UI、edit/write 后同步和 shutdown。
+- `src/index.ts`：`lsp` 工具 schema、action dispatch、`/lsp`、状态 UI、tool-result 同步 wiring 和 shutdown。
 - `src/config.ts`：内置服务器、配置路径、严格 decoder、分层 patch、schema normalization、后缀/role 路由。
 - `src/server-manager.ts`：client 缓存、候选 fallback、并行 diagnostics、idle timer 和有界 shutdown。
 - `src/lsp-client.ts`：子进程组、JSON-RPC、initialize/capability、文档同步、position encoding、timeout/cancel、ready notification 和升级式进程树回收。
-- `src/roots.ts`：realpath workspace confinement 与 root marker 选择。
+- `src/roots.ts`：区分用户 `@` mention 与 literal machine path 的 realpath workspace confinement，以及 root marker 选择。
 - `src/positions.ts`：1-based Unicode 输入到 LSP position 的转换及唯一 symbol 解析。
 - `src/format.ts`：诊断、去重位置、符号、hover、忠实 WorkspaceEdit、准确 edit 计数和 code action 的稳定文本格式。
 - `src/output.ts`：输出截断、私有临时 artifact 与清理。
+- `src/tool-sync.ts`：内置 edit/write 与 `ast_grep_edit` 成功 apply 的严格解码、workspace 路径重验和 best-effort active-client 同步。
 - `test/fake-server.mjs`：确定性的测试 LSP 子进程；`test/*.test.ts` 覆盖严格配置、路由、协议、完整 artifact、准确计数、失败、取消、settle、顽固进程树和清理。
 
 ## 开发与验证

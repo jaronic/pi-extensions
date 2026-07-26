@@ -1,0 +1,41 @@
+{
+  "name": "pi-ast-grep-dev",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "keywords": ["pi-package"],
+  "files": ["src", "assets", "README.md"],
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "release-smoke": "node test/release-smoke.mjs"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": ">=0.81.0",
+    "@earendil-works/pi-coding-agent": ">=0.81.0",
+    "@earendil-works/pi-tui": ">=0.81.0",
+    "typebox": ">=1.0.0"
+  },
+  "optionalDependencies": {
+    "@ast-grep/cli-darwin-arm64": "0.45.0",
+    "@ast-grep/cli-darwin-x64": "0.45.0",
+    "@ast-grep/cli-linux-arm64-gnu": "0.45.0",
+    "@ast-grep/cli-linux-x64-gnu": "0.45.0",
+    "@ast-grep/cli-win32-x64-msvc": "0.45.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.81.0",
+    "@earendil-works/pi-coding-agent": "^0.81.0",
+    "@earendil-works/pi-tui": "^0.81.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.20.0",
+    "typebox": "^1.0.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

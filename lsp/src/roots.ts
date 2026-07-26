@@ -1,14 +1,22 @@
 import { access, realpath, stat } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
-export async function resolveWorkspaceFile(rawPath: string, cwd: string): Promise<string> {
-  const normalizedInput = rawPath.startsWith("@") ? rawPath.slice(1) : rawPath;
+async function resolveFile(rawPath: string, cwd: string, stripMention: boolean): Promise<string> {
+  const normalizedInput = stripMention && rawPath.startsWith("@") ? rawPath.slice(1) : rawPath;
   const absolute = isAbsolute(normalizedInput) ? normalizedInput : resolve(cwd, normalizedInput);
   const [canonicalFile, canonicalCwd] = await Promise.all([realpath(absolute), realpath(cwd)]);
   if (!isWithin(canonicalFile, canonicalCwd)) throw new Error(`LSP paths must stay inside the workspace: ${rawPath}`);
   const info = await stat(canonicalFile);
   if (!info.isFile()) throw new Error(`LSP path is not a file: ${rawPath}`);
   return canonicalFile;
+}
+
+export async function resolveWorkspaceFile(rawPath: string, cwd: string): Promise<string> {
+  return resolveFile(rawPath, cwd, true);
+}
+
+export async function resolveWorkspaceMachineFile(rawPath: string, cwd: string): Promise<string> {
+  return resolveFile(rawPath, cwd, false);
 }
 
 export async function findWorkspaceRoot(file: string, markers: string[], cwd: string): Promise<string> {
@@ -43,5 +51,5 @@ export async function findWorkspaceRoot(file: string, markers: string[], cwd: st
 
 export function isWithin(path: string, root: string): boolean {
   const rel = relative(root, path);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
