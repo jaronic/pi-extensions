@@ -12,7 +12,7 @@
 
 - 当前目标及完整状态会注入每次 agent 的 system prompt；目标文本按不可信用户数据处理，不获得更高指令优先级。
 - 一轮正常结束且目标仍为 `active` 时，插件发送隐藏的 continuation message，自动触发下一轮；若某个自动 continuation 整轮未发起任何工具调用，则 Goal 保持 `active` 但停止继续排队，避免空转。
-- TUI footer 以独立 keyed status 横向显示 Goal 与 Plan；active turn 中 Goal 耗时每秒刷新。设置预算时同时显示 `耗时 · 已用 / 预算` token，不再占用叠层 widget。
+- TUI footer 使用独立 keyed status；active turn 中 Goal 耗时每秒刷新。Plan 与 active Goal 互斥，但 paused/terminal Goal 状态可与 Plan 状态同时显示。设置预算时同时显示 `耗时 · 已用 / 预算` token，不占用叠层 widget。
 - 状态作为 Pi session journal 的 custom entry 保存，切换 session tree 分支时按当前分支恢复。
 - reload 会把仍活跃的目标安全地暂停，需显式 `/goal resume` 后继续。
 
@@ -68,7 +68,7 @@ pi --extension ./src/index.ts
 | --- | --- | --- |
 | `create_goal` | `objective`, 可选 `tokenBudget` | 始终注册；只能在用户明确要求 Goal 且没有未完成目标时创建。 |
 | `get_goal` | 无 | 仅在目标活跃时启用；当前 prompt 已含完整状态时不应重复读取。 |
-| `update_goal` | 完成分支：`status`, `evidence[]`；阻塞分支：`status`, `reason`, `attempted[]`, `unblocksWhen` | 仅在目标活跃且 Plan 未阻塞执行时启用；完成必须逐项提交 requirement-to-evidence 证据，阻塞必须说明真实外部阻碍、已尝试动作及精确解除条件。 |
+| `update_goal` | 完成分支：`status`, `evidence[]`；阻塞分支：`status`, `reason`, `attempted[]`, `unblocksWhen` | 仅在目标活跃时启用；Plan 活跃期间 Goal 不可能恢复为 active。完成必须逐项提交 requirement-to-evidence 证据，阻塞必须说明真实外部阻碍、已尝试动作及精确解除条件。 |
 
 用户通常使用 `/goal` 命令；这些工具用于 agent 在执行过程中创建或结束目标。
 
@@ -93,19 +93,18 @@ stateDiagram-v2
 
 - `turn_start` 到 `turn_end` 计入耗时，active turn 中状态每秒刷新；assistant message 的 usage 计入 token。`update_goal(complete)` 必须携带逐项证据，并会先结算当前 turn 到完成瞬间的耗时，再显示完成耗时及证据报告；后续 `turn_end` 只补记 usage，不重复计时。达到预算的当轮会正常结算，然后停止自动续跑。
 - 正常 `agent_end` 会排队续跑；abort 会暂停。agent error 会等 `agent_settled` 后再归类：配额/速率限制进入 `usageLimited`，其他错误进入 `paused`，避免把 provider 或工具故障误报为业务阻塞，也避免状态与仍在收尾的 agent 竞争。
-- continuation message 去重：已有待处理消息或已有 continuation 时不会重复排队；context hook 只保留当前目标最新的一条隐藏续跑消息。自动 continuation 若没有任何工具调用，则设置 session 内续跑抑制但不篡改 Goal 状态；新用户 turn、`/goal resume`、目标编辑或 Plan 控制流释放会重新启用。
+- continuation message 去重：已有待处理消息或已有 continuation 时不会重复排队；context hook 只保留当前目标最新的一条隐藏续跑消息。自动 continuation 若没有任何工具调用，则设置 session 内续跑抑制但不篡改 Goal 状态；新用户 turn、`/goal resume` 或目标编辑会重新启用。
 - session journal 解码失败时拒绝恢复不安全状态，并在有 UI 时显示警告；未知状态会保守恢复为 paused。
 
 ## 与 Plan 插件协作
 
-Goal 通过 `pi.events` 监听 Plan 的版本化协调信号：
+Goal 与 Plan 使用版本化 `pi-extensions:exclusive-workflow:v1` query channel 仲裁同一 session 的 active workflow：
 
-- Plan 处于 `planning`、`awaitingApproval` 或 `blocked` 时，Goal 保持状态但不自动执行，也不暴露 `update_goal`；规划期通过外部 Request `ask` 进行的问答不改变 Plan phase。`blocked` 会一直保持该门控，直到用户补齐 Plan 前提或指定替代方向并由 `/plan resume` 恢复规划，或取消 Plan。
-- `/plan approve` 恢复执行工具并由 Plan 排队执行轮，Goal 不额外重复排队。
-- `/plan cancel` 保持 Goal active；Plan 不再阻塞且无需发起 Plan turn 时，Goal 依既有门控规则续跑。
-- Goal 与 Plan 通过 session ID 隔离信号，避免其他 session 的 Plan 状态污染当前目标。
-
-协议定义在 `goal/src/protocol.ts`、`plan/src/protocol.ts` 与 `todo/src/protocol.ts`。修改 channel、payload 或协作语义时必须同步三个插件、`plan/test/coexistence.test.ts` 和 `todo/test/coexistence.test.ts`。
+- active Goal 存在时，Plan 拒绝启动；用户必须先 pause、complete 或 clear Goal。
+- Plan 任一活跃 phase 存在时，`/goal <objective>`、`create_goal`、`/goal resume` 以及会恢复 active 状态的 edit 都拒绝；paused/terminal Goal 状态仍可保留和查看。
+- branch restore 若同时发现 active Plan 与 active Goal，Goal 在所有 session handlers 完成后持久化为 `paused`，使结果不依赖扩展加载顺序。
+- Plan approve/cancel 后不自动恢复 paused Goal。批准产生的执行由普通 Todo board 独立跟踪；用户可在 Plan 退出后显式 `/goal resume`。
+- query 带 session ID；其他 session 的状态不会参与仲裁。协议在两个包各自的 `src/workflow-mode.ts` 中独立定义，避免 production cross-import。
 
 ## 与 Request UI 插件协作
 
@@ -115,9 +114,9 @@ Request 在 session shutdown 时只恢复自己仍持有的 `confirm` wrapper，
 
 ## 与 Todo 插件协作
 
-Goal 定义完整 objective 和自动 continuation；Todo 的普通 board 记录当前 branch 上拆出的执行项，Todo 的 managed ledger 只投影已批准 Plan 的步骤进度。三者是独立状态域：各自追加 system prompt，不覆盖对方；Goal continuation 能看到当前 Todo 工作集和 managed Plan progress，但 Todo settled 或 Plan steps completed 都不会自动调用 `update_goal(complete)`，Goal complete 也不会清空任一 Todo 状态。若 Goal 尝试完成时仍有 open/blocked Todo，应把它当作需要解释的证据不一致，而不是自动状态转换。
+Goal 定义完整 objective 和自动 continuation；Todo 的普通 board 记录当前 branch 上拆出的执行项，也接收 Plan 批准时转交的普通 phase。两者是独立状态域：各自追加 system prompt，不覆盖对方；Todo settled 不会自动调用 `update_goal(complete)`，Goal complete 也不会清空 Todo。若 Goal 尝试完成时仍有 open/blocked Todo，应把它当作需要解释的证据不一致，而不是自动状态转换。
 
-Goal 不调用 `pi-extensions:todo-service:v1`，不根据 Todo sequence/revision 推导目标状态，也不为这项协作新增 production cross-import。组合 prompt、独立终态和双加载顺序由 `todo/test/coexistence.test.ts` 覆盖。
+Goal 不调用 `pi-extensions:todo-service:v1`，不根据 Todo sequence/revision 推导目标状态，也不为这项协作新增 production cross-import。组合 prompt 与独立终态由 `todo/test/coexistence.test.ts` 覆盖。
 
 ## 与 RG 和 LSP 插件协作
 
@@ -133,13 +132,14 @@ Goal 没有外部配置文件。运行期控制项只有：
 
 ## 实现原理与关键节点
 
-- `src/index.ts`：扩展入口；持有 session 内状态，注册生命周期 hooks，负责续跑去重、无行动空转抑制、usage 计量、journal 恢复、UI 与 Plan 协调。
+- `src/index.ts`：扩展入口；持有 session 内状态，注册生命周期 hooks，负责续跑去重、无行动空转抑制、usage 计量、journal 恢复、UI 与 restored workflow conflict 收敛。
 - `src/state.ts`：纯状态模型、输入解析、预算结算及严格的持久化解码边界。
-- `src/command.ts`：`/goal` 用户控制面；先 abort 并等待 agent idle，再执行 pause/resume/edit/clear，避免并发状态竞争。
-- `src/tools.ts`、`src/tool-schema.ts`：agent 工具边界、结构化终态证据及 TypeBox 参数约束。
+- `src/command.ts`：`/goal` 用户控制面；先检查 Plan exclusivity，再 abort/idle 并执行 pause/resume/edit/clear。
+- `src/tools.ts`、`src/tool-schema.ts`：agent 工具边界、Plan activation guard、结构化终态证据及 TypeBox 参数约束。
 - `src/prompts.ts`：活跃目标与 continuation prompt；对 objective 做 XML escaping，明确其不可信数据属性，并要求 prompt-to-artifact 完成审计。
-- `src/protocol.ts`：与 Plan 的版本化事件契约。
-- `test/state.test.ts`、`test/prompts.test.ts`：Goal 输入、状态转换、预算、usage、持久化解码及提示词契约的纯测试；命令、结构化终态、续跑保护、恢复、错误、UI 和 Goal/Plan 协作由 `plan/test/coexistence.test.ts` 覆盖。
+- `src/workflow-mode.ts`：Goal/Plan 互斥 workflow query 协议。
+- `src/protocol.ts`：Goal journal/continuation message 类型与 context 识别。
+- `test/state.test.ts`、`test/prompts.test.ts`：Goal 输入、状态转换、预算、usage、持久化解码及提示词契约；命令、结构化终态、续跑保护、恢复、错误、UI 和 Goal/Plan 互斥由 `plan/test/coexistence.test.ts` 覆盖。
 
 ## 开发与验证
 

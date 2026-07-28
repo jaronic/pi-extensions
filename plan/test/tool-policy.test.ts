@@ -7,7 +7,7 @@ test("planning exposes only explicit read-only tools and Plan submission choices
     ["read", "grep", "bash", "edit", "write", "lsp", "rg", "get_goal", "update_goal", "unknown_writer"],
     "planning",
   );
-  assert.deepEqual(active, ["read", "rg", "grep", "lsp", "get_goal", "submit_plan", "report_plan_blocked", "request_plan_choice"]);
+  assert.deepEqual(active, ["read", "rg", "grep", "lsp", "submit_plan", "report_plan_blocked", "request_plan_choice"]);
 });
 
 test("awaiting approval removes submission and keeps workspace read-only", () => {
@@ -24,7 +24,6 @@ test("blocked Plan reporting is available only while planning", () => {
   assert.equal(isPlanToolAllowed("report_plan_blocked", "blocked"), false);
 });
 
-test("executing and off phases do not restrict tools", () => {
-  assert.equal(isPlanToolAllowed("bash", "executing"), true);
+test("off phase does not restrict tools", () => {
   assert.equal(isPlanToolAllowed("unknown_writer", "off"), true);
 });

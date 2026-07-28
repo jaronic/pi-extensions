@@ -5,6 +5,7 @@ import {
   buildTodoGet,
   buildTodoMutationText,
   buildTodoView,
+  MAX_SETTLED_RECAP_TASKS,
   todoFooter,
   todoWidget,
 } from "../src/output.ts";
@@ -46,6 +47,33 @@ test("mutation output is compact and names the active pointer", () => {
   const doneText = buildTodoMutationText("done", snapshot(completed.state, 2), completed);
   assert.match(doneText, /Completed #1: Inspect/);
   assert.match(doneText, /Active: #2 Implement/);
+  assert.equal(doneText.includes("Settled recap:"), false);
+});
+
+test("settling mutation appends a bounded recap of completed and dropped tasks", () => {
+  let state = stateWith(["Inspect", "Implement", "Verify"]);
+  state = transitionTodo(state, { op: "done", id: 1, note: "checked" }, 11, () => BOARD).state!;
+  state = transitionTodo(state, { op: "drop", id: 2, reason: "out of scope" }, 12, () => BOARD).state!;
+  const settling = transitionTodo(state, { op: "done", id: 3 }, 13, () => BOARD);
+  assert.ok(settling.state);
+  const text = buildTodoMutationText("done", snapshot(settling.state, 4), settling);
+  assert.match(text, /Todo board settled\./);
+  assert.match(text, /Settled recap:/);
+  assert.match(text, /✓ #1 Inspect \[completed: checked\]/);
+  assert.match(text, /× #2 Implement \[dropped: out of scope\]/);
+  assert.match(text, /✓ #3 Verify \[completed\]/);
+
+  let large = stateWith(Array.from({ length: 40 }, (_, index) => `Task ${index + 1}`));
+  for (let id = 1; id <= 39; id += 1) {
+    large = transitionTodo(large, { op: "drop", id, reason: "bulk" }, 20 + id, () => BOARD).state!;
+  }
+  const bulkSettling = transitionTodo(large, { op: "done", id: 40 }, 91, () => BOARD);
+  assert.ok(bulkSettling.state);
+  const bulkText = buildTodoMutationText("done", snapshot(bulkSettling.state, 41), bulkSettling);
+  const recapTaskLines = bulkText.split("\n").filter((line) => /^[✓×] #/.test(line));
+  assert.equal(recapTaskLines.length, MAX_SETTLED_RECAP_TASKS);
+  assert.match(bulkText, /… 20 more closed tasks; use todo view includeClosed:true\./);
+  assert.ok(Buffer.byteLength(bulkText, "utf8") <= MAX_MODEL_OUTPUT_BYTES);
 });
 
 test("view defaults to open tasks and supports phase, closed, offset, and limit", () => {

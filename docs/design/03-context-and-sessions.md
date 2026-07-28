@@ -226,26 +226,31 @@ function decodeCounterEntry(value: unknown): CounterEntry | undefined {
 
 读取时必须把 payload 当 `unknown`：session 可能来自旧版本、手工编辑、另一台机器或损坏文件。
 
-### 本仓库的 Plan / Goal 实践
+### 本仓库的 Plan / Goal / Todo 实践
 
 ```mermaid
 flowchart LR
     Goal[Goal journal<br/>objective/status/budget]
     Plan[Plan journal<br/>phase/steps/artifact]
-    Event[pi-extensions:plan-state:v1]
+    Todo[Todo journal<br/>ordinary execution board]
+    Query[exclusive-workflow:v1<br/>synchronous query]
     Prompt[before_agent_start 注入]
     Tools[active tool policy]
     UI[keyed status/widget]
 
-    Goal <--> Event <--> Plan
+    Goal <-->|active session query| Query
+    Plan <-->|active session query| Query
+    Plan -->|phase sync + approval handoff| Todo
     Goal --> Prompt
     Plan --> Prompt
+    Todo --> Prompt
     Plan --> Tools
     Goal --> UI
     Plan --> UI
+    Todo --> UI
 ```
 
-二者生产代码不互相 import，而是各自定义并验证版本化事件协议。Session 切 branch 时各自 replay，再广播快照。这样保持独立安装，但必须用 coexistence test 防止协议漂移。
+Plan 与 Goal 生产代码不互相 import，而是各自定义并验证版本化互斥 query；session 切 branch 后各自 replay journal，后续启动命令同步读取对方当前 session 的 live state。Todo 是 Plan 的声明依赖：Plan restore 时直接同步 phase，批准时把步骤一次性提交为普通 Todo tasks，之后 Plan 关闭。三者都必须用 coexistence test 防止协议、加载顺序和 branch identity 漂移。
 
 ## 7. Compaction：不删账本，只替换给模型的历史投影
 

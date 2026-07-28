@@ -52,7 +52,7 @@ Pi 0.81.1 没有正式的 extension service/capability registry，也没有供 e
 - 用 TypeScript 泛型替代运行时校验；
 - 把 EventBus 变成跨进程或不可信租户 RPC；
 - 用 registry 代替 session journal、durable queue 或 state replay；
-- 把 Plan state broadcast、Request dialog、Todo mutation 和 progress owner transfer 合并成一个可选字段众多的统一 envelope。
+- 把 Plan/Goal workflow 互斥 query、Request dialog、Todo mutation 和 Plan→Todo handoff 合并成一个可选字段众多的统一 envelope。
 
 ## 3. 当前 Pi 的真实边界
 
@@ -751,21 +751,21 @@ pi.todo.board@1
 
 公共 registry 只替代 `accept/resolve/reject` presence plumbing，不触碰 reducer。
 
-### 10.3 Plan execution progress
+### 10.3 Plan → Todo handoff
 
-Plan → Todo 已作为硬依赖落地：Plan manifest 声明并捆绑 Todo，factory 取得 `installTodo(pi)` service，并固定调用 `progress.open/read/update/close`。当前不使用 capability channel、priority、重复 provider ID barrier、open decline 或 local fallback；新 approved execution 只能持久化 owner `todo`，失败 fail closed。
+Plan → Todo 已作为硬依赖落地：Plan manifest 声明并捆绑 Todo，factory 取得 `installTodo(pi)` service；活跃 phase 变化时调用 `syncPlanPhase()`，批准时调用一次 `handoffPlan()`。Handoff 复用普通 Todo `init`/`append` transition 与 `todo-state-v2` journal，成功后 Plan 关闭，agent 只更新普通数字 `#ID`。
 
-若未来确有可替换的**可选**进度 provider，才应在 registry 中定义 multi capability，并重新审查 owner persistence、duplicate、排序、decline、outage 与跨 package compatibility。
+这里没有可替换 progress provider、owner transfer、execution ID 或第二套 ledger。若未来真有多个可替换 Todo 实现，registry 可以承载 typed service discovery；它不应重新引入 parallel progress model。
 
-### 10.4 Plan state coordination
+### 10.4 Plan / Goal workflow exclusivity
 
-继续使用：
+两个独立 package 继续复制并严格解码：
 
 ```text
-pi-extensions:plan-state:v1
+pi-extensions:exclusive-workflow:v1
 ```
 
-它是单向状态广播，不是可调用 service。将它迁入 registry 不会减少复杂度，反而会失去 lifecycle re-emit/reconcile 的明确语义。
+它是按 session 执行的同步只读 query：启动一方前询问另一方是否 active，不广播 state，也不要求 replay/cache。Registry 若提供 typed presence/service lookup 可以替代这层小型 wire plumbing，但不能替代 Plan 与 Goal 各自的 branch journal。
 
 ## 11. 上游现状与方向判断
 
@@ -823,11 +823,11 @@ const permissions = pi.getService<PermissionsService>("permissions");
 4. 迁移仓库内明确 consumer；证明缺失 provider、headless、abort、timeout、shutdown 语义不变。
 5. 全部 consumer 切换后删除旧 Request channel，不永久保留 alias/shim。
 
-### 阶段 C：Todo 与 progress
+### 阶段 C：Todo 与 workflow query
 
-1. Todo service 迁移，证明 tool/service 仍复用同一 reducer、journal 和 result decoder。
-2. Progress 迁移为 multi capability，证明 priority、duplicate、owner outage 与 snapshot validation 不变。
-3. Plan state broadcast 保持独立 channel。
+1. Todo compatibility service 迁移，证明 tool/service 仍复用同一 reducer、journal 和 result decoder。
+2. Plan → Todo phase sync/handoff 保持 hard-dependency direct service；除非出现可替换 Todo provider，否则不引入 registry。
+3. Plan ↔ Goal exclusivity query 可迁移为 typed presence capability，并证明 active/inactive、foreign session、加载顺序与 teardown 语义不变。
 4. 更新每个受影响 extension README 和 coexistence suite。
 
 ### 阶段 D：推动 Pi 核心
@@ -927,7 +927,7 @@ afterAllUnload=0
 
 在 Pi 0.81.1 上应先按依赖语义分流：**A 缺少 B 就不能工作时，使用 package dependency + 幂等 `installB(pi)`，EventBus 最多参与一次同步去重发现，不承担 A → B method RPC；B 可选存在时，再把 `pi.events` 从每项能力的完整 RPC transport 收敛为一条 capability discovery bootstrap，发现后直接调用有版本、可取消、带 lease 的 service object。**
 
-它能消除 Request/Todo/progress 重复的 presence 与注册 plumbing，但不会替代领域 decoder、状态机、journal 或 owner 语义。若最终要让 stock Pi 内置流程自动采用这些通用扩展，仍必须把 capability registry 和对应 facade 提升进 Pi 核心；第三方 extension 无法通过修改某个 context object，让宿主自动理解任意新语义。
+它能消除 Request/Todo compatibility service 与 workflow presence query 重复的注册 plumbing，但不会替代领域 decoder、状态机、journal 或 handoff 原子性。若最终要让 stock Pi 内置流程自动采用这些通用扩展，仍必须把 capability registry 和对应 facade 提升进 Pi 核心；第三方 extension 无法通过修改某个 context object，让宿主自动理解任意新语义。
 
 ## 参考资料
 
@@ -958,7 +958,7 @@ Pi 官方：
 - [Plan README](../../plan/README.md)
 - `request/src/protocol.ts`、`request/src/adapters.ts`、`request/src/index.ts`
 - `todo/src/service.ts`
-- `plan/src/progress.ts`
+- `plan/src/workflow-mode.ts`、`goal/src/workflow-mode.ts`
 - `@earendil-works/pi-coding-agent 0.81.1` 本地安装包中的 `extensions/types.d.ts`、`extensions/loader.js`、`event-bus.js` 与 `interactive-mode.js`
 
 [上一篇：跨扩展通用协议](09-cross-extension-protocols.md) · [下一篇：Hashline 扩展设计与实现](11-hashline-extension-design.md)

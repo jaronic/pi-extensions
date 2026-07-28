@@ -1,7 +1,6 @@
 import type { EventBus, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { decodeTodoToolDetails, type TodoToolDetails } from "./persistence.ts";
 import { MAX_MODEL_OUTPUT_BYTES } from "./state.ts";
-import type { ManagedProgressService } from "./progress-provider.ts";
 import type { TodoPlanPhaseSync } from "./protocol.ts";
 
 export const TODO_SERVICE_CHANNEL = "pi-extensions:todo-service:v1";
@@ -36,11 +35,18 @@ export interface TodoServiceResult {
   readonly details: TodoToolDetails;
 }
 
+export interface TodoPlanHandoffRequest {
+  readonly sessionId: string;
+  readonly phase: string;
+  readonly items: readonly string[];
+  readonly signal?: AbortSignal;
+}
+
 export interface TodoService {
   readonly lifetime: AbortSignal;
   execute(request: TodoServiceRequest): TodoServiceResult;
+  handoffPlan(request: TodoPlanHandoffRequest): TodoServiceResult;
   syncPlanPhase(input: TodoPlanPhaseSync): void;
-  readonly progress: ManagedProgressService;
 }
 
 interface TodoServiceEnvelope {

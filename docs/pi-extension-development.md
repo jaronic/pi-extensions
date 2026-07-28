@@ -321,7 +321,7 @@ npm test
 
 ### 6.9 跨插件协作
 
-- 使用形如 `<owner>:<capability>:vN` 的事件名。本仓库 `pi-extensions:plan-state:v1` 是单向 broadcast 例子。
+- 使用形如 `<owner>:<capability>:vN` 的事件名。本仓库 `pi-extensions:exclusive-workflow:v1` 是同步只读 query 的例子，`pi-extensions:todo-service:v1` 是单接收者 request/reply 的例子。
 - 仅把 EventBus 用于可选 capability 的兼容/发现或 state broadcast；硬依赖必须通过 package dependency 和 typed direct service 表达，不能伪装成可缺席 RPC。
 - 接收方把兼容 channel payload 当 `unknown` 并验证；发送方不要暴露可变内部对象。
 - handler 应对加载顺序和接收方缺失保持安全。需要恢复协作状态时，在 `session_start`/`session_tree` 重新广播快照。

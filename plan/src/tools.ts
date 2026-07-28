@@ -6,15 +6,12 @@ import {
   submitPlan,
   type PlanJournalEntry,
   type PlanState,
-  type PlanStepProgress,
-  type PlanStepStatus,
 } from "./state.ts";
 import {
   AnswerPlanChoiceParams,
   RequestPlanChoiceParams,
   SubmitPlanParams,
   ReportPlanBlockedParams,
-  UpdatePlanStepParams,
 } from "./tool-schema.ts";
 
 export interface PlanToolRuntime {
@@ -27,20 +24,8 @@ export interface PlanToolRuntime {
     signal?: AbortSignal,
   ): Promise<PlanState>;
   commitPlanBlocker(current: PlanState, candidate: PlanState, ctx: ExtensionContext): PlanState;
-  persistActive(
-    action: PlanJournalEntry["action"],
-    ctx: ExtensionContext,
-    willTriggerTurn: boolean,
-    reason: string,
-  ): void;
+  persistActive(action: PlanJournalEntry["action"], ctx: ExtensionContext): void;
   answerChoiceAndQueue(selection: number, ctx: ExtensionContext): PlanState;
-  updateStep(
-    requestId: string,
-    id: string,
-    status: PlanStepStatus,
-    signal: AbortSignal | undefined,
-    ctx: ExtensionContext,
-  ): Promise<{ state: PlanState; progress: readonly PlanStepProgress[]; complete: boolean }>;
 }
 
 export function registerPlanTools(pi: ExtensionAPI, runtime: PlanToolRuntime): void {
@@ -118,7 +103,7 @@ export function registerPlanTools(pi: ExtensionAPI, runtime: PlanToolRuntime): v
       }
       const responseState = requestPlanChoice(current, params);
       runtime.setState(responseState);
-      runtime.persistActive("clarify", ctx, false, "clarification-requested");
+      runtime.persistActive("clarify", ctx);
       const choiceText = ctx.mode === "tui"
         ? "Plan needs a user decision. The choice dialog opens after this turn settles."
         : `${renderPlan(responseState)}\n\nReply with one option number, then call answer_plan_choice.`;
@@ -161,30 +146,4 @@ export function registerPlanTools(pi: ExtensionAPI, runtime: PlanToolRuntime): v
     },
   });
 
-  pi.registerTool({
-    name: "update_plan_step",
-    label: "Update Plan Step",
-    description: "Update a tracked step while executing an approved plan.",
-    promptSnippet: "Update approved plan-step progress",
-    parameters: UpdatePlanStepParams,
-    async execute(toolCallId, params, signal, _onUpdate, ctx) {
-      signal?.throwIfAborted();
-      const current = runtime.getState();
-      if (!current || current.phase !== "executing") {
-        throw new Error("No approved plan is currently executing.");
-      }
-      const updated = await runtime.updateStep(toolCallId, params.id, params.status, signal, ctx);
-      if (updated.complete) {
-        return {
-          content: [{ type: "text", text: "All approved plan steps are complete; Plan mode exited." }],
-          details: summarizePlanState(updated.state, true, undefined, updated.progress),
-        };
-      }
-      const bounded = boundPlanText(renderPlan(updated.state, updated.progress));
-      return {
-        content: [{ type: "text", text: bounded.text }],
-        details: summarizePlanState(updated.state, false, bounded.truncation, updated.progress),
-      };
-    },
-  });
 }

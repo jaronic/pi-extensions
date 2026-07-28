@@ -16,8 +16,9 @@ import { goalSummary } from "./prompts.ts";
 
 export interface GoalCommandRuntime {
   getGoal(): GoalState | null;
+  isPlanActive(ctx: ExtensionContext): boolean;
   setGoal(next: GoalState | null, action: GoalJournalEntry["action"], ctx: ExtensionContext): GoalState | null;
-  queueContinuation(ctx: ExtensionContext, forceThroughPlan?: boolean): void;
+  queueContinuation(ctx: ExtensionContext): void;
 }
 
 async function stopCurrentAgent(ctx: ExtensionCommandContext): Promise<void> {
@@ -71,6 +72,10 @@ export function registerGoalCommand(pi: ExtensionAPI, runtime: GoalCommandRuntim
           ctx.ui.notify("No goal is set.", "warning");
           return;
         }
+        if (runtime.isPlanActive(ctx)) {
+          ctx.ui.notify("Goal cannot resume while Plan mode is active. Approve or cancel Plan first.", "warning");
+          return;
+        }
         await stopCurrentAgent(ctx);
         const settled = runtime.getGoal();
         if (!settled) return;
@@ -80,7 +85,7 @@ export function registerGoalCommand(pi: ExtensionAPI, runtime: GoalCommandRuntim
         }
         runtime.setGoal(setGoalStatus(settled, "active"), "status", ctx);
         ctx.ui.notify("Goal resumed.", "info");
-        runtime.queueContinuation(ctx, true);
+        runtime.queueContinuation(ctx);
         return;
       }
 
@@ -94,6 +99,10 @@ export function registerGoalCommand(pi: ExtensionAPI, runtime: GoalCommandRuntim
           return;
         }
         const resumeAfterEdit = current.status === "active";
+        if (resumeAfterEdit && runtime.isPlanActive(ctx)) {
+          ctx.ui.notify("An active Goal cannot be edited while Plan mode is active. Pause Goal or exit Plan first.", "warning");
+          return;
+        }
         await stopCurrentAgent(ctx);
         const settled = runtime.getGoal();
         if (!settled) return;
@@ -104,7 +113,7 @@ export function registerGoalCommand(pi: ExtensionAPI, runtime: GoalCommandRuntim
           if (resumeAfterEdit && next.status === "paused") next = setGoalStatus(next, "active");
           runtime.setGoal(next, "edit", ctx);
           ctx.ui.notify(`Goal ${statusLabel(next.status)}.`, "info");
-          if (next.status === "active") runtime.queueContinuation(ctx, true);
+          if (next.status === "active") runtime.queueContinuation(ctx);
         } catch (error) {
           ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
         }
@@ -118,6 +127,10 @@ export function registerGoalCommand(pi: ExtensionAPI, runtime: GoalCommandRuntim
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "warning");
         return;
       }
+      if (runtime.isPlanActive(ctx)) {
+        ctx.ui.notify("Goal cannot start while Plan mode is active. Approve or cancel Plan first.", "warning");
+        return;
+      }
       if (current && current.status !== "complete") {
         if (!ctx.hasUI) {
           ctx.ui.notify("An unfinished goal exists. Clear it before replacing it in non-interactive mode.", "warning");
@@ -129,7 +142,7 @@ export function registerGoalCommand(pi: ExtensionAPI, runtime: GoalCommandRuntim
       await stopCurrentAgent(ctx);
       runtime.setGoal(createGoal(parsed.objective, parsed.tokenBudget), "set", ctx);
       ctx.ui.notify("Goal active.", "info");
-      runtime.queueContinuation(ctx, true);
+      runtime.queueContinuation(ctx);
     },
   });
 }

@@ -9,25 +9,11 @@ import { registerTodoCommand } from "./command.ts";
 import {
   TODO_STATE_TYPE,
   buildTodoStateEntry,
+  buildTodoToolDetails,
   decodeTodoToolDetails,
   restoreTodoSnapshot,
   type TodoStateEntry,
 } from "./persistence.ts";
-import {
-  TODO_MANAGED_PROGRESS_TYPE,
-  buildManagedProgressEntry,
-  createTodoProgressProvider,
-  managedProgressPrompt,
-  managedProgressWidget,
-  restoreManagedProgress,
-  type ManagedProgressCloseRequest,
-  type ManagedProgressEntry,
-  type ManagedProgressOpenRequest,
-  type ManagedProgressReadRequest,
-  type ManagedProgressService,
-  type ManagedProgressState,
-  type ManagedProgressUpdateRequest,
-} from "./progress-provider.ts";
 import { todoSystemPrompt } from "./prompts.ts";
 import {
   decodeTodoPlanPhaseSync,
@@ -39,6 +25,7 @@ import {
   registerTodoService,
   requestTodoService,
   TODO_SERVICE_CHANNEL,
+  type TodoPlanHandoffRequest,
   type TodoService,
   type TodoServiceRequest,
   type TodoServiceResult,
@@ -49,10 +36,11 @@ import {
   incrementSafeInteger,
   todoBoardStatus,
   todoStatesEqual,
+  transitionPlanHandoff,
   type TodoSnapshot,
   type TodoTransition,
 } from "./state.ts";
-import { todoWidget } from "./output.ts";
+import { buildTodoMutationText, todoWidget } from "./output.ts";
 import {
   executeTodoOperation,
   registerTodoTool,
@@ -63,18 +51,15 @@ import {
 export { TODO_STATE_TYPE, TODO_TOOL_DETAILS_KIND } from "./persistence.ts";
 export type { TodoStateEntry, TodoStateEntryOperation, TodoStateEntrySource, TodoToolDetails } from "./persistence.ts";
 export { requestTodoService, TODO_SERVICE_CHANNEL } from "./service.ts";
-export type { TodoService, TodoServiceOperation, TodoServiceRequest, TodoServiceResult } from "./service.ts";
 export type {
-  ManagedProgressCloseRequest,
-  ManagedProgressOpenRequest,
-  ManagedProgressReadRequest,
-  ManagedProgressService,
-  ManagedProgressSnapshot,
-  ManagedProgressStatus,
-  ManagedProgressStepDefinition,
-  ManagedProgressUpdateRequest,
-} from "./progress-provider.ts";
+  TodoPlanHandoffRequest,
+  TodoService,
+  TodoServiceOperation,
+  TodoServiceRequest,
+  TodoServiceResult,
+} from "./service.ts";
 export type { TodoPlanPhase, TodoPlanPhaseSync } from "./protocol.ts";
+export { MAX_PHASE_NAME_CHARS } from "./state.ts";
 export type {
   TodoCounts,
   TodoPhase,
@@ -120,14 +105,12 @@ export function installTodo(
   const createBoardId = dependencies.createBoardId ?? randomUUID;
   const lifetimeController = new AbortController();
   let snapshot: TodoSnapshot = EMPTY_TODO_SNAPSHOT;
-  let managedProgress: ManagedProgressState | null = null;
   let restoreBlockedReason: string | undefined;
   let planPhase: TodoPlanPhase = "off";
   const latestPlanPhases = new Map<string, TodoPlanPhase>();
   let sessionId: string | undefined;
   let currentContext: ExtensionContext | undefined;
   let widgetVisible = true;
-  let settledWidgetVisible = false;
   let disposed = false;
   let unsubscribeService: () => void = () => undefined;
   let installation: TodoInstallation;
@@ -158,16 +141,6 @@ export function installTodo(
         ctx.ui.setWidget("todo", undefined);
         return;
       }
-      const managed = managedProgress;
-      if (planPhase === "executing" && managed) {
-        ctx.ui.setWidget("todo", widgetVisible
-          ? (_tui, theme) => ({
-              render: (width) => managedProgressWidget(managed, theme, width),
-              invalidate: () => undefined,
-            })
-          : undefined);
-        return;
-      }
       if (isPlanActive()) {
         ctx.ui.setWidget("todo", undefined);
         return;
@@ -178,7 +151,7 @@ export function installTodo(
         return;
       }
       const boardStatus = todoBoardStatus(state);
-      const shouldShowWidget = widgetVisible && (boardStatus !== "settled" || settledWidgetVisible);
+      const shouldShowWidget = widgetVisible && boardStatus !== "settled";
       ctx.ui.setWidget("todo", shouldShowWidget
         ? (_tui, theme) => ({
             render: (width) => todoWidget(state, theme, width),
@@ -198,16 +171,12 @@ export function installTodo(
 
   function assertMutationAllowed(): void {
     if (isPlanActive()) {
-      throw new Error(`Todo mutations are frozen while Plan is ${planPhase}; use update_plan_step or exit Plan first.`);
+      throw new Error(`Todo mutations are frozen while Plan is ${planPhase}; approve or cancel Plan first.`);
     }
   }
 
   function applyCommittedSnapshot(next: TodoSnapshot, ctx: ExtensionContext): void {
-    const wasSettled = todoBoardStatus(snapshot.state) === "settled";
     snapshot = next;
-    const isSettled = todoBoardStatus(snapshot.state) === "settled";
-    if (isSettled && !wasSettled) settledWidgetVisible = true;
-    else if (!isSettled) settledWidgetVisible = false;
     refreshUi(ctx);
   }
 
@@ -248,13 +217,6 @@ export function installTodo(
     return next;
   }
 
-  function commitManagedProgress(next: ManagedProgressState | null): void {
-    const entry = buildManagedProgressEntry(next);
-    pi.appendEntry<ManagedProgressEntry>(TODO_MANAGED_PROGRESS_TYPE, entry);
-    managedProgress = next;
-    if (currentContext) refreshUi(currentContext);
-  }
-
   function applyPlanPhase(input: TodoPlanPhaseSync): void {
     latestPlanPhases.set(input.sessionId, input.phase);
     if (sessionId === undefined || input.sessionId !== sessionId) return;
@@ -262,31 +224,6 @@ export function installTodo(
     if (currentContext) refreshUi(currentContext);
   }
 
-  const todoProgressProvider = createTodoProgressProvider({
-    getState: () => managedProgress,
-    getSessionId: () => sessionId,
-    getPlanPhase: () => planPhase,
-    now,
-    commit: commitManagedProgress,
-  });
-  const progress: ManagedProgressService = Object.freeze({
-    open: (request: ManagedProgressOpenRequest) => {
-      assertInstallationActive();
-      return todoProgressProvider.open(request);
-    },
-    read: (request: ManagedProgressReadRequest) => {
-      assertInstallationActive();
-      return todoProgressProvider.read(request);
-    },
-    update: (request: ManagedProgressUpdateRequest) => {
-      assertInstallationActive();
-      return todoProgressProvider.update(request);
-    },
-    close: (request: ManagedProgressCloseRequest) => {
-      assertInstallationActive();
-      return todoProgressProvider.close(request);
-    },
-  });
 
   function restoreFromBranch(ctx: ExtensionContext): void {
     if (disposed) return;
@@ -299,14 +236,10 @@ export function installTodo(
     const restored = restoreTodoSnapshot(ctx.sessionManager.getBranch());
     snapshot = restored.snapshot;
     restoreBlockedReason = restored.blockedReason;
-    const restoredManaged = restoreManagedProgress(ctx.sessionManager.getBranch(), sessionId);
-    managedProgress = restoredManaged.state;
     const latestPlanPhase = latestPlanPhases.get(sessionId);
     if (latestPlanPhase) planPhase = latestPlanPhase;
-    settledWidgetVisible = todoBoardStatus(snapshot.state) === "settled";
     refreshUi(ctx);
     if (restored.warning && ctx.hasUI) ctx.ui.notify(restored.warning, "warning");
-    if (restoredManaged.warning && ctx.hasUI) ctx.ui.notify(restoredManaged.warning, "warning");
   }
 
   const runtime = {
@@ -341,6 +274,32 @@ export function installTodo(
     return Object.freeze({ content: result.content[0].text, details: result.details });
   }
 
+  function handoffPlan(request: TodoPlanHandoffRequest): TodoServiceResult {
+    assertInstallationActive();
+    const ctx = currentContext;
+    const activeSessionId = sessionId;
+    if (!ctx || activeSessionId === undefined) throw new Error("The Todo service is not ready for an active session.");
+    if (request.sessionId !== activeSessionId) throw new Error("The Todo Plan handoff targets a different session.");
+    if (planPhase !== "awaitingApproval") {
+      throw new Error("Todo accepts a Plan handoff only while that Plan is awaiting approval.");
+    }
+    request.signal?.throwIfAborted();
+    const transition = transitionPlanHandoff(snapshot.state, request.phase, request.items, now(), createBoardId);
+    const operation: TodoMutationOperation = transition.effect.kind === "initialized" ? "init" : "append";
+    const next = freezeTodoSnapshot({
+      sequence: incrementSafeInteger(snapshot.sequence, "Todo sequence"),
+      state: transition.state,
+    });
+    const details = buildTodoToolDetails(next, operation, transition.changedTaskIds);
+    const content = buildTodoMutationText(operation, next, transition);
+    request.signal?.throwIfAborted();
+    assertAvailable();
+    const entry = buildTodoStateEntry("service", operation, next);
+    pi.appendEntry<TodoStateEntry>(TODO_STATE_TYPE, entry);
+    applyCommittedSnapshot(next, ctx);
+    return Object.freeze({ content, details });
+  }
+
   function syncPlanPhase(input: TodoPlanPhaseSync): void {
     assertInstallationActive();
     applyPlanPhase(decodeTodoPlanPhaseSync(input));
@@ -349,8 +308,8 @@ export function installTodo(
   const service = Object.freeze({
     lifetime: lifetimeController.signal,
     execute,
+    handoffPlan,
     syncPlanPhase,
-    progress,
   });
 
   function dispose(ctx: ExtensionContext | undefined): void {
@@ -378,21 +337,10 @@ export function installTodo(
   pi.on("session_compact", (_event, ctx) => refreshUi(ctx));
 
   pi.on("before_agent_start", (event) => {
-    if (restoreBlockedReason) return;
-    const managedProjection = planPhase === "executing" && managedProgress
-      ? managedProgressPrompt(managedProgress)
-      : undefined;
-    if (managedProjection) return { systemPrompt: `${event.systemPrompt}\n\n${managedProjection}` };
-    if (isPlanActive()) return;
+    if (restoreBlockedReason || isPlanActive()) return;
     const projection = todoSystemPrompt(snapshot.state);
     if (!projection) return;
     return { systemPrompt: `${event.systemPrompt}\n\n${projection}` };
-  });
-
-  pi.on("agent_start", (_event, ctx) => {
-    if (todoBoardStatus(snapshot.state) !== "settled" || !settledWidgetVisible) return;
-    settledWidgetVisible = false;
-    refreshUi(ctx);
   });
 
   pi.on("tool_result", (event, ctx) => {

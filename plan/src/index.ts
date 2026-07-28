@@ -1,67 +1,55 @@
-import { randomUUID } from "node:crypto";
 import {
   copyToClipboard,
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { installRequest, type RequestService } from "pi-request-ui-dev";
-import { installTodo, type TodoService } from "pi-todo-dev";
+import { installTodo, type TodoService, type TodoServiceResult } from "pi-todo-dev";
 import {
   answerPlanChoice,
-  approvePlanWithExternalProgress,
   consumePlanChoice,
   decodePlanJournalEntry,
+  planHandoffPhaseName,
   refinePlan,
   reportPlanBlocked,
   resumeBlockedPlan,
-  updatePlanStep,
   validatePlanPath,
   type PlanJournalEntry,
-  type PlanPhase,
   type PlanState,
-  type PlanStepProgress,
-  type PlanStepStatus,
 } from "./state.ts";
 import {
   phaseLabel,
   renderPlan,
   renderPlanWidget,
 } from "./output.ts";
-import {
-  allProgressStepsComplete,
-  closeTodoProgress,
-  openTodoProgress,
-  readTodoProgress,
-  updateTodoProgress,
-  type ProgressSnapshot,
-} from "./progress.ts";
 import { isPlanToolAllowed, selectPlanTools } from "./tool-policy.ts";
 import { PlanToolLease } from "./tool-lease.ts";
 import { planSystemPrompt } from "./prompts.ts";
 import {
   controlPlanUpdatedAt,
+  executionPlanUpdatedAt,
   PLAN_CONTROL_TYPE,
-  PLAN_COORDINATION_CHANNEL,
+  PLAN_EXECUTION_TYPE,
   LEGACY_PLAN_STATE_TYPES,
   PLAN_STATE_TYPE,
   PLAN_TOOL_NAMES,
-  type PlanCoordinationSignal,
 } from "./protocol.ts";
 import { registerPlanCommand } from "./command.ts";
 import { registerPlanTools } from "./tools.ts";
-import { requestPlanReview } from "./review.ts";
+import { requestPlanReview, type PlanReviewDecision } from "./review.ts";
 import { requestPlanChoice } from "./clarification.ts";
+import { isExclusiveWorkflowActive, registerExclusiveWorkflow } from "./workflow-mode.ts";
 import { createPlanArtifactStore, type PlanArtifactStore } from "./artifacts.ts";
-
-export { PLAN_COORDINATION_CHANNEL } from "./protocol.ts";
-
-
 
 export interface PlanExtensionDependencies {
   copyText(text: string): Promise<void>;
   artifactStore: PlanArtifactStore;
   requestService: RequestService;
   todoService: TodoService;
+}
+
+function escapeXmlText(input: string): string {
+  return input.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 export default function planExtension(
@@ -73,7 +61,6 @@ export default function planExtension(
   const requestService = dependencies.requestService ?? installRequest(pi);
   const todoService = dependencies.todoService ?? installTodo(pi);
   let state: PlanState | null = null;
-  let externalSnapshot: ProgressSnapshot | undefined;
   let controlQueued = false;
   const toolLease = new PlanToolLease(PLAN_TOOL_NAMES);
   let automaticReviewUpdatedAt: number | undefined;
@@ -82,7 +69,8 @@ export default function planExtension(
   let clarificationOpen = false;
   let choiceAnswerQueuedAt: number | undefined;
   let submissionPending = false;
-  let externalProgressError: string | undefined;
+  let currentSessionId: string | undefined;
+  let pendingExecutionUpdatedAt: number | undefined;
 
   function getPlanState(): PlanState | null {
     return state;
@@ -112,9 +100,7 @@ export default function planExtension(
     ) {
       state = { ...state, enteredWithTools: effectiveTools };
     }
-    const selectedTools = state.phase === "executing"
-      ? [...new Set([...effectiveTools, "update_plan_step"])]
-      : selectPlanTools(planningToolPool(effectiveTools), state.phase);
+    const selectedTools = selectPlanTools(planningToolPool(effectiveTools), state.phase);
     pi.setActiveTools(selectedTools);
     toolLease.applied(selectedTools);
   }
@@ -127,54 +113,40 @@ export default function planExtension(
       ctx.ui.setWidget("plan", undefined);
       return;
     }
-    const color = current.phase === "executing" ? "success" : current.phase === "awaitingApproval" || current.phase === "awaitingClarification" || current.phase === "blocked" ? "warning" : "accent";
-    const providerId = current.phase === "executing" && current.progress?.kind === "external"
-      ? current.progress.providerId
-      : undefined;
-    const [heading, ...lines] = renderPlanWidget(current, externalSnapshot?.steps);
-    ctx.ui.setStatus("plan", current.phase === "executing" ? undefined : ctx.ui.theme.fg(color, providerId ? `${heading} · ${providerId}` : heading));
-    ctx.ui.setWidget("plan", providerId ? undefined : lines.length > 0 ? lines : undefined);
+    const color = current.phase === "awaitingApproval" || current.phase === "awaitingClarification" || current.phase === "blocked"
+      ? "warning"
+      : "accent";
+    const [heading, ...lines] = renderPlanWidget(current);
+    ctx.ui.setStatus("plan", ctx.ui.theme.fg(color, heading));
+    ctx.ui.setWidget("plan", lines.length > 0 ? lines : undefined);
   }
 
-  function emitPlanState(ctx: ExtensionContext, willTriggerTurn: boolean, reason: string): void {
-    const phase: PlanPhase = state?.phase ?? "off";
-    const signal: PlanCoordinationSignal = {
-      version: 1,
+  function syncTodoPlanPhase(ctx: ExtensionContext): void {
+    todoService.syncPlanPhase({
       sessionId: ctx.sessionManager.getSessionId(),
-      phase,
-      readOnly: phase !== "off" && phase !== "executing",
-      awaitingApproval: phase === "awaitingApproval",
-      willTriggerTurn,
-      reason,
-    };
-    todoService.syncPlanPhase({ sessionId: signal.sessionId, phase });
-    pi.events.emit(PLAN_COORDINATION_CHANNEL, signal);
+      phase: state?.phase ?? "off",
+    });
   }
 
   function appendActive(action: PlanJournalEntry["action"]): void {
     if (!state) throw new Error("Cannot persist an inactive plan as active.");
     syncPlanTools();
-    pi.appendEntry<PlanJournalEntry>(PLAN_STATE_TYPE, { version: 3, action, state });
+    pi.appendEntry<PlanJournalEntry>(PLAN_STATE_TYPE, { version: 4, action, state });
   }
 
-  function refreshPersistedActive(ctx: ExtensionContext, willTriggerTurn: boolean, reason: string): void {
+  function refreshActiveProjection(ctx: ExtensionContext): void {
     updateStatus(ctx);
-    emitPlanState(ctx, willTriggerTurn, reason);
+    syncTodoPlanPhase(ctx);
   }
 
-  function persistActive(
-    action: PlanJournalEntry["action"],
-    ctx: ExtensionContext,
-    willTriggerTurn: boolean,
-    reason: string,
-  ): void {
+  function persistActive(action: PlanJournalEntry["action"], ctx: ExtensionContext): void {
     if (!state) throw new Error("Cannot persist an inactive plan as active.");
     if (action === "submit") automaticReviewUpdatedAt = state.updatedAt;
     else if (state.phase !== "awaitingApproval") automaticReviewUpdatedAt = undefined;
     if (action === "clarify") automaticClarificationUpdatedAt = state.updatedAt;
     else if (state.phase !== "awaitingClarification") automaticClarificationUpdatedAt = undefined;
     appendActive(action);
-    refreshPersistedActive(ctx, willTriggerTurn, reason);
+    refreshActiveProjection(ctx);
   }
 
   async function discardArtifactAfterFailure(path: string, failure: unknown): Promise<never> {
@@ -248,7 +220,7 @@ export default function planExtension(
       const committed = state;
       if (!committed) throw new Error("Submitted Plan was unexpectedly cleared after journal commit.");
       automaticReviewUpdatedAt = committed.updatedAt;
-      refreshPersistedActive(ctx, false, "awaiting-approval");
+      refreshActiveProjection(ctx);
       return committed;
     } finally {
       submissionPending = false;
@@ -261,7 +233,7 @@ export default function planExtension(
     }
     state = candidate;
     try {
-      persistActive("block", ctx, false, "plan-blocked");
+      persistActive("block", ctx);
       return candidate;
     } catch (error) {
       state = current;
@@ -271,45 +243,25 @@ export default function planExtension(
     }
   }
 
-  async function transitionOff(
-    action: "cancel" | "complete",
-    ctx: ExtensionContext,
-    reason: string,
-    signal?: AbortSignal,
-  ): Promise<void> {
+  function transitionOff(ctx: ExtensionContext): void {
     const current = state;
-    pi.appendEntry<PlanJournalEntry>(PLAN_STATE_TYPE, { version: 3, action, state: null });
+    pi.appendEntry<PlanJournalEntry>(PLAN_STATE_TYPE, { version: 4, action: "cancel", state: null });
     const restoreTools = toolLease.active
       ? toolLease.finish(pi.getActiveTools())
       : current?.enteredWithTools;
     state = null;
-    externalProgressError = undefined;
-    externalSnapshot = undefined;
     automaticReviewUpdatedAt = undefined;
     automaticClarificationUpdatedAt = undefined;
     choiceAnswerQueuedAt = undefined;
+    pendingExecutionUpdatedAt = undefined;
     if (restoreTools) pi.setActiveTools(restoreTools);
     else syncPlanTools();
     updateStatus(ctx);
-    emitPlanState(ctx, false, reason);
-    if (current?.phase !== "executing" || current.progress?.kind !== "external") return;
-    if (current.progress.providerId !== "todo") {
-      if (ctx.hasUI) ctx.ui.notify(`Plan progress owner ${current.progress.providerId} was not closed because Todo is the only supported owner.`, "warning");
-      return;
-    }
-    try {
-      await closeTodoProgress(todoService.progress, {
-        sessionId: ctx.sessionManager.getSessionId(),
-        executionId: current.progress.executionId,
-        outcome: action === "complete" ? "completed" : "cancelled",
-        signal,
-      });
-    } catch (error) {
-      if (ctx.hasUI) ctx.ui.notify(`Todo managed progress close failed after Plan exited: ${error instanceof Error ? error.message : String(error)}`, "warning");
-    }
+    syncTodoPlanPhase(ctx);
   }
 
   function restoreFromBranch(ctx: ExtensionContext): void {
+    currentSessionId = ctx.sessionManager.getSessionId();
     const previousTools = toolLease.active
       ? toolLease.finish(pi.getActiveTools())
       : state?.enteredWithTools;
@@ -327,11 +279,8 @@ export default function planExtension(
       restoreWarning = undefined;
     }
     state = restored;
-    externalProgressError = state?.phase === "executing" && state.progress?.kind === "external" && state.progress.providerId !== "todo"
-      ? `Plan progress owner ${state.progress.providerId} is unsupported; only Todo can resume managed progress.`
-      : undefined;
-    externalSnapshot = undefined;
     controlQueued = false;
+    pendingExecutionUpdatedAt = undefined;
     automaticReviewUpdatedAt = undefined;
     automaticClarificationUpdatedAt = undefined;
     choiceAnswerQueuedAt = undefined;
@@ -339,11 +288,11 @@ export default function planExtension(
     else if (previousTools) pi.setActiveTools(previousTools);
     syncPlanTools();
     updateStatus(ctx);
-    emitPlanState(ctx, true, "session-sync");
+    syncTodoPlanPhase(ctx);
     if (restoreWarning && ctx.hasUI) ctx.ui.notify(`Stored Plan state was not restored: ${restoreWarning}`, "warning");
   }
 
-  function queueControlTurn(ctx: ExtensionContext, kind: "plan" | "refine" | "execute" | "clarification", content: string): boolean {
+  function queueControlTurn(ctx: ExtensionContext, kind: "plan" | "refine" | "clarification", content: string): boolean {
     if (!state || controlQueued || ctx.hasPendingMessages()) return false;
     controlQueued = true;
     const message = {
@@ -366,10 +315,45 @@ export default function planExtension(
     }
   }
 
+  function queueExecutionTurn(
+    ctx: ExtensionContext,
+    approved: PlanState,
+    handoff: TodoServiceResult,
+  ): boolean {
+    if (controlQueued) return false;
+    controlQueued = true;
+    pendingExecutionUpdatedAt = approved.updatedAt;
+    const message = {
+      customType: PLAN_EXECUTION_TYPE,
+      content: `Execute the explicitly approved plan below. Plan mode is now off; the ordinary Todo board is the only execution-progress authority.
+
+<untrusted_plan>
+${escapeXmlText(approved.plan ?? "")}
+</untrusted_plan>
+
+Todo handoff:
+${handoff.content}
+
+Use the todo tool with its numeric #IDs. Mark the active Todo done only after its observable check passes; block it only for a genuine external dependency. Todo is the sole progress ledger after approval.`,
+      display: false,
+      details: { kind: "execute", planUpdatedAt: approved.updatedAt, todoSequence: handoff.details.sequence },
+    };
+    try {
+      if (ctx.isIdle()) pi.sendMessage(message, { triggerTurn: true });
+      else pi.sendMessage(message, { triggerTurn: true, deliverAs: "followUp" });
+      return true;
+    } catch (error) {
+      controlQueued = false;
+      pendingExecutionUpdatedAt = undefined;
+      ctx.ui.notify(`Failed to queue approved Plan execution: ${error instanceof Error ? error.message : String(error)}`, "error");
+      return false;
+    }
+  }
+
   function answerChoiceAndQueue(selection: number, ctx: ExtensionContext): PlanState {
     if (!state) throw new Error("No plan is active.");
     state = answerPlanChoice(state, selection);
-    persistActive("answer", ctx, true, "clarification-answered");
+    persistActive("answer", ctx);
     const selected = state.clarification?.options[selection];
     if (!selected) throw new Error("Selected Plan choice was unexpectedly unavailable.");
     queueControlTurn(
@@ -383,130 +367,59 @@ export default function planExtension(
   async function approveAndQueue(ctx: ExtensionContext): Promise<void> {
     const current = state;
     if (!current || current.phase !== "awaitingApproval") throw new Error("No plan is active.");
-    const executionId = randomUUID();
-    const snapshot = await openTodoProgress(todoService.progress, {
-      sessionId: ctx.sessionManager.getSessionId(),
-      executionId,
-      steps: current.steps,
-      signal: ctx.signal,
-    });
-    if (state !== current || state.phase !== "awaitingApproval") {
-      try {
-        await closeTodoProgress(todoService.progress, {
-          sessionId: ctx.sessionManager.getSessionId(),
-          executionId,
-          outcome: "cancelled",
-          signal: ctx.signal,
-        });
-      } catch {
-        // The state change is authoritative; a stale acquisition cannot reopen it.
-      }
-      throw new Error("Plan state changed while Todo progress ownership was being acquired.");
-    }
-    const candidate = approvePlanWithExternalProgress(current, "todo", executionId);
-    state = candidate;
-    externalSnapshot = snapshot;
-    externalProgressError = undefined;
+    ctx.signal?.throwIfAborted();
+    pi.appendEntry<PlanJournalEntry>(PLAN_STATE_TYPE, { version: 4, action: "approve", state: null });
+    let handoff: TodoServiceResult;
     try {
-      persistActive("approve", ctx, true, "approved-tools-restored");
+      handoff = todoService.handoffPlan({
+        sessionId: ctx.sessionManager.getSessionId(),
+        phase: planHandoffPhaseName(current.summary),
+        items: current.steps,
+        signal: ctx.signal,
+      });
     } catch (error) {
-      state = current;
-      externalSnapshot = undefined;
-      syncPlanTools();
       try {
-        await closeTodoProgress(todoService.progress, {
-          sessionId: ctx.sessionManager.getSessionId(),
-          executionId,
-          outcome: "cancelled",
-          signal: ctx.signal,
-        });
-      } catch (closeError) {
-        throw new AggregateError([error, closeError], "Failed to roll back Todo progress ownership.", { cause: error });
+        pi.appendEntry<PlanJournalEntry>(PLAN_STATE_TYPE, { version: 4, action: "submit", state: current });
+      } catch (rollbackError) {
+        throw new AggregateError([error, rollbackError], "Failed to roll back Plan approval after Todo handoff failed.", { cause: error });
       }
       throw error;
     }
-    queueControlTurn(
-      ctx,
-      "execute",
-      `Execute the explicitly approved plan below. Update tracked steps as their observable state changes.\n\n${renderPlan(candidate, snapshot.steps)}`,
-    );
-  }
-
-  async function renderCurrentPlan(ctx: ExtensionContext): Promise<string> {
-    const current = state;
-    if (!current) return "Plan mode is off. Use /plan to start.";
-    if (current.phase !== "executing" || current.progress?.kind !== "external") return renderPlan(current);
-    if (externalProgressError) return `${renderPlan(current, externalSnapshot?.steps)}\n\n${externalProgressError}`;
-    try {
-      const snapshot = await readTodoProgress(todoService.progress, {
-        sessionId: ctx.sessionManager.getSessionId(),
-        executionId: current.progress.executionId,
-        signal: ctx.signal,
-      }, current.steps);
-      if (state === current) {
-        externalSnapshot = snapshot;
-        updateStatus(ctx);
-      }
-      return renderPlan(current, snapshot.steps);
-    } catch (error) {
-      return `${renderPlan(current, externalSnapshot?.steps)}\n\nTodo managed progress unavailable: ${error instanceof Error ? error.message : String(error)}`;
-    }
-  }
-
-  async function updateStep(
-    requestId: string,
-    id: string,
-    status: PlanStepStatus,
-    signal: AbortSignal | undefined,
-    ctx: ExtensionContext,
-  ): Promise<{ state: PlanState; progress: readonly PlanStepProgress[]; complete: boolean }> {
-    const current = state;
-    if (!current || current.phase !== "executing" || !current.progress) {
-      throw new Error("No approved plan is currently executing.");
-    }
-    if (current.progress.kind === "local") {
-      const next = updatePlanStep(current, id, status);
-      const progress = next.progress?.kind === "local" ? next.progress.steps : [];
-      const complete = progress.length > 0 && progress.every((step) => step.status === "completed");
-      if (complete) {
-        await transitionOff("complete", ctx, "completed-tools-restored", signal);
-      } else {
-        state = next;
-        try {
-          persistActive("step", ctx, false, "step-updated");
-        } catch (error) {
-          state = current;
-          syncPlanTools();
-          updateStatus(ctx);
-          throw error;
-        }
-      }
-      return { state: next, progress, complete };
-    }
-    if (current.progress.providerId !== "todo" || externalProgressError) {
-      throw new Error(externalProgressError ?? "Plan progress owner is not Todo.");
-    }
-    const snapshot = await updateTodoProgress(todoService.progress, {
-      sessionId: ctx.sessionManager.getSessionId(),
-      executionId: current.progress.executionId,
-      requestId,
-      stepId: id,
-      status,
-      signal,
-    }, current.steps);
-    if (state !== current) throw new Error("Plan state changed while Todo managed progress was updating.");
-    externalSnapshot = snapshot;
+    const restoreTools = toolLease.active
+      ? toolLease.finish(pi.getActiveTools())
+      : current.enteredWithTools;
+    state = null;
+    automaticReviewUpdatedAt = undefined;
+    automaticClarificationUpdatedAt = undefined;
+    choiceAnswerQueuedAt = undefined;
+    pi.setActiveTools(restoreTools);
     updateStatus(ctx);
-    const complete = allProgressStepsComplete(snapshot);
-    if (complete) await transitionOff("complete", ctx, "completed-tools-restored", signal);
-    return { state: current, progress: snapshot.steps, complete };
+    syncTodoPlanPhase(ctx);
+    queueExecutionTurn(ctx, current, handoff);
   }
 
-  function refineAndQueue(ctx: ExtensionContext): void {
-    if (!state) throw new Error("No plan is active.");
-    state = refinePlan(state);
-    persistActive("refine", ctx, true, "refine");
-    queueControlTurn(ctx, "refine", "Refine the submitted plan using current evidence, then call submit_plan with the full replacement.");
+  async function renderCurrentPlan(_ctx: ExtensionContext): Promise<string> {
+    return state ? renderPlan(state) : "Plan mode is off. Use /plan to start.";
+  }
+
+  function refineAndQueue(ctx: ExtensionContext, feedback: string): void {
+    const current = state;
+    if (!current || current.phase !== "awaitingApproval") throw new Error("No submitted plan is awaiting refinement.");
+    const normalized = feedback.trim();
+    if (!normalized) throw new Error("Plan refinement requires concrete feedback.");
+    if ([...normalized].length > 4_000) throw new Error("Plan refinement feedback exceeds 4,000 characters.");
+    state = refinePlan(current);
+    persistActive("refine", ctx);
+    const queued = queueControlTurn(
+      ctx,
+      "refine",
+      `Refine the submitted plan using the user's requested changes below, then call submit_plan with the full replacement.
+
+<untrusted_refinement_feedback>
+${escapeXmlText(normalized)}
+</untrusted_refinement_feedback>`,
+    );
+    if (!queued) throw new Error("Plan refinement was recorded, but its planning turn could not be queued.");
   }
 
   function resumeBlockedAndQueue(ctx: ExtensionContext): void {
@@ -514,7 +427,7 @@ export default function planExtension(
     if (!current) throw new Error("No plan is active.");
     state = resumeBlockedPlan(current);
     try {
-      persistActive("resume", ctx, true, "blocker-resumed");
+      persistActive("resume", ctx);
     } catch (error) {
       state = current;
       syncPlanTools();
@@ -577,15 +490,24 @@ export default function planExtension(
     automaticReviewUpdatedAt = undefined;
     if (reviewOpen) return;
     reviewOpen = true;
-    let choice: Awaited<ReturnType<typeof requestPlanReview>>;
+    let choice: PlanReviewDecision | undefined;
     try {
       choice = await requestPlanReview(ctx, current, copyText);
     } finally {
       reviewOpen = false;
     }
     if (!choice || choice === "Stay in plan mode") {
-      ctx.ui.notify("Plan remains awaiting approval.", "info");
+      ctx.ui.notify("Plan remains awaiting approval. Send your change requests, then use /plan refine <feedback>; approve when no changes remain.", "info");
       return;
+    }
+    let refinementFeedback: string | undefined;
+    if (choice === "Refine plan") {
+      const edited = await ctx.ui.editor("Plan refinement feedback", "");
+      if (edited === undefined || !edited.trim()) {
+        ctx.ui.notify("Plan remains awaiting approval; no refinement feedback was submitted.", "info");
+        return;
+      }
+      refinementFeedback = edited;
     }
     await beforeTransition?.();
     const settled = state;
@@ -595,18 +517,29 @@ export default function planExtension(
     }
     if (choice === "Execute plan") {
       await approveAndQueue(ctx);
-      ctx.ui.notify("Plan approved; original tools restored and execution queued.", "info");
+      ctx.ui.notify("Plan approved; steps transferred to Todo, Plan exited, and execution queued.", "info");
     } else if (choice === "Refine plan") {
-      refineAndQueue(ctx);
-      ctx.ui.notify("Plan returned to read-only refinement.", "info");
+      refineAndQueue(ctx, refinementFeedback ?? "");
+      ctx.ui.notify("Plan returned to read-only refinement with your feedback.", "info");
     } else {
-      await transitionOff("cancel", ctx, "cancelled-tools-restored", ctx.signal);
+      transitionOff(ctx);
       ctx.ui.notify("Plan cancelled; original tools restored.", "info");
     }
   }
 
+  const unsubscribeWorkflow = registerExclusiveWorkflow(
+    pi.events,
+    "plan",
+    (sessionId) => state !== null && currentSessionId === sessionId,
+  );
+
   const planRuntime = {
     getState: () => state,
+    isGoalActive: (ctx: ExtensionContext) => isExclusiveWorkflowActive(
+      pi.events,
+      ctx.sessionManager.getSessionId(),
+      "goal",
+    ),
     setState(next: PlanState): void {
       state = next;
     },
@@ -615,7 +548,7 @@ export default function planExtension(
     commitPlanBlocker,
     syncPlanTools,
     updateStatus,
-    emitPlanState,
+    syncTodoPlanPhase,
     queueControlTurn,
     approveAndQueue,
     answerChoiceAndQueue,
@@ -624,7 +557,6 @@ export default function planExtension(
     resumeBlockedAndQueue,
     transitionOff,
     renderCurrentPlan,
-    updateStep,
     reviewSubmittedPlan,
   };
   registerPlanCommand(pi, planRuntime);
@@ -656,6 +588,7 @@ export default function planExtension(
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
+    pendingExecutionUpdatedAt = undefined;
     if (
       state?.phase === "planning" &&
       state.clarification?.selection !== undefined &&
@@ -665,7 +598,7 @@ export default function planExtension(
       const answered = state;
       try {
         state = consumePlanChoice(answered);
-        persistActive("resume", ctx, false, "clarification-consumed");
+        persistActive("resume", ctx);
         choiceAnswerQueuedAt = undefined;
       } catch (error) {
         state = answered;
@@ -697,13 +630,22 @@ export default function planExtension(
 
   pi.on("context", (event) => {
     let latestControl = -1;
-    for (let index = 0; index < event.messages.length; index++) {
+    let latestExecution = -1;
+    for (let index = 0; index < event.messages.length; index += 1) {
       if (controlPlanUpdatedAt(event.messages[index]) === state?.updatedAt) latestControl = index;
+      if (executionPlanUpdatedAt(event.messages[index]) === pendingExecutionUpdatedAt) latestExecution = index;
     }
     return {
       messages: event.messages.filter((message, index) => {
-        const updatedAt = controlPlanUpdatedAt(message);
-        return updatedAt === undefined || (state !== null && updatedAt === state.updatedAt && index === latestControl);
+        const controlUpdatedAt = controlPlanUpdatedAt(message);
+        if (controlUpdatedAt !== undefined) {
+          return state !== null && controlUpdatedAt === state.updatedAt && index === latestControl;
+        }
+        const executionUpdatedAt = executionPlanUpdatedAt(message);
+        if (executionUpdatedAt !== undefined) {
+          return pendingExecutionUpdatedAt !== undefined && executionUpdatedAt === pendingExecutionUpdatedAt && index === latestExecution;
+        }
+        return true;
       }),
     };
   });
@@ -714,5 +656,7 @@ export default function planExtension(
     ctx.ui.setStatus("plan", undefined);
     ctx.ui.setWidget("plan", undefined);
     await artifactStore.cleanupEphemeral();
+    currentSessionId = undefined;
+    unsubscribeWorkflow();
   });
 }

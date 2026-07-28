@@ -18,7 +18,7 @@ const COMPLETION_AUDIT = `Completion audit required before update_goal:
 Difficulty, elapsed effort, a plausible final answer, or budget exhaustion is neither completion nor blocking evidence.`;
 
 
-export function activeGoalPrompt(goal: GoalState, planBlocksContinuation: boolean): string {
+export function activeGoalPrompt(goal: GoalState): string {
   const remaining = goal.tokenBudget === undefined ? "unbounded" : Math.max(0, goal.tokenBudget - goal.tokensUsed);
   return `Active long-running thread goal:
 
@@ -33,7 +33,6 @@ Time used: ${goal.timeUsedSeconds} seconds
 Tokens used: ${goal.tokensUsed}
 Token budget: ${goal.tokenBudget ?? "none"}
 Tokens remaining: ${remaining}
-${planBlocksContinuation ? "\nPlan mode is simultaneously active. Obey its read-only and approval constraints; do not bypass them." : ""}
 
 The complete current goal state is already present here; do not call get_goal merely to reread it. Keep the full objective intact and use current evidence as the source of truth.
 
@@ -62,7 +61,6 @@ Execution contract:
 - Choose the next concrete action that closes an unmet or weakly verified checklist item.
 - Apply the completion audit from the Goal system context before any terminal update.
 - If any requirement remains incomplete or uncertain, keep working instead of ending the goal.
-- If Plan mode is active, remain read-only until the user approves execution.
 
 Do not call get_goal merely to reread state already present in context. Do not stop because the budget is nearly exhausted; budget enforcement is owned by the runtime.`;
 }

@@ -426,8 +426,14 @@ test("TUI widget controls, settled visibility, and semantic colors remain isolat
   assert.equal(frame.every((line) => visibleWidth(line) <= 16), true);
 
   await harness.tool({ op: "done", id: 1 });
-  await harness.tool({ op: "done", id: 2 });
-  assert.ok(harness.widgets.get("todo"), "settled board remains visible until the next turn starts");
+  assert.ok(harness.widgets.get("todo"), "open board keeps the widget visible");
+  const settledResult = await harness.tool({ op: "done", id: 2 });
+  assert.equal(harness.widgets.get("todo"), undefined, "settled board clears the widget immediately");
+  assert.equal(harness.statuses.get("todo"), undefined);
+  assert.match(settledResult.content[0].text, /Todo board settled\./);
+  assert.match(settledResult.content[0].text, /Settled recap:/);
+  assert.match(settledResult.content[0].text, /✓ #1 A very long current task/);
+  assert.match(settledResult.content[0].text, /✓ #2 Second/);
   await harness.emit("agent_start", { type: "agent_start" });
   assert.equal(harness.widgets.get("todo"), undefined);
   assert.equal(harness.statuses.get("todo"), undefined);

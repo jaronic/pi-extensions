@@ -12,24 +12,20 @@ import {
 
 export interface PlanCommandRuntime {
   getState(): PlanState | null;
+  isGoalActive(ctx: ExtensionContext): boolean;
   setState(next: PlanState): void;
-  persistActive(
-    action: PlanJournalEntry["action"],
-    ctx: ExtensionContext,
-    willTriggerTurn: boolean,
-    reason: string,
-  ): void;
+  persistActive(action: PlanJournalEntry["action"], ctx: ExtensionContext): void;
   syncPlanTools(): void;
   updateStatus(ctx: ExtensionContext): void;
-  emitPlanState(ctx: ExtensionContext, willTriggerTurn: boolean, reason: string): void;
-  queueControlTurn(ctx: ExtensionContext, kind: "plan" | "refine" | "execute" | "clarification", content: string): void;
+  syncTodoPlanPhase(ctx: ExtensionContext): void;
+  queueControlTurn(ctx: ExtensionContext, kind: "plan" | "refine" | "clarification", content: string): void;
   approveAndQueue(ctx: ExtensionContext): Promise<void>;
-  refineAndQueue(ctx: ExtensionContext): void;
+  refineAndQueue(ctx: ExtensionContext, feedback: string): void;
   resumeBlockedAndQueue(ctx: ExtensionContext): void;
   choosePlanClarification(ctx: ExtensionContext, beforeTransition?: () => Promise<void>): Promise<void>;
   reviewSubmittedPlan(ctx: ExtensionContext, beforeTransition?: () => Promise<void>): Promise<void>;
   renderCurrentPlan(ctx: ExtensionContext): Promise<string>;
-  transitionOff(action: "cancel" | "complete", ctx: ExtensionContext, reason: string, signal?: AbortSignal): Promise<void>;
+  transitionOff(ctx: ExtensionContext): void;
 }
 
 async function stopCurrentAgent(ctx: ExtensionCommandContext): Promise<void> {
@@ -47,11 +43,18 @@ export function registerPlanCommand(pi: ExtensionAPI, runtime: PlanCommandRuntim
       return filtered.length ? filtered.map((value) => ({ value, label: value })) : null;
     },
     handler: async (args, ctx) => {
-      const action = args.trim();
+      const trimmed = args.trim();
+      const separator = trimmed.indexOf(" ");
+      const action = separator < 0 ? trimmed : trimmed.slice(0, separator);
+      const actionInput = separator < 0 ? "" : trimmed.slice(separator + 1).trim();
       const current = runtime.getState();
       if (!action && !current) {
+        if (runtime.isGoalActive(ctx)) {
+          ctx.ui.notify("Plan cannot start while Goal mode is active. Pause, complete, or clear Goal first.", "warning");
+          return;
+        }
         runtime.setState(createPlanningState(pi.getActiveTools()));
-        runtime.persistActive("start", ctx, false, "planning-started");
+        runtime.persistActive("start", ctx);
         ctx.ui.notify("Plan mode active: workspace mutation and arbitrary shell execution are disabled. Send the request you want planned.", "info");
         await stopCurrentAgent(ctx);
         return;
@@ -127,17 +130,8 @@ export function registerPlanCommand(pi: ExtensionAPI, runtime: PlanCommandRuntim
         }
         runtime.syncPlanTools();
         runtime.updateStatus(ctx);
-        runtime.emitPlanState(ctx, true, "resumed");
-        if (settled.phase === "planning") {
-          runtime.queueControlTurn(ctx, "plan", "Resume read-only planning from current evidence, then submit the complete plan.");
-        } else {
-          const rendered = await runtime.renderCurrentPlan(ctx);
-          runtime.queueControlTurn(
-            ctx,
-            "execute",
-            `Resume the explicitly approved plan. Update tracked steps as their observable state changes.\n\n${rendered}`,
-          );
-        }
+        runtime.syncTodoPlanPhase(ctx);
+        runtime.queueControlTurn(ctx, "plan", "Resume read-only planning from current evidence, then submit the complete plan.");
         ctx.ui.notify(`Plan ${phaseLabel(settled.phase)} resumed.`, "info");
         return;
       }
@@ -153,7 +147,7 @@ export function registerPlanCommand(pi: ExtensionAPI, runtime: PlanCommandRuntim
           return;
         }
         await runtime.approveAndQueue(ctx);
-        ctx.ui.notify("Plan approved; original tools restored and execution queued.", "info");
+        ctx.ui.notify("Plan approved; steps transferred to Todo, Plan exited, and execution queued.", "info");
         return;
       }
       if (action === "refine") {
@@ -167,13 +161,26 @@ export function registerPlanCommand(pi: ExtensionAPI, runtime: PlanCommandRuntim
           ctx.ui.notify("Plan state changed while the current agent was settling; inspect /plan status.", "warning");
           return;
         }
-        runtime.refineAndQueue(ctx);
-        ctx.ui.notify("Plan returned to read-only refinement.", "info");
+        let feedback = actionInput;
+        if (!feedback) {
+          if (!ctx.hasUI) {
+            ctx.ui.notify("Plan refinement requires feedback: /plan refine <requested changes>.", "warning");
+            return;
+          }
+          const edited = await ctx.ui.editor("Plan refinement feedback", "");
+          if (edited === undefined || !edited.trim()) {
+            ctx.ui.notify("Plan remains awaiting approval; no refinement feedback was submitted.", "info");
+            return;
+          }
+          feedback = edited;
+        }
+        runtime.refineAndQueue(ctx, feedback);
+        ctx.ui.notify("Plan returned to read-only refinement with your feedback.", "info");
         return;
       }
       if (action === "cancel") {
         if (!current) {
-          runtime.emitPlanState(ctx, false, "cancel-already-off");
+          runtime.syncTodoPlanPhase(ctx);
           ctx.ui.notify("Plan mode is already off.", "info");
           return;
         }
@@ -182,11 +189,11 @@ export function registerPlanCommand(pi: ExtensionAPI, runtime: PlanCommandRuntim
           ctx.ui.notify("Plan mode became inactive while the current agent was settling.", "info");
           return;
         }
-        await runtime.transitionOff("cancel", ctx, "cancelled-tools-restored", ctx.signal);
+        runtime.transitionOff(ctx);
         ctx.ui.notify("Plan cancelled; original tools restored.", "info");
         return;
       }
-      ctx.ui.notify("Usage: /plan [status|choose|review|resume|approve|refine|cancel]", "warning");
+      ctx.ui.notify("Usage: /plan [status|choose|review|resume|approve|refine <feedback>|cancel]", "warning");
     },
   });
 }

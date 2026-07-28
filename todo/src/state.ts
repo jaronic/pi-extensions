@@ -660,3 +660,38 @@ export function transitionTodo(
     : { kind: "statusChanged", id, from, to: findTodoTask(next, id)?.task.status ?? from };
   return freezeTransition(next, changed, effect);
 }
+
+function uniquePlanPhaseName(state: TodoState, value: unknown): string {
+  const requested = normalizePhaseName(value, "Plan Todo phase");
+  const existing = new Set(state.phases.map((phase) => phase.name));
+  if (!existing.has(requested)) return requested;
+  for (let index = 2; index <= MAX_TODO_PHASES + 1; index += 1) {
+    const suffix = ` (${index})`;
+    const candidate = `${requested.slice(0, MAX_PHASE_NAME_CHARS - suffix.length)}${suffix}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+  throw new Error("Todo cannot allocate a unique phase for the approved Plan.");
+}
+
+export function transitionPlanHandoff(
+  state: TodoState | null,
+  phase: unknown,
+  items: readonly unknown[],
+  now: unknown,
+  idFactory: () => string,
+): TodoTransition {
+  assertFrozenState(state);
+  if (state === null || todoBoardStatus(state) === "settled") {
+    return transitionTodo(state, { op: "init", list: [{ phase, items }] }, now, idFactory);
+  }
+  const appended = transitionTodo(
+    state,
+    { op: "append", phase: uniquePlanPhaseName(state, phase), items },
+    now,
+    idFactory,
+  );
+  if (appended.effect.kind !== "appended" || !appended.state) {
+    throw new Error("Todo Plan handoff did not append the approved tasks.");
+  }
+  return appended;
+}

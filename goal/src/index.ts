@@ -16,24 +16,16 @@ import {
   GOAL_CONTINUATION_TYPE,
   GOAL_STATE_TYPE,
   lastAssistantStop,
-  parsePlanSignal,
-  PLAN_COORDINATION_CHANNEL,
-  type PlanCoordinationSignal,
 } from "./protocol.ts";
 import { registerGoalCommand } from "./command.ts";
 import { registerGoalTools } from "./tools.ts";
-
-export { PLAN_COORDINATION_CHANNEL } from "./protocol.ts";
-
-
+import { isExclusiveWorkflowActive, registerExclusiveWorkflow } from "./workflow-mode.ts";
 
 export default function goalExtension(pi: ExtensionAPI): void {
   let goal: GoalState | null = null;
   let currentCtx: ExtensionContext | undefined;
   let currentSessionId: string | undefined;
-  let lastPlanSignal: PlanCoordinationSignal | null = null;
-  let planBlocksContinuation = false;
-  let currentPlanPhase = "off";
+  let restoredExclusivityTimer: ReturnType<typeof setTimeout> | undefined;
   let continuationQueued = false;
   let continuationSuppressed = false;
   let continuationAgentActive = false;
@@ -68,22 +60,13 @@ export default function goalExtension(pi: ExtensionAPI): void {
     statusTimer.unref?.();
   }
 
-  function reconcilePlanForCurrentSession(): void {
-    if (!lastPlanSignal || lastPlanSignal.sessionId !== currentSessionId) {
-      planBlocksContinuation = false;
-      currentPlanPhase = "off";
-      return;
-    }
-    planBlocksContinuation = lastPlanSignal.readOnly || lastPlanSignal.awaitingApproval;
-    currentPlanPhase = lastPlanSignal.phase;
-  }
 
   function syncGoalTools(): void {
     const activeTools = new Set(pi.getActiveTools());
     activeTools.add("create_goal");
     if (goal?.status === "active") activeTools.add("get_goal");
     else activeTools.delete("get_goal");
-    if (goal?.status === "active" && !planBlocksContinuation) activeTools.add("update_goal");
+    if (goal?.status === "active") activeTools.add("update_goal");
     else activeTools.delete("update_goal");
     pi.setActiveTools([...activeTools]);
   }
@@ -116,6 +99,8 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
   function restoreFromBranch(ctx: ExtensionContext): void {
     stopStatusTimer();
+    clearTimeout(restoredExclusivityTimer);
+    restoredExclusivityTimer = undefined;
     goal = null;
     let restoreWarning: string | undefined;
     for (const entry of ctx.sessionManager.getBranch()) {
@@ -140,10 +125,9 @@ export default function goalExtension(pi: ExtensionAPI): void {
     if (restoreWarning && ctx.hasUI) ctx.ui.notify(`Stored Goal state was not restored safely: ${restoreWarning}`, "warning");
   }
 
-  function queueContinuation(ctx: ExtensionContext, forceThroughPlan = false): void {
+  function queueContinuation(ctx: ExtensionContext): void {
     if (!goal || goal.status !== "active") return;
     if (continuationSuppressed) return;
-    if (planBlocksContinuation && (!forceThroughPlan || currentPlanPhase !== "planning")) return;
     if (continuationQueued || ctx.hasPendingMessages()) return;
     continuationQueued = true;
     const message = {
@@ -161,33 +145,33 @@ export default function goalExtension(pi: ExtensionAPI): void {
     }
   }
 
-  function applyPlanSignal(signal: PlanCoordinationSignal): void {
-    lastPlanSignal = signal;
-    if (currentSessionId && signal.sessionId !== currentSessionId) return;
-    const wasBlocking = planBlocksContinuation;
-    planBlocksContinuation = signal.readOnly || signal.awaitingApproval;
-    currentPlanPhase = signal.phase;
-    syncGoalTools();
-    if (wasBlocking && !planBlocksContinuation) continuationSuppressed = false;
-    if (
-      wasBlocking &&
-      !planBlocksContinuation &&
-      !signal.willTriggerTurn &&
-      signal.reason !== "session-sync" &&
-      currentCtx?.isIdle() &&
-      !currentCtx.hasPendingMessages()
-    ) {
-      queueContinuation(currentCtx);
-    }
+
+  const unsubscribeWorkflow = registerExclusiveWorkflow(
+    pi.events,
+    "goal",
+    (sessionId) => goal?.status === "active" && currentSessionId === sessionId,
+  );
+
+  function planIsActive(ctx: ExtensionContext): boolean {
+    return isExclusiveWorkflowActive(pi.events, ctx.sessionManager.getSessionId(), "plan");
   }
 
-  const unsubscribePlan = pi.events.on(PLAN_COORDINATION_CHANNEL, (data) => {
-    const signal = parsePlanSignal(data);
-    if (signal) applyPlanSignal(signal);
-  });
+  function settleRestoredExclusivity(ctx: ExtensionContext): void {
+    const restoredGoalId = goal?.status === "active" ? goal.id : undefined;
+    if (!restoredGoalId) return;
+    clearTimeout(restoredExclusivityTimer);
+    restoredExclusivityTimer = setTimeout(() => {
+      restoredExclusivityTimer = undefined;
+      if (currentCtx !== ctx || goal?.id !== restoredGoalId || goal.status !== "active" || !planIsActive(ctx)) return;
+      goal = setGoalStatus(goal, "paused");
+      persist("status", ctx);
+      ctx.ui.notify("Restored Goal was paused because Plan mode is active. Finish or cancel Plan before resuming Goal.", "warning");
+    }, 0);
+  }
 
   const goalRuntime = {
     getGoal: () => goal,
+    isPlanActive: planIsActive,
     setGoal(next: GoalState | null, action: GoalJournalEntry["action"], ctx: ExtensionContext): GoalState | null {
       const previousGoal = goal;
       const completed = previousGoal?.status === "active" && next?.id === previousGoal.id && next.status === "complete";
@@ -217,25 +201,25 @@ export default function goalExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (event, ctx) => {
     currentCtx = ctx;
     currentSessionId = ctx.sessionManager.getSessionId();
-    reconcilePlanForCurrentSession();
     restoreFromBranch(ctx);
     if (goal?.status === "active" && event.reason === "reload") {
       goal = setGoalStatus(goal, "paused");
       persist("status", ctx);
       ctx.ui.notify("Active goal paused after reload. Use /goal resume to continue.", "info");
     }
+    settleRestoredExclusivity(ctx);
   });
 
   pi.on("session_tree", (_event, ctx) => {
     currentCtx = ctx;
     currentSessionId = ctx.sessionManager.getSessionId();
-    reconcilePlanForCurrentSession();
     restoreFromBranch(ctx);
+    settleRestoredExclusivity(ctx);
   });
 
   pi.on("before_agent_start", (event) => {
     if (!goal || goal.status !== "active") return;
-    return { systemPrompt: `${event.systemPrompt}\n\n${activeGoalPrompt(goal, planBlocksContinuation)}` };
+    return { systemPrompt: `${event.systemPrompt}\n\n${activeGoalPrompt(goal)}` };
   });
 
   pi.on("agent_start", () => {
@@ -287,13 +271,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
       return;
     }
     const stop = lastAssistantStop(event.messages);
-    if (planBlocksContinuation && (stop?.stopReason === "error" || stop?.stopReason === "aborted")) {
-      pendingAgentError = null;
-      if (stop.stopReason === "aborted") {
-        ctx.ui.notify("Current turn stopped; Goal remains active while Plan mode controls the next step.", "info");
-      }
-      return;
-    }
     if (stop?.stopReason === "error") {
       pendingAgentError = {
         goalId: goal.id,
@@ -323,7 +300,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
   pi.on("agent_settled", (_event, ctx) => {
     const pending = pendingAgentError;
     pendingAgentError = null;
-    if (!pending || !goal || goal.id !== pending.goalId || goal.status !== "active" || planBlocksContinuation) return;
+    if (!pending || !goal || goal.id !== pending.goalId || goal.status !== "active") return;
     goal = setGoalStatus(goal, pending.status);
     persist("status", ctx);
     ctx.ui.notify(`Goal ${statusLabel(pending.status)} after an agent error; automatic continuation stopped.`, "warning");
@@ -344,10 +321,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", (_event, ctx) => {
     stopStatusTimer();
+    clearTimeout(restoredExclusivityTimer);
+    restoredExclusivityTimer = undefined;
     ctx.ui.setStatus("goal", undefined);
     ctx.ui.setWidget("goal", undefined);
     currentCtx = undefined;
     currentSessionId = undefined;
-    unsubscribePlan();
+    unsubscribeWorkflow();
   });
 }

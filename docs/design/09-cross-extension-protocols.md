@@ -1,6 +1,6 @@
 # 09 · 跨扩展通用协议：事件总线上的调用、发现与感知
 
-> 本篇回答：Todo、Request 怎样向未声明依赖的 extension 保留通用 channel；硬依赖如何通过 package manifest 与 typed installer 直接组合；以及 `pi.events` 的同步语义怎样约束兼容调用与状态广播。实现基线为 Request UI v1、Todo service v1、Plan → Request/Todo direct composition 和 Plan → Goal coordination v1。
+> 本篇回答：Todo、Request 怎样向未声明依赖的 extension 保留通用 channel；硬依赖如何通过 package manifest 与 typed installer 直接组合；以及 `pi.events` 的同步语义怎样约束兼容 request/reply 与 workflow query。实现基线为 Request UI v1、Todo service v1、Plan → Request/Todo direct composition 和 Plan ↔ Goal exclusivity v1。
 
 ## 1. 结论先行
 
@@ -11,7 +11,7 @@
 | 模型感知一个工具 | active tool 的 schema、description、`promptSnippet`、`promptGuidelines` 进入模型边界 | 模型知道工具名，不知道 extension 实现 | `todo`、`ask` |
 | 硬依赖 extension 调用能力 | manifest 声明 package，直接调用幂等 installer 返回的 typed service | 知道 package 与领域 API | Plan → Request/Todo |
 | 独立 extension 调用可选兼容能力 | 共享 `pi.events` 上的版本化 request/response envelope | 知道 channel/wire contract，不依赖实现包 | Todo service、Request UI channel |
-| Extension 被动感知状态变化 | 单向广播 immutable snapshot，接收方校验并投影 | 知道状态协议，不调用发送者内部对象 | Plan → Goal |
+| 独立 extension 同步查询可选状态 | 共享 `pi.events` 上的版本化 query/callback | 知道 channel/wire contract，不依赖实现包 | Plan ↔ Goal workflow exclusivity |
 
 Request 还提供共享 `ctx.ui.select/confirm/input` adapter；这不是 event request，也不是调用方“发现了 Request”。
 
@@ -426,127 +426,111 @@ Identity check 很关键：若另一个 extension 在 Request 之后又包装了
 
 Plan 缺少 Request 或 Todo 就无法提供完整 clarification 或获批执行，因此它在 manifest 声明并捆绑两个 package，按 Request → Todo → Plan resource 顺序加载。Plan factory 仍调用 `installRequest(pi)`、`installTodo(pi)`：这覆盖直接加载 `plan/src/index.ts`，并与默认 entry 共用 EventBus-scoped installation registry。
 
-Plan clarification 将领域 choice 转成 Request 单选问题；Request 只返回结果，Plan 负责映射、状态验证与 journal。Plan approval 直接调用 `todo.progress.open`，严格验证 snapshot 后才写 owner `todo` 与 execution ID。后续 read/update/close 固定走该 service；Todo lifetime 失效、错误 snapshot 或恢复到其他 owner 都 fail closed。新的 approval 没有 priority、provider discovery、listener-order fallback 或 local progress fallback；仅历史 journal 中的 local progress 保留 reducer 迁移路径。
+Plan clarification 将领域 choice 转成 Request 单选问题；Request 只返回结果，Plan 负责映射、状态验证与 journal。Plan 在活跃 phase 变化和 branch restore 后直接调用 `todo.syncPlanPhase({ sessionId, phase })`，Todo 据此冻结普通 mutation 并隐藏 prompt/widget，但仍允许只读 `get/view`。
+
+批准时，Plan 调用一次 `todo.handoffPlan({ sessionId, phase, items })`，`phase` 由 Plan 侧 `planHandoffPhaseName(summary)` 从当前 Plan summary 派生（净化为单行、截断到 Todo 的 80 字符 phase 上限，为空时回退 `Plan`）：
+
+- Todo 严格校验当前 session、`awaitingApproval` gate、phase、全部 step 文本、总数与 abort signal；
+- 空或 settled board 使用普通 `init` transition；open board 使用普通 `append` transition，并在派生名冲突时追加 ` (2)`、` (3)` 等唯一后缀；
+- Todo 先写普通 `todo-state-v2` service journal，再 commit 相同 snapshot 到内存/UI；
+- 成功后 Plan 写为 off、恢复工具并排队 execution turn；agent 从此只用普通 `todo` 数字 `#ID`；
+- 失败时 Todo 不变，Plan 追加恢复 entry 并继续停在 `awaitingApproval`。
+
+不存在 Plan execution owner、execution ID、managed progress journal、`update_plan_step` 或 local/provider fallback。Plan 的责任边界结束于 handoff，Todo 是批准后的唯一进度账本。
 
 这种 direct method call 只在同一 Pi 进程、同一信任域成立；它不是 Pi core 的通用工具执行 API，也不让 stock Pi 自动采用第三方 service。
-## 8. State broadcast：为什么 Plan → Goal 能跨加载顺序同步
 
-Plan phase 使用：
+## 8. Plan ↔ Goal：同步互斥查询，而不是状态广播
+
+Plan 与 Goal 是可独立安装的 workflow mode，不能 production import 对方。两者各自定义并严格解码同一 channel：
 
 ```text
-pi-extensions:plan-state:v1
+pi-extensions:exclusive-workflow:v1
 ```
 
-它不是 request，没有 `accept()`，也不期待 response。Plan 在持久 phase transition 和 branch restore 后 emit：
+查询 payload 为：
 
 ```ts
 {
   version: 1,
+  kind: "query",
   sessionId,
-  phase,
-  readOnly,
-  awaitingApproval,
-  willTriggerTurn,
-  reason,
+  target: "plan" | "goal",
+  respond(active: boolean): void,
 }
 ```
 
-Goal 在自己的 package 内复制 wire type，把 payload 当 `unknown` 解码、过滤 foreign session，再决定 continuation 与 UI gate。Todo 不消费这个 broadcast：Plan 在同一 transaction 中直接调用 `todo.syncPlanPhase()`；两者的 direct service lifetime 由 installer 管理，而不是 wire protocol。
+启动 Plan 前同步查询当前 session 的 Goal；启动 Goal 前反向查询 Plan。目标 listener 只在 `target` 匹配、session 相同且自身有 active state 时调用 `respond(true)`。Caller 在 `emit()` 返回后汇总结果；任一 receiver 回答 `true` 就拒绝启动。
 
-### 8.1 EventBus 不 replay，恢复靠发送者重发与接收者缓存
+这不是 state broadcast：没有持久 snapshot、没有 receiver cache，也不在每次 transition 后 emit。Listener 在 extension factory 注册，`session_start`/`session_tree` 只需让各自的 `isActive(sessionId)` 指向已恢复 branch。缺少另一 extension 时查询结果为 false；这是独立安装的显式 fail-open 语义，不影响单独使用任一 workflow。
 
-加载顺序之所以可工作，不是 EventBus 有 retained message，而是 extension lifecycle 与缓存共同保证：
-
-```mermaid
-sequenceDiagram
-    participant L as Extension loader
-    participant P as Plan factory/listener set
-    participant G as Goal factory/listener set
-    participant S as session_start handlers
-
-    L->>P: load factory
-    L->>G: load factory
-    Note over P,G: 所有 factory 完成后才进入 session_start
-    S->>P: restore Plan, emit session snapshot
-    P->>G: Plan signal
-    alt Goal session 尚未 restore
-      G->>G: cache by sessionId
-      S->>G: restore Goal branch
-      G->>G: reapply cached signal
-    else Goal 已 ready
-      G->>G: apply immediately
-    end
-```
-
-反向加载时，Goal 先建立 `sessionId`，随后 Plan emit，信号直接应用。`session_tree` 重复同一套 restore/reconcile。Reload 会销毁旧 extension instance、重新执行全部 factory，再进入 `session_start`。
-
-这里有一个通用规则：**广播协议若表示当前状态，发送者必须在 lifecycle restore 后重发权威 snapshot；接收者若可能早于自己的 session restore 收到消息，必须按 session identity 缓存后 reconcile。**
-
-不要依赖“之前肯定广播过”。EventBus 不保存过去。
+Todo 不消费该 channel。Plan phase 对 Todo 是已声明依赖内的 typed direct call；Plan/Goal 互斥则是两个独立 package 之间的版本化 compatibility query。
 
 ## 9. 生命周期：listener ready 与业务 ready 是两回事
 
 | 阶段 | 应做什么 | 不应做什么 |
 | --- | --- | --- |
-| extension factory | 注册 channel listener、tool、command；构造无资源 provider object | 启动 dialog、持有 session ctx、写 journal |
-| `session_start` | restore branch；设置 current session/UI；安装 session-scoped adapter；重发或 reconcile snapshot | 假设旧 closure/context 仍有效 |
+| extension factory | 注册 channel listener、tool、command；构造 EventBus-scoped service | 启动 dialog、假设 active session、写业务 journal |
+| `session_start` | restore branch；设置 current session/UI；安装 session-scoped adapter；reconcile direct phase sync | 假设旧 closure/context 仍有效 |
 | 正常调用 | 校验 session、signal、payload；执行业务；显式 settle | 等待未来某个 provider 自动出现 |
-| `session_tree` | 替换 branch 投影；按 current session 重算 gate | 把另一 branch 的缓存当当前状态 |
+| `session_tree` | 替换 branch 投影；按 current session 重算 workflow query 与 Todo gate | 把另一 branch 的缓存当当前状态 |
 | `session_shutdown` | abort pending；恢复自己拥有的 wrapper；unsubscribe；清空 ctx | 留下 listener、timer、UI wrapper 或未 settle Promise |
 
-Request 和 Todo 都选择“missing/not-ready 立即失败”，而不是把请求挂到某个 future `session_start`。这让调用方能明确 fallback，也避免 reload 时旧请求落到新 session。
+Request 和 Todo compatibility service 都选择“missing/not-ready 立即失败”，而不是把请求挂到某个 future `session_start`。Plan/Goal 互斥查询则同步读取当前已注册 receiver；未安装的独立 workflow 不构成硬依赖。
 
 ## 10. 错误、取消与提交边界
 
 | 问题 | 协议层正确处理 |
 | --- | --- |
-| 无 receiver | compatibility caller 在 `emit()` 返回后发现 `accepted === false`，立即 reject；hard dependency installer 无法建立时立即失败 |
-| 多 receiver | compatibility channel 只允许一个 listener `accept()`；硬依赖 service 通过 EventBus-scoped installer 保证唯一 runtime |
-| Receiver 同步 throw | listener catch 后 `reject(error)`；不依赖 EventBus 传播 |
+| 无 receiver | compatibility service caller 在 `emit()` 后发现未 accept 并 reject；互斥查询按未激活处理；hard dependency installer 无法建立时立即失败 |
+| 多 receiver | compatibility service 只允许一个 listener `accept()`；互斥查询允许多个 receiver，但 boolean 结果只做 OR；hard dependency service 由 EventBus-scoped installer 去重 |
+| Receiver 同步 throw | request listener catch 后 `reject(error)`；互斥 query responder 不执行异步业务 |
 | Receiver 异步失败 | Promise rejection 转发到 envelope `reject` |
-| Caller abort | pre-check + once listener + settle cleanup |
-| Abort 与成功竞态 | 单次 `settled` gate；明确 commit point 谁赢 |
+| Caller abort | pre-check + once listener + settle cleanup；Plan/Todo handoff commit 前重复检查 |
+| Abort 与成功竞态 | 单次 `settled` gate；明确 journal commit point 谁赢 |
 | 已接受但永不返回 | timeout 或 caller AbortSignal；不能只信 accept |
 | Session 切换 | sessionId gate + session abort controller |
 | Invalid result | caller-side exact decoder、byte/item 上限、request/result correlation |
 | Mutation 持久化失败 | journal 成功前不改 closure；失败 reject |
-| Future protocol version | 不 accept/明确 unsupported；不能按旧 shape 猜测 |
+| Future protocol version | 不 accept/不 respond；不能按旧 shape 猜测 |
 
-Todo 特别证明了一条重要顺序：
+Todo mutation 与 Plan handoff 都遵守核心顺序：
 
 ```text
-validate → calculate → persist → memory/UI commit → resolve
+validate → calculate → persist → memory/UI commit → return
 ```
+
+Plan approval 先记录 terminal entry，再调用 Todo handoff；handoff 失败时追加原 `awaitingApproval` state 作为 rollback entry，因此 replay 仍得到可重试的 Plan，而 Todo 没有部分 mutation。Todo handoff 一旦持久化成功，普通 board 就是权威执行状态；后续 execution turn 仅负责唤醒 agent，不是进度 commit point。
 
 Request 没有业务 journal，因此它的 commit point 是用户在 component 中提交结果；session abort 会关闭当前及排队 dialog。调用 Request 的业务 extension 仍应在收到答案后执行自己的 validate → persist → memory commit，不能把“用户点了 Yes”本身当持久状态。
 
 ## 11. Wire contract：独立 package 为什么复制类型
 
-`goal/` 没有 Plan package dependency，因此不 production import `plan/src/protocol.ts`；Todo/Request 的独立 consumer 也不通过仓库相对路径获得 optional capability：
+`goal/` 没有 Plan package dependency，因此不能 production import `plan/src/workflow-mode.ts`。两包各自复制 `exclusive-workflow:v1` wire type 与 exact decoder：
 
 - 每个 package 可独立安装；
 - 不假设仓库根目录依赖解析；
-- 缺失 optional extension 时仍能运行；
+- 缺失另一 workflow 时仍能运行；
 - 一方重构内部文件不会成为另一方 runtime dependency。
 
-代价是兼容 channel 没有编译期跨包契约。因此需要三层替代约束：
+代价是 compatibility channel 没有编译期跨包契约。因此需要三层替代约束：
 
 1. **Channel/version**：`pi-extensions:<capability>:vN`；breaking change 新开版本，不在同名 channel 猜 shape。
-2. **Runtime decoder**：接收 `unknown`，验证 discriminant、exact keys、上限、session identity 与返回值关联。
-3. **Coexistence tests**：用真实两包加载顺序执行请求、缺失、invalid、abort、reload 和 shutdown。
+2. **Runtime decoder**：接收 `unknown`，验证 exact keys、discriminant、上限、session identity 与 callback shape。
+3. **Coexistence tests**：用真实两包加载顺序执行 active/inactive、foreign session、malformed payload、reload 与 shutdown。
 
-反之，Plan 明确声明 Request/Todo package dependency，因而只从两个 package root import public installer/type，直接持有 typed service。此时不复制它们的 wire contract，也不使用 compatibility channel。
+反之，Plan 明确声明 Request/Todo package dependency，因而只从两个 package root import public installer/type，直接持有 typed service。此时不复制它们的 direct service contract，也不使用 compatibility channel。
 
-### 当前协议严格度并不完全相同
+### 当前边界与校验
 
 | 协议/边界 | 当前输入校验 | 当前输出校验 |
 | --- | --- | --- |
 | Todo compatibility service | exact envelope/request keys；clone/freeze operation；领域 executor 再校验 op | exact result、bounded content、strict details、op correlation |
-| Request compatibility UI | envelope required shape；questions 在 coordinator 规范化 | 当前直接 settle coordinator result |
-| Plan → Todo direct managed service | typed input 加上 Plan side snapshot/owner/execution ID validation | 每次 snapshot exact decode，并绑定 approved definitions/execution ID |
-| Plan → Goal broadcast | sender typed snapshot；Goal required-field parser | 无 response |
+| Request compatibility UI | envelope required shape；questions 在 coordinator 规范化 | coordinator result 由 caller 映射为领域状态 |
+| Plan → Todo phase sync/handoff | typed direct input；Todo 再校验 session、phase、items、board limit 与 signal | 普通 `TodoServiceResult`；Plan 只将 sequence 写入 execution message details |
+| Plan ↔ Goal workflow query | 两边 exact decode version/kind/session/target/respond | 只接受严格 `true` 作为 active；无异步 result |
 
-这张表用于解释风险边界，不代表应盲目把所有协议写成同一严格度。凡是结果会驱动持久 mutation、权限或 owner transfer，优先采用 Todo managed service 级别的双向 exact validation。
+凡是结果会驱动持久 mutation，优先使用 typed hard-dependency service 或双向 exact validation；只读同步 gate 可以采用最小 query contract。
 
 ## 12. 测试怎样证明“无缝”不是偶然
 
@@ -554,14 +538,14 @@ Request 没有业务 journal，因此它的 commit point 是用户在 component 
 
 | 维度 | 必测路径 |
 | --- | --- |
-| 加载顺序 | Plan-only、dependencies-first、Plan-first 后加载 default entries |
+| 加载顺序 | Plan-only bundled dependencies、dependencies-first、Plan-first 后加载 default entries |
 | 安装面 | tool、command、channel listener、adapter 和 journal runtime 各注册一次 |
-| Direct service | install lifetime、open failure、stale lifetime、wrong restored owner、rollback |
+| Plan handoff | empty/settled init、open-board append、唯一 phase 名、保留 active、failure rollback、无步骤时拒绝 |
+| Workflow exclusivity | Plan 拒绝 active Goal、Goal 拒绝 active Plan、inactive/foreign session 不误拦、两种加载顺序 |
 | Compatibility wire 数据 | extra field、wrong version/kind、oversize、wrong session、bad result |
 | 异步 | sync resolve、async resolve/reject、pre-abort、mid-flight abort、timeout |
-| 原子性 | persist failure 不更新 closure；commit 后 abort 不反转成功 |
-| Lifecycle | startup、reload、tree、shutdown、foreign session broadcast |
-| 降级 | native UI fallback；新 managed execution direct service failure fail closed；legacy local journal 仍可完成 |
+| 原子性 | persist failure 不更新 closure；Todo handoff 成功后普通 board 为唯一权威 |
+| Lifecycle | startup、reload、tree、shutdown、session-isolated query/gate |
 | 资源 | adapter identity restore、listener unsubscribe、pending dialog disposal |
 
 当前证据落点：
@@ -569,11 +553,11 @@ Request 没有业务 journal，因此它的 commit point 是用户在 component 
 - `request/test/external-fixture.ts`：不 import Request production code，按 literal wire envelope 调用 compatibility channel；
 - `request/test/integration.test.ts`：external channel、direct service、native adapters、serialization、abort/timeout、headless、shutdown；
 - `todo/test/integration.test.ts`：tool/direct service/compatibility channel 的同一 board、v2 persistence、session isolation、Plan gate、同步 settlement；
-- `plan/test/progress.test.ts`：Todo direct snapshot decode、open/update failure、stale lifetime、wrong owner、legacy local recovery；
-- `plan/test/coexistence.test.ts` 与 `todo/test/coexistence.test.ts`：三种 package 加载顺序、Plan/Goal broadcast、Todo direct managed owner lifecycle；
-- `todo/test/progress-provider.test.ts`：managed journal、idempotent request ID、read/update/close 和 invalid replay。
+- `plan/test/coexistence.test.ts`：Plan approval handoff、Todo failure rollback、Plan/Goal 双向互斥、package 加载顺序；
+- `todo/test/coexistence.test.ts`：Plan-only/dependencies-first/Plan-first 安装去重，以及普通 Todo board handoff 的 ID、active task、prompt/widget 契约；
+- `goal/test/state.test.ts` 与 `plan/test/state.test.ts`：各自持久状态的不变量和 legacy journal 解码边界。
 
-只有单包 unit test 不能证明跨扩展合同。至少需要一个 consumer 按自己复制的 wire type 调真实 provider。
+只有单包 unit test 不能证明跨扩展合同。至少需要真实 consumer/provider 一起运行，并断言用户可见状态与 journal replay。
 
 ## 13. 新通用能力的设计模板
 
@@ -629,7 +613,7 @@ Todo、Request 和 Plan 的跨扩展组合建立在少量、边界清晰的宿�
 
 - Plan → Request/Todo 的硬依赖用 manifest bundle/load order、EventBus-scoped installer 与 typed direct service；
 - 独立 consumer 的 compatibility request/response 用同步 `accept()` 和异步 `resolve/reject()`；
-- Plan → Goal state broadcast 用 session identity、lifecycle 重发和 receiver reconcile；
+- Plan ↔ Goal 同步互斥 query 用 exact decoder、session identity 和 boolean OR；
 - transparent UI integration 用共享 method wrapper、fallback 和 identity-safe restore；
 - durable behavior 仍由 branch journal、strict decoder 和原子 commit 保证。
 
@@ -647,11 +631,11 @@ Todo、Request 和 Plan 的跨扩展组合建立在少量、边界清晰的宿�
 - [Request README](../../request/README.md)
 - [Plan README](../../plan/README.md)
 - [Goal README](../../goal/README.md)
-- `todo/src/service.ts`
+- `todo/src/index.ts`、`todo/src/state.ts`
 - `request/src/protocol.ts`、`request/src/adapters.ts`、`request/src/dialog.ts`
-- `plan/src/progress.ts`、`plan/src/protocol.ts`
-- `todo/src/progress-provider.ts`、`todo/src/protocol.ts`
-- `goal/src/protocol.ts`
+- `plan/src/workflow-mode.ts`、`plan/src/index.ts`
+- `todo/src/service.ts`、`todo/src/protocol.ts`
+- `goal/src/workflow-mode.ts`
 
 Pi 官方：
 

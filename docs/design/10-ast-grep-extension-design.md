@@ -523,9 +523,9 @@ Progress projection自身限制为1 KiB/20 lines，不含match/source/stderr；c
 
 模型可自行设置 boolean，因此它不是用户批准。Preview/apply 是 stale-write 和可审阅性协议，不承担 authorization。Plan 已提供真实的只读调查和用户审批状态机：
 
-- Plan planning/approval/blocked允许`ast_grep_search`；
-- `ast_grep_edit`不在Plan read-only allowlist，因而即使其他扩展重新激活也被`tool_call` gate阻止；
-- Plan executing 恢复原工具后才可 preview/apply。
+- Plan 所有 active phase 只允许 `ast_grep_search`；
+- `ast_grep_edit` 不在 Plan read-only allowlist，因而即使其他扩展重新激活也被 `tool_call` gate 阻止；
+- 批准后 Plan 将步骤 handoff 给普通 Todo board、退出并恢复原工具，此时才可 preview/apply。
 
 无 UI 模式不需要伪确认，也不会隐式批准一个 dialog；行为与 TUI 完全相同。
 
@@ -1066,7 +1066,7 @@ Extension 不 append entry。Session 中自然持久化的 tool call/result只�
 
 ### 17.6 Cross-extension tests
 
-- Plan先/后加载ast-grep；planning/approval/blocked只暴露并允许`ast_grep_search`，拦截`ast_grep_edit`；executing恢复二者；
+- Plan 先/后加载 ast-grep；所有 active Plan phase 只暴露并允许 `ast_grep_search`、拦截 `ast_grep_edit`；批准 handoff 或取消后恢复二者；
 - LSP 只在成功 `edit-apply` sync，preview/no-op/error/malformed details不 sync；
 - extension shutdown不覆盖其他 active tools、status、UI 或 listener。
 - factory harness将所有action methods设为throw，证明加载阶段只做register；工具名不覆盖仓库现有surface。
@@ -1264,7 +1264,7 @@ Linux musl和unsupported architecture是负向 install/load测试：package可�
 - [x] search/edit ToolDefinition details unions覆盖progress与全部final kind；renderer穷尽discriminant并安全处理undefined/unknown；
 - [x] factory只调用registration methods且不启动资源；startup Promise、full work tracker、child、stdin/streams、listener、timer、5秒shutdown deadline、late-settle no-commit与sync commit linearization均有故障注入；slow前置shutdown handler测试明确区分“宿主发起”与“本handler获得控制”；
 - [x] 正常barrier settle后无extension-owned I/O/temp/listener/timer；deadline路径证明late queue/read只释放资源且不会spawn、progress、commit或产生unhandled rejection；
-- [x] Plan在所有non-executing active phase允许`ast_grep_search`、阻止`ast_grep_edit`；
+- [x] Plan 在所有 active phase 允许 `ast_grep_search`、阻止 `ast_grep_edit`；批准 handoff 或取消后恢复 edit；
 - [x] LSP只同步成功apply；两种加载顺序、reload和shutdown不覆盖其他extension surface。
 
 ### 发布证据

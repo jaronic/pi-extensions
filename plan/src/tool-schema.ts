@@ -6,7 +6,6 @@ import {
   MAX_PLAN_CHOICE_OPTIONS,
   MAX_PLAN_CHOICE_QUESTION_CHARS,
   MAX_PLAN_STEP_CHARS,
-  MAX_PLAN_STEP_ID_CHARS,
   MAX_PLAN_STEPS,
   MAX_PLAN_SUMMARY_CHARS,
   MAX_PLAN_TEXT_CHARS,
@@ -74,7 +73,3 @@ export const AnswerPlanChoiceParams = Type.Object({
   selection: Type.Integer({ minimum: 1, maximum: MAX_PLAN_CHOICE_OPTIONS, description: "One-based option number selected by the user" }),
 });
 
-export const UpdatePlanStepParams = Type.Object({
-  id: Type.String({ minLength: 1, maxLength: MAX_PLAN_STEP_ID_CHARS, description: "Stable step ID returned by submit_plan" }),
-  status: StringEnum(["pending", "inProgress", "completed", "blocked"] as const),
-});

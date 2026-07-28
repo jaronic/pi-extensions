@@ -4,7 +4,7 @@ import {
   formatSize,
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
-import type { PlanPhase, PlanState, PlanStepProgress } from "./state.ts";
+import type { PlanPhase, PlanState } from "./state.ts";
 
 const NOTICE_RESERVE_BYTES = 1_024;
 const NOTICE_RESERVE_LINES = 2;
@@ -24,14 +24,6 @@ export interface BoundedPlanText {
   truncation?: TruncationSummary;
 }
 
-function displayedProgress(
-  state: PlanState,
-  external?: readonly PlanStepProgress[],
-): readonly PlanStepProgress[] {
-  if (state.phase === "executing" && state.progress?.kind === "local") return state.progress.steps;
-  if (state.phase === "executing" && state.progress?.kind === "external" && external) return external;
-  return state.steps.map((step) => ({ id: step.id, status: "pending" as const }));
-}
 
 export function phaseLabel(phase: PlanPhase): string {
   switch (phase) {
@@ -45,19 +37,14 @@ export function phaseLabel(phase: PlanPhase): string {
       return "awaiting approval";
     case "blocked":
       return "blocked pending user input";
-    case "executing":
-      return "executing";
   }
 }
 
-export function renderPlan(state: PlanState, external?: readonly PlanStepProgress[]): string {
+export function renderPlan(state: PlanState): string {
   const lines = [
     `Plan: ${state.summary ?? state.blocker?.summary ?? "draft"}`,
     `Phase: ${phaseLabel(state.phase)}`,
   ];
-  if (state.phase === "executing" && state.progress?.kind === "external") {
-    lines.push(`Progress provider: ${state.progress.providerId}`);
-  }
   if (state.clarification) {
     lines.push("", "User decision:", state.clarification.question);
     for (const [index, option] of state.clarification.options.entries()) {
@@ -76,13 +63,8 @@ export function renderPlan(state: PlanState, external?: readonly PlanStepProgres
   }
   if (state.plan) lines.push("", state.plan);
   if (state.steps.length > 0) {
-    const statusById = new Map(displayedProgress(state, external).map((step) => [step.id, step.status]));
     lines.push("", "Execution steps:");
-    for (const step of state.steps) {
-      const status = statusById.get(step.id) ?? "pending";
-      const marker = status === "completed" ? "x" : status === "blocked" ? "!" : " ";
-      lines.push(`- [${marker}] ${step.id}: ${step.text} (${status})`);
-    }
+    for (const [index, step] of state.steps.entries()) lines.push(`${index + 1}. ${step}`);
   }
   return lines.join("\n");
 }
@@ -110,17 +92,13 @@ export function summarizePlanState(
   state: PlanState | null,
   complete = false,
   truncation?: TruncationSummary,
-  external?: readonly PlanStepProgress[],
 ): Record<string, unknown> {
   if (!state) return { phase: "off", complete, truncation };
   const summary = {
     phase: state.phase,
     summary: state.summary,
-    progress: state.phase === "executing" ? state.progress?.kind : undefined,
-    providerId: state.phase === "executing" && state.progress?.kind === "external" ? state.progress.providerId : undefined,
-    executionId: state.phase === "executing" && state.progress?.kind === "external" ? state.progress.executionId : undefined,
     blocker: state.blocker,
-    steps: displayedProgress(state, external).map(({ id, status }) => ({ id, status })),
+    steps: state.steps.map((text, index) => ({ number: index + 1, text })),
     updatedAt: state.updatedAt,
     complete,
     truncation,
@@ -128,7 +106,7 @@ export function summarizePlanState(
   return state.planPath ? { ...summary, planPath: state.planPath } : summary;
 }
 
-export function renderPlanWidget(state: PlanState, external?: readonly PlanStepProgress[]): string[] {
+export function renderPlanWidget(state: PlanState): string[] {
   const lines = [state.phase === "blocked" ? "Plan blocked" : "Plan"];
   if (state.phase === "awaitingClarification" && state.clarification) {
     const text = [...state.clarification.question];
@@ -138,21 +116,12 @@ export function renderPlanWidget(state: PlanState, external?: readonly PlanStepP
     lines.push(`? ${boundedText}`);
   }
   if (state.blocker) lines.push(`! ${state.blocker.summary}`);
-  const statusById = new Map(displayedProgress(state, external).map((step) => [step.id, step.status]));
-  for (const step of state.steps.slice(0, MAX_WIDGET_STEPS)) {
-    const status = statusById.get(step.id) ?? "pending";
-    const marker = status === "completed"
-      ? "✓"
-      : status === "blocked"
-        ? "!"
-        : status === "inProgress"
-          ? "→"
-          : "·";
-    const text = [...step.text];
+  for (const [index, step] of state.steps.slice(0, MAX_WIDGET_STEPS).entries()) {
+    const text = [...step];
     const boundedText = text.length > MAX_WIDGET_STEP_CHARS
       ? `${text.slice(0, MAX_WIDGET_STEP_CHARS - 1).join("")}…`
-      : step.text;
-    lines.push(`${marker} ${step.id} ${boundedText}`);
+      : step;
+    lines.push(`· ${index + 1}. ${boundedText}`);
   }
   if (state.steps.length > MAX_WIDGET_STEPS) {
     lines.push(`… ${state.steps.length - MAX_WIDGET_STEPS} more step(s)`);

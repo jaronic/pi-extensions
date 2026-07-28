@@ -83,7 +83,7 @@ test("artifact persistence publishes matching planPath and retains persistent hi
   assert.equal(firstJournal.action, "submit");
   assert.equal(firstJournal.state?.planPath, firstPath);
 
-  await harness.command("plan", "refine");
+  await harness.command("plan", "refine replace the preview body");
   const second = await harness.tool("submit_plan", {
     summary: "Artifact refinement",
     plan: "## Replacement\n\nnew immutable body",
@@ -101,7 +101,7 @@ test("artifact persistence publishes matching planPath and retains persistent hi
   assert.equal(await readFile(secondPath, "utf8"), "## Replacement\n\nnew immutable body\n");
 });
 
-test("Plan artifact persistence survives approval, completion, and shutdown", async (t) => {
+test("Plan artifact persistence survives approval handoff and shutdown", async (t) => {
   const directory = await makeTemporaryDirectory(t);
   const sessionFile = join(directory, "session.jsonl");
   const store = createPlanArtifactStore();
@@ -111,7 +111,6 @@ test("Plan artifact persistence survives approval, completion, and shutdown", as
   const path = submission.details.planPath as string;
 
   await harness.command("plan", "approve");
-  await harness.tool("update_plan_step", { id: "step-1", status: "completed" });
   await harness.emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
   assert.equal(await readFile(path, "utf8"), "## Complete\n\npersistent preview\n");
 });

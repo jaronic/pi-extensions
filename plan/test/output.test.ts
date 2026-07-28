@@ -11,18 +11,11 @@ import type { PlanState } from "../src/state.ts";
 
 function planState(stepCount = 1, stepText = "Implement"): PlanState {
   return {
-    version: 3,
-    phase: "executing",
+    version: 4,
+    phase: "awaitingApproval",
     summary: "Ship safely",
     plan: "Implement and verify.",
-    steps: Array.from({ length: stepCount }, (_, index) => ({
-      id: `step-${index + 1}`,
-      text: stepText,
-    })),
-    progress: {
-      kind: "local",
-      steps: Array.from({ length: stepCount }, (_, index) => ({ id: `step-${index + 1}`, status: "pending" as const })),
-    },
+    steps: Array.from({ length: stepCount }, () => stepText),
     enteredWithTools: ["read"],
     createdAt: 1,
     updatedAt: 2,
@@ -40,10 +33,10 @@ test("boundPlanText enforces byte and line limits without duplicating content", 
   assert.equal("content" in bounded.truncation, false);
 });
 
-test("Plan result details omit the full plan and step text", () => {
+test("Plan result details omit the full plan and retain numbered handoff text", () => {
   const details = summarizePlanState(planState(), false);
   assert.equal("plan" in details, false);
-  assert.deepEqual(details.steps, [{ id: "step-1", status: "pending" }]);
+  assert.deepEqual(details.steps, [{ number: 1, text: "Implement" }]);
 });
 
 test("Plan widgets bound both step count and displayed step text", () => {
@@ -59,7 +52,7 @@ test("Plan result details include planPath only for submitted artifacts", () => 
   const withPath = summarizePlanState({ ...planState(), planPath: "/tmp/preview.md" }, false);
   assert.equal(withPath.planPath, "/tmp/preview.md");
   assert.equal("plan" in withPath, false);
-  assert.deepEqual(withPath.steps, [{ id: "step-1", status: "pending" }]);
+  assert.deepEqual(withPath.steps, [{ number: 1, text: "Implement" }]);
 });
 
 test("blocked Plan output exposes evidence and resolution paths without execution steps", () => {
@@ -69,7 +62,6 @@ test("blocked Plan output exposes evidence and resolution paths without executio
     summary: undefined,
     plan: undefined,
     steps: [],
-    progress: undefined,
     blocker: {
       summary: "No signing credential is available.",
       blockingFacts: ["The credential store is empty."],

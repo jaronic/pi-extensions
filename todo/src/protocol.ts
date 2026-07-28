@@ -3,8 +3,7 @@ export type TodoPlanPhase =
   | "planning"
   | "awaitingClarification"
   | "awaitingApproval"
-  | "blocked"
-  | "executing";
+  | "blocked";
 
 export interface TodoPlanPhaseSync {
   readonly sessionId: string;
@@ -17,7 +16,6 @@ const TODO_PLAN_PHASES: readonly TodoPlanPhase[] = [
   "awaitingClarification",
   "awaitingApproval",
   "blocked",
-  "executing",
 ];
 
 export function decodeTodoPlanPhaseSync(value: unknown): TodoPlanPhaseSync {

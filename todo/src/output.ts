@@ -79,6 +79,9 @@ const TASK_SYMBOL: Readonly<Record<TodoStatus, string>> = {
   dropped: "×",
 };
 
+export const MAX_SETTLED_RECAP_TASKS = 20;
+export const MAX_SETTLED_RECAP_BYTES = 4 * 1024;
+
 function textMetrics(lines: readonly string[]): { lines: number; bytes: number } {
   return {
     lines: lines.length,
@@ -234,6 +237,26 @@ function activeTask(state: TodoState | null): TodoTask | undefined {
   return state ? allTodoTasks(state).find((task) => task.status === "inProgress") : undefined;
 }
 
+function settledRecapLines(state: TodoState): string[] {
+  const closed = allTodoTasks(state);
+  const lines = ["Settled recap:"];
+  let bytes = 0;
+  let shown = 0;
+  for (const task of closed) {
+    if (shown >= MAX_SETTLED_RECAP_TASKS) break;
+    const line = plainTaskLine(task);
+    const lineBytes = Buffer.byteLength(line, "utf8") + 1;
+    if (bytes + lineBytes > MAX_SETTLED_RECAP_BYTES) break;
+    lines.push(line);
+    bytes += lineBytes;
+    shown += 1;
+  }
+  if (closed.length > shown) {
+    lines.push(`… ${closed.length - shown} more closed tasks; use todo view includeClosed:true.`);
+  }
+  return lines;
+}
+
 export function buildTodoMutationText(
   op: Exclude<TodoOperation, "get" | "view">,
   snapshot: TodoSnapshot,
@@ -272,7 +295,10 @@ export function buildTodoMutationText(
   const active = activeTask(state);
   if (active) lines.push(`Active: #${active.id} ${active.content}.`);
   else if (state && todoBoardStatus(state) === "blocked") lines.push(`No runnable task; ${counts.blocked} blocked.`);
-  else if (state && todoBoardStatus(state) === "settled") lines.push("Todo board settled.");
+  else if (state && todoBoardStatus(state) === "settled") {
+    lines.push("Todo board settled.");
+    if (transition.effect.kind === "statusChanged") lines.push(...settledRecapLines(state));
+  }
   return lines.join("\n");
 }
 

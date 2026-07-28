@@ -1,14 +1,13 @@
 import { posix, win32 } from "node:path";
+import { MAX_PHASE_NAME_CHARS } from "pi-todo-dev";
 
-export type PlanPhase = "off" | "planning" | "awaitingClarification" | "awaitingApproval" | "blocked" | "executing";
+export type PlanPhase = "off" | "planning" | "awaitingClarification" | "awaitingApproval" | "blocked";
 export type ActivePlanPhase = Exclude<PlanPhase, "off">;
-export type PlanStepStatus = "pending" | "inProgress" | "completed" | "blocked";
 
 export const MAX_PLAN_SUMMARY_CHARS = 500;
 export const MAX_PLAN_TEXT_CHARS = 20_000;
 export const MAX_PLAN_STEPS = 50;
-export const MAX_PLAN_STEP_CHARS = 500;
-export const MAX_PLAN_STEP_ID_CHARS = 64;
+export const MAX_PLAN_STEP_CHARS = 240;
 export const MAX_PLAN_TOOLS = 256;
 export const MAX_PLAN_TOOL_NAME_CHARS = 128;
 export const MAX_PLAN_PAYLOAD_BYTES = 40 * 1024;
@@ -29,26 +28,23 @@ export const MAX_PLAN_BLOCKER_LABEL_CHARS = 160;
 export const MAX_PLAN_BLOCKER_DESCRIPTION_CHARS = 500;
 export const MAX_PLAN_BLOCKER_PAYLOAD_BYTES = 16 * 1024;
 
-export interface PlanStep {
-  id: string;
-  text: string;
+/**
+ * Derives the Todo phase name for an approved Plan handoff from the Plan summary:
+ * single-line, free of Todo-forbidden display controls, within the Todo phase
+ * character limit, and never empty. Falls back to "Plan" when nothing survives.
+ */
+export function planHandoffPhaseName(summary: string | undefined): string {
+  const cleaned = (summary ?? "")
+    .replace(/[\u0000-\u001F\u007F-\u009F\u061C\u200E\u200F\u2028-\u202E\u2066-\u206F]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (!cleaned) return "Plan";
+  if (cleaned.length <= MAX_PHASE_NAME_CHARS) return cleaned;
+  let head = cleaned.slice(0, MAX_PHASE_NAME_CHARS - 1);
+  if (/[\ud800-\udbff]$/u.test(head)) head = head.slice(0, -1);
+  return `${head.trimEnd()}…`;
 }
 
-export interface PlanStepProgress {
-  id: string;
-  status: PlanStepStatus;
-}
-
-export type PlanProgressTracking =
-  | {
-      kind: "local";
-      steps: PlanStepProgress[];
-    }
-  | {
-      kind: "external";
-      providerId: string;
-      executionId: string;
-    };
 
 export interface PlanChoiceOption {
   label: string;
@@ -77,23 +73,22 @@ export interface PlanBlocker {
 }
 
 export interface PlanState {
-  version: 3;
+  version: 4;
   phase: ActivePlanPhase;
   summary?: string;
   plan?: string;
   planPath?: string;
   clarification?: PlanClarification;
   blocker?: PlanBlocker;
-  steps: PlanStep[];
-  progress?: PlanProgressTracking;
+  steps: string[];
   enteredWithTools: string[];
   createdAt: number;
   updatedAt: number;
 }
 
 export interface PlanJournalEntry {
-  version: 3;
-  action: "start" | "clarify" | "answer" | "resume" | "submit" | "block" | "approve" | "refine" | "cancel" | "step" | "complete";
+  version: 4;
+  action: "start" | "clarify" | "answer" | "resume" | "submit" | "block" | "approve" | "refine" | "cancel";
   state: PlanState | null;
 }
 
@@ -116,8 +111,6 @@ const VALID_PLAN_ACTIONS: Record<PlanJournalEntry["action"], true> = {
   approve: true,
   refine: true,
   cancel: true,
-  step: true,
-  complete: true,
   block: true,
 };
 
@@ -125,38 +118,38 @@ const VALID_PHASES: Record<ActivePlanPhase, true> = {
   planning: true,
   awaitingApproval: true,
   awaitingClarification: true,
-  executing: true,
   blocked: true,
 };
 
-const VALID_STEP_STATUSES: Record<PlanStepStatus, true> = {
-  pending: true,
-  inProgress: true,
-  completed: true,
-  blocked: true,
-};
-
+const LEGACY_PLAN_ACTIONS = new Set([
+  "start",
+  "submit",
+  "clarify",
+  "answer",
+  "resume",
+  "approve",
+  "refine",
+  "cancel",
+  "step",
+  "complete",
+  "block",
+]);
 const PLAN_STATE_V1_KEYS = new Set(["version", "phase", "summary", "plan", "planPath", "clarification", "steps", "enteredWithTools", "createdAt", "updatedAt"]);
 const PLAN_STATE_V2_KEYS = new Set([...PLAN_STATE_V1_KEYS, "progress"]);
 const PLAN_STATE_V3_KEYS = new Set([...PLAN_STATE_V2_KEYS, "blocker"]);
+const PLAN_STATE_V4_KEYS = new Set(["version", "phase", "summary", "plan", "planPath", "clarification", "blocker", "steps", "enteredWithTools", "createdAt", "updatedAt"]);
 const PLAN_STEP_V1_KEYS = new Set(["id", "text", "status"]);
 const PLAN_STEP_V2_KEYS = new Set(["id", "text"]);
 const PLAN_CLARIFICATION_KEYS = new Set(["question", "options", "selection"]);
 const PLAN_CHOICE_OPTION_KEYS = new Set(["label", "description"]);
 const PLAN_BLOCKER_KEYS = new Set(["summary", "blockingFacts", "evidenceSources", "resolutions"]);
 const PLAN_BLOCKER_RESOLUTION_KEYS = new Set(["kind", "label", "description"]);
-const LOCAL_PROGRESS_KEYS = new Set(["kind", "steps"]);
-const EXTERNAL_PROGRESS_KEYS = new Set(["kind", "providerId", "executionId"]);
-const PROGRESS_STEP_KEYS = new Set(["id", "status"]);
 const PLAN_JOURNAL_KEYS = new Set(["version", "action", "state"]);
 
 function isActivePlanPhase(value: unknown): value is ActivePlanPhase {
   return typeof value === "string" && Object.hasOwn(VALID_PHASES, value);
 }
 
-function isPlanStepStatus(value: unknown): value is PlanStepStatus {
-  return typeof value === "string" && Object.hasOwn(VALID_STEP_STATUSES, value);
-}
 
 function validatePlanText(value: string, label: string, maximum: number): string {
   const normalized = value.trim();
@@ -212,9 +205,9 @@ function validateEnteredTools(tools: string[]): string[] {
   return result;
 }
 
-function validatePlanPayload(summary: string, plan: string, steps: PlanStep[]): void {
+function validatePlanPayload(summary: string, plan: string, steps: readonly string[]): void {
   let bytes = Buffer.byteLength(summary) + Buffer.byteLength(plan);
-  for (const step of steps) bytes += Buffer.byteLength(step.id) + Buffer.byteLength(step.text);
+  for (const step of steps) bytes += Buffer.byteLength(step);
   if (bytes > MAX_PLAN_PAYLOAD_BYTES) {
     throw new Error(`Plan payload exceeds the ${MAX_PLAN_PAYLOAD_BYTES.toLocaleString()} byte limit.`);
   }
@@ -293,10 +286,10 @@ function validatePlanClarification(value: PlanClarification): PlanClarification 
 
 export function createPlanningState(activeTools: string[], now = Date.now()): PlanState {
   const enteredWithTools = validateEnteredTools([
-    ...new Set(activeTools.filter((name) => name !== "submit_plan" && name !== "request_plan_choice" && name !== "answer_plan_choice" && name !== "report_plan_blocked" && name !== "update_plan_step")),
+    ...new Set(activeTools.filter((name) => name !== "submit_plan" && name !== "request_plan_choice" && name !== "answer_plan_choice" && name !== "report_plan_blocked")),
   ]);
   return {
-    version: 3,
+    version: 4,
     phase: "planning",
     steps: [],
     enteredWithTools,
@@ -342,7 +335,6 @@ export function reportPlanBlocked(state: PlanState, blocker: PlanBlocker, now = 
     clarification: _clarification,
     blocker: _blocker,
     steps: _steps,
-    progress: _progress,
     ...blockedState
   } = state;
   return { ...blockedState, phase: "blocked", blocker: validated, steps: [], updatedAt: now };
@@ -363,10 +355,10 @@ export function submitPlan(state: PlanState, submitted: SubmittedPlan, now = Dat
   }
   const summary = validatePlanText(submitted.summary, "Plan summary", MAX_PLAN_SUMMARY_CHARS);
   const plan = validatePlanText(submitted.plan, "Plan", MAX_PLAN_TEXT_CHARS);
-  const steps = submitted.steps.map((text, index) => ({
-    id: `step-${index + 1}`,
-    text: validatePlanText(text, `Step ${index + 1}`, MAX_PLAN_STEP_CHARS),
-  }));
+  const steps = submitted.steps.map((text, index) =>
+    validatePlanText(text, `Step ${index + 1}`, MAX_PLAN_STEP_CHARS)
+  );
+  if (new Set(steps).size !== steps.length) throw new Error("Plan execution steps must be unique.");
   validatePlanPayload(summary, plan, steps);
   const { clarification: _clarification, blocker: _blocker, ...submittedState } = state;
   return {
@@ -386,71 +378,32 @@ export function refinePlan(state: PlanState, now = Date.now()): PlanState {
 }
 
 
-function assertApprovable(state: PlanState): void {
-  if (state.phase !== "awaitingApproval" || !state.plan || state.steps.length === 0) {
-    throw new Error("No submitted plan is awaiting approval.");
+function decodePlanStep(value: unknown, version: 1 | 2 | 3 | 4, index: number): PlanDecodeResult<string> {
+  if (version === 4) {
+    if (typeof value !== "string") return decodeFailure(`Plan step ${index + 1} must be text.`);
+    try {
+      const text = validatePlanText(value, `Plan step ${index + 1}`, MAX_PLAN_STEP_CHARS);
+      return text === value ? { ok: true, value: text } : decodeFailure(`Plan step ${index + 1} text is not normalized.`);
+    } catch (error) {
+      return decodeFailure(error instanceof Error ? error.message : String(error));
+    }
   }
-}
-
-export function approvePlanWithExternalProgress(
-  state: PlanState,
-  providerId: string,
-  executionId: string,
-  now = Date.now(),
-): PlanState {
-  assertApprovable(state);
-  const normalizedProviderId = validatePlanText(providerId, "Progress provider ID", 128);
-  const normalizedExecutionId = validatePlanText(executionId, "Progress execution ID", 128);
-  return {
-    ...state,
-    phase: "executing",
-    progress: { kind: "external", providerId: normalizedProviderId, executionId: normalizedExecutionId },
-    updatedAt: now,
-  };
-}
-
-export function updatePlanStep(
-  state: PlanState,
-  id: string,
-  status: PlanStepStatus,
-  now = Date.now(),
-): PlanState {
-  if (state.phase !== "executing" || state.progress?.kind !== "local") {
-    throw new Error("Plan steps can only be updated locally during local execution.");
+  if (!isRecord(value) || !hasOnlyKeys(value, version === 1 ? PLAN_STEP_V1_KEYS : PLAN_STEP_V2_KEYS)) {
+    return decodeFailure("Legacy Plan step must be an exact versioned object.");
   }
-  if (!state.steps.some((step) => step.id === id)) throw new Error(`Unknown plan step: ${id}`);
-  const steps = state.progress.steps.map((step) => {
-    if (step.id === id) return { ...step, status };
-    if (status === "inProgress" && step.status === "inProgress") return { ...step, status: "pending" as const };
-    return step;
-  });
-  return { ...state, progress: { kind: "local", steps }, updatedAt: now };
-}
-
-
-export function localPlanProgress(state: PlanState): readonly PlanStepProgress[] | undefined {
-  return state.phase === "executing" && state.progress?.kind === "local" ? state.progress.steps : undefined;
-}
-
-function decodePlanStep(value: unknown, legacy: boolean): PlanDecodeResult<PlanStep> {
-  if (!isRecord(value) || !hasOnlyKeys(value, legacy ? PLAN_STEP_V1_KEYS : PLAN_STEP_V2_KEYS)) {
-    return decodeFailure("Plan step must be an exact versioned object.");
+  if (typeof value.id !== "string" || !value.id || value.id.trim() !== value.id || [...value.id].length > 64) {
+    return decodeFailure("Legacy Plan step has an invalid ID.");
   }
-  if (typeof value.id !== "string" || !value.id || value.id.trim() !== value.id) {
-    return decodeFailure("Plan step has an invalid ID.");
+  if (version === 1 && !["pending", "inProgress", "completed", "blocked"].includes(String(value.status))) {
+    return decodeFailure(`Legacy Plan step ${value.id} has an invalid status.`);
   }
-  if ([...value.id].length > MAX_PLAN_STEP_ID_CHARS) {
-    return decodeFailure(`Plan step ID exceeds ${MAX_PLAN_STEP_ID_CHARS} characters.`);
-  }
-  if (typeof value.text !== "string") return decodeFailure(`Plan step ${value.id} has invalid text.`);
-  let text: string;
+  if (typeof value.text !== "string") return decodeFailure(`Legacy Plan step ${value.id} has invalid text.`);
   try {
-    text = validatePlanText(value.text, `Plan step ${value.id}`, MAX_PLAN_STEP_CHARS);
+    const text = validatePlanText(value.text, `Legacy Plan step ${value.id}`, MAX_PLAN_STEP_CHARS);
+    return text === value.text ? { ok: true, value: text } : decodeFailure(`Legacy Plan step ${value.id} text is not normalized.`);
   } catch (error) {
     return decodeFailure(error instanceof Error ? error.message : String(error));
   }
-  if (text !== value.text) return decodeFailure(`Plan step ${value.id} text is not normalized.`);
-  return { ok: true, value: { id: value.id, text } };
 }
 
 function decodePlanClarification(value: unknown): PlanDecodeResult<PlanClarification> {
@@ -489,61 +442,25 @@ function decodePlanClarification(value: unknown): PlanDecodeResult<PlanClarifica
   }
 }
 
-function decodeLocalProgress(value: unknown, steps: readonly PlanStep[]): PlanDecodeResult<PlanStepProgress[]> {
-  if (!Array.isArray(value) || value.length !== steps.length) {
-    return decodeFailure("Local Plan progress must contain every approved step.");
-  }
-  let inProgress = 0;
-  const progress: PlanStepProgress[] = [];
-  for (let index = 0; index < value.length; index += 1) {
-    const candidate = value[index];
-    const definition = steps[index];
-    if (
-      !isRecord(candidate) ||
-      !hasOnlyKeys(candidate, PROGRESS_STEP_KEYS) ||
-      !definition ||
-      candidate.id !== definition.id ||
-      !isPlanStepStatus(candidate.status)
-    ) return decodeFailure("Local Plan progress does not match the approved step definitions.");
-    if (candidate.status === "inProgress") inProgress += 1;
-    progress.push({ id: definition.id, status: candidate.status });
-  }
-  if (inProgress > 1) return decodeFailure("Plan state contains multiple in-progress steps.");
-  return { ok: true, value: progress };
-}
-
-function decodePlanProgress(value: unknown, steps: readonly PlanStep[]): PlanDecodeResult<PlanProgressTracking> {
-  if (!isRecord(value) || (value.kind !== "local" && value.kind !== "external")) {
-    return decodeFailure("Executing Plan state has invalid progress tracking.");
-  }
-  if (!hasOnlyKeys(value, value.kind === "local" ? LOCAL_PROGRESS_KEYS : EXTERNAL_PROGRESS_KEYS)) {
-    return decodeFailure("Executing Plan progress contains unknown fields.");
-  }
-  if (value.kind === "local") {
-    const decoded = decodeLocalProgress(value.steps, steps);
-    return decoded.ok ? { ok: true, value: { kind: "local", steps: decoded.value } } : decoded;
-  }
-  try {
-    const providerId = validatePlanText(value.providerId as string, "Progress provider ID", 128);
-    const executionId = validatePlanText(value.executionId as string, "Progress execution ID", 128);
-    if (providerId !== value.providerId || executionId !== value.executionId) {
-      return decodeFailure("External Plan progress identifiers are not normalized.");
-    }
-    return { ok: true, value: { kind: "external", providerId, executionId } };
-  } catch (error) {
-    return decodeFailure(error instanceof Error ? error.message : String(error));
-  }
-}
 
 export function decodePlanState(value: unknown): PlanDecodeResult<PlanState> {
   if (!isRecord(value)) return decodeFailure("Plan state must be an object.");
-  if (value.version !== 1 && value.version !== 2 && value.version !== 3) {
+  if (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4) {
     return decodeFailure(`Unsupported Plan state version: ${String(value.version)}.`);
   }
-  const legacy = value.version === 1;
-  const allowedKeys = value.version === 1 ? PLAN_STATE_V1_KEYS : value.version === 2 ? PLAN_STATE_V2_KEYS : PLAN_STATE_V3_KEYS;
+  const version = value.version;
+  const allowedKeys = version === 1
+    ? PLAN_STATE_V1_KEYS
+    : version === 2
+      ? PLAN_STATE_V2_KEYS
+      : version === 3
+        ? PLAN_STATE_V3_KEYS
+        : PLAN_STATE_V4_KEYS;
   if (!hasOnlyKeys(value, allowedKeys)) {
-    return decodeFailure(`Plan state v${value.version} contains unknown fields.`);
+    return decodeFailure(`Plan state v${version} contains unknown fields.`);
+  }
+  if (value.phase === "executing") {
+    return decodeFailure("Executing Plan state is obsolete; approved work is now owned by the ordinary Todo board.");
   }
   if (!isActivePlanPhase(value.phase)) return decodeFailure("Plan state has an invalid phase.");
   if (!Array.isArray(value.enteredWithTools) || !value.enteredWithTools.every((tool) => typeof tool === "string")) {
@@ -559,36 +476,21 @@ export function decodePlanState(value: unknown): PlanDecodeResult<PlanState> {
   if (!Array.isArray(value.steps) || value.steps.length > MAX_PLAN_STEPS) {
     return decodeFailure(`Plan state must contain at most ${MAX_PLAN_STEPS} steps.`);
   }
-  const steps: PlanStep[] = [];
-  const legacyProgress: PlanStepProgress[] = [];
+  const steps: string[] = [];
   const stepIds = new Set<string>();
-  for (const rawStep of value.steps) {
-    const decoded = decodePlanStep(rawStep, legacy);
+  for (let index = 0; index < value.steps.length; index += 1) {
+    const rawStep = value.steps[index];
+    if (version < 4 && isRecord(rawStep)) {
+      if (stepIds.has(String(rawStep.id))) return decodeFailure(`Duplicate legacy Plan step ID: ${String(rawStep.id)}.`);
+      stepIds.add(String(rawStep.id));
+    }
+    const decoded = decodePlanStep(rawStep, version, index);
     if (!decoded.ok) return decoded;
-    if (stepIds.has(decoded.value.id)) return decodeFailure(`Duplicate Plan step ID: ${decoded.value.id}.`);
-    stepIds.add(decoded.value.id);
+    if (steps.includes(decoded.value)) return decodeFailure("Plan execution steps must be unique.");
     steps.push(decoded.value);
-    if (legacy) {
-      if (!isRecord(rawStep) || !isPlanStepStatus(rawStep.status)) {
-        return decodeFailure(`Legacy Plan step ${decoded.value.id} has an invalid status.`);
-      }
-      legacyProgress.push({ id: decoded.value.id, status: rawStep.status });
-    }
   }
-
-  let progress: PlanProgressTracking | undefined;
-  if (value.phase === "executing") {
-    if (legacy) {
-      const decoded = decodeLocalProgress(legacyProgress, steps);
-      if (!decoded.ok) return decoded;
-      progress = { kind: "local", steps: decoded.value };
-    } else {
-      const decoded = decodePlanProgress(value.progress, steps);
-      if (!decoded.ok) return decoded;
-      progress = decoded.value;
-    }
-  } else if (!legacy && value.progress !== undefined) {
-    return decodeFailure(`Plan phase ${value.phase} cannot contain execution progress.`);
+  if ((version === 2 || version === 3) && value.progress !== undefined) {
+    return decodeFailure(`Plan phase ${value.phase} cannot contain obsolete execution progress.`);
   }
 
   let clarification: PlanClarification | undefined;
@@ -599,8 +501,8 @@ export function decodePlanState(value: unknown): PlanDecodeResult<PlanState> {
   }
   let blocker: PlanBlocker | undefined;
   if (value.blocker !== undefined) {
-    if (value.version !== 3 || !isRecord(value.blocker) || !hasOnlyKeys(value.blocker, PLAN_BLOCKER_KEYS)) {
-      return decodeFailure("Plan blocker must be an exact v3 object.");
+    if ((version !== 3 && version !== 4) || !isRecord(value.blocker) || !hasOnlyKeys(value.blocker, PLAN_BLOCKER_KEYS)) {
+      return decodeFailure("Plan blocker must be an exact v3 or v4 object.");
     }
     if (
       typeof value.blocker.summary !== "string" ||
@@ -648,8 +550,8 @@ export function decodePlanState(value: unknown): PlanDecodeResult<PlanState> {
   const hasSummary = typeof value.summary === "string";
   const hasPlan = typeof value.plan === "string";
   if (hasSummary !== hasPlan) return decodeFailure("Plan summary and body must be stored together.");
-  if ((value.phase === "awaitingApproval" || value.phase === "executing") && (!hasSummary || steps.length === 0)) {
-    return decodeFailure(`Plan phase ${value.phase} requires a submitted plan and steps.`);
+  if (value.phase === "awaitingApproval" && (!hasSummary || steps.length === 0)) {
+    return decodeFailure("Plan phase awaitingApproval requires a submitted plan and steps.");
   }
   if (!hasSummary && steps.length > 0) return decodeFailure("Draft Plan state cannot contain steps without a plan.");
   if (value.phase === "blocked") {
@@ -665,8 +567,8 @@ export function decodePlanState(value: unknown): PlanDecodeResult<PlanState> {
   if (value.phase === "planning" && clarification && clarification.selection === undefined) {
     return decodeFailure("Planning phase cannot contain an unanswered Plan choice.");
   }
-  if ((value.phase === "awaitingApproval" || value.phase === "executing") && clarification) {
-    return decodeFailure(`Plan phase ${value.phase} cannot contain a choice.`);
+  if (value.phase === "awaitingApproval" && clarification) {
+    return decodeFailure("Plan phase awaitingApproval cannot contain a choice.");
   }
   if (value.phase !== "planning" && value.phase !== "blocked" && blocker) {
     return decodeFailure(`Plan phase ${value.phase} cannot contain a blocker.`);
@@ -710,7 +612,7 @@ export function decodePlanState(value: unknown): PlanDecodeResult<PlanState> {
   return {
     ok: true,
     value: {
-      version: 3,
+      version: 4,
       phase: value.phase,
       summary,
       plan,
@@ -718,7 +620,6 @@ export function decodePlanState(value: unknown): PlanDecodeResult<PlanState> {
       clarification,
       blocker,
       steps,
-      progress,
       enteredWithTools,
       createdAt,
       updatedAt,
@@ -729,39 +630,48 @@ export function decodePlanState(value: unknown): PlanDecodeResult<PlanState> {
 export function decodePlanJournalEntry(value: unknown): PlanDecodeResult<PlanJournalEntry> {
   if (!isRecord(value)) return decodeFailure("Plan journal entry must be an object.");
   if (!hasOnlyKeys(value, PLAN_JOURNAL_KEYS)) return decodeFailure("Plan journal entry contains unknown fields.");
-  if (value.version !== 1 && value.version !== 2 && value.version !== 3) {
+  if (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4) {
     return decodeFailure(`Unsupported Plan journal version: ${String(value.version)}.`);
   }
-  if (typeof value.action !== "string" || !Object.hasOwn(VALID_PLAN_ACTIONS, value.action)) {
+  if (typeof value.action !== "string") return decodeFailure("Plan journal entry has an invalid action.");
+
+  if (value.version < 4) {
+    if (!LEGACY_PLAN_ACTIONS.has(value.action)) return decodeFailure("Legacy Plan journal entry has an invalid action.");
+    if (value.action === "cancel" || value.action === "complete") {
+      if (value.state !== null) return decodeFailure(`Legacy Plan ${value.action} entry must contain null state.`);
+      return { ok: true, value: { version: 4, action: value.action === "cancel" ? "cancel" : "approve", state: null } };
+    }
+    if (value.action === "approve" || value.action === "step") {
+      if (!isRecord(value.state) || value.state.version !== value.version || value.state.phase !== "executing") {
+        return decodeFailure(`Legacy Plan ${value.action} entry requires matching executing state.`);
+      }
+      return { ok: true, value: { version: 4, action: "approve", state: null } };
+    }
+  } else if (!Object.hasOwn(VALID_PLAN_ACTIONS, value.action)) {
     return decodeFailure("Plan journal entry has an invalid action.");
   }
-  const action = value.action as PlanJournalEntry["action"];
-  if (action === "cancel" || action === "complete") {
-    if (value.state !== null) return decodeFailure(`Plan ${action} entry must contain null state.`);
-    return { ok: true, value: { version: 3, action, state: null } };
-  }
 
+  const action = value.action as Exclude<PlanJournalEntry["action"], "approve" | "cancel">;
+  if (value.version === 4 && (value.action === "approve" || value.action === "cancel")) {
+    if (value.state !== null) return decodeFailure(`Plan ${value.action} entry must contain null state.`);
+    return { ok: true, value: { version: 4, action: value.action, state: null } };
+  }
   if (!isRecord(value.state) || value.state.version !== value.version) {
     return decodeFailure(`Plan journal v${value.version} entry requires matching Plan state version.`);
   }
   const decoded = decodePlanState(value.state);
   if (!decoded.ok) return decoded;
-  const expectedPhase: Record<Exclude<PlanJournalEntry["action"], "cancel" | "complete">, ActivePlanPhase> = {
+  const expectedPhase: Record<typeof action, ActivePlanPhase> = {
     start: "planning",
     submit: "awaitingApproval",
-    approve: "executing",
     clarify: "awaitingClarification",
     answer: "planning",
     resume: "planning",
     refine: "planning",
-    step: "executing",
     block: "blocked",
   };
   if (decoded.value.phase !== expectedPhase[action]) {
     return decodeFailure(`Plan ${action} entry has unexpected phase ${decoded.value.phase}.`);
   }
-  if (action === "step" && decoded.value.progress?.kind !== "local") {
-    return decodeFailure("Plan step entries require local progress ownership.");
-  }
-  return { ok: true, value: { version: 3, action, state: decoded.value } };
+  return { ok: true, value: { version: 4, action, state: decoded.value } };
 }

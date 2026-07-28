@@ -35,3 +35,6 @@ pnpm-debug.log*
 
 # IntelliJ IDEA project settings
 .idea/
+
+# Qoder local workspace state
+.qoder/

@@ -326,7 +326,7 @@ sequenceDiagram
 
 Tradeoff：共享集合没有事务和所有权元数据，租约只能通过“上次自己写了什么”和当前差异推断外部变化。若多个扩展同时大范围接管工具，仍可能冲突；更可靠的组合是一个策略层统一管理，或让每个扩展只操作自己拥有的工具。
 
-## 8. 跨扩展边界：direct service、compatibility channel 与 broadcast
+## 8. 跨扩展边界：direct service、compatibility channel 与同步 query
 
 所有 package 都保持独立安装，但硬依赖不能通过 `../../other-extension/src/...` 或可缺席 EventBus RPC 偷渡。Plan 明确依赖 Request/Todo：其 manifest 声明、捆绑并先加载这两个 package resource，随后从 package root 调用幂等 installer，取得同 EventBus 上唯一的 typed service。未声明依赖的独立 consumer 才使用 compatibility channel。
 
@@ -334,33 +334,32 @@ Tradeoff：共享集合没有事务和所有权元数据，租约只能通过“
 | --- | --- | --- |
 | Direct service | Plan → Request/Todo | package dependency、manifest resource order、EventBus-scoped installer、typed method |
 | 单接收者 compatibility request/response | Todo service、Request UI | listener 同步 `accept()`；完成时 `resolve/reject()` |
-| 单向 state broadcast | Plan phase → Goal | sender 发 immutable snapshot；consumer 按 session 校验和 reconcile |
+| 同步 compatibility query | Plan ↔ Goal workflow exclusivity | exact decode；按 session 查询；多个 `true` 结果做 OR |
 
-Plan phase 广播只服务 Goal；Todo 获得同一转换时由 Plan 直接调用 `todo.syncPlanPhase()`：
+Plan phase 对 Todo 使用 direct sync，并在批准时一次性 handoff；Plan 与 Goal 则通过独立 package 都能实现的最小 query 互斥：
 
 ```mermaid
 flowchart LR
     Plan[Plan extension]
-    Todo[Todo direct service]
-    Channel[pi-extensions:plan-state:v1]
+    Todo[Todo direct service<br/>ordinary board]
+    Query[pi-extensions:exclusive-workflow:v1]
     Goal[Goal extension]
 
-    Plan -->|typed syncPlanPhase| Todo
-    Plan -->|emit snapshot| Channel
-    Channel -->|unknown → validate| Goal
+    Plan -->|syncPlanPhase / handoffPlan| Todo
+    Plan <-->|query active mode| Query
+    Goal <-->|query active mode| Query
 ```
 
-广播字段包含 `version`、`sessionId`、phase、readOnly、awaitingApproval、是否会触发 turn 与 reason。设计规则：
+设计规则：
 
 1. 硬依赖只从 package root import public installer/types，并以 manifest 声明、捆绑和 resource order 落地；
 2. compatibility channel 名带 namespace/capability/version，例如 `pi-extensions:<capability>:vN`；
-3. 接收 payload 一律视为 `unknown`，验证 discriminant、字段、上限与 session identity；
-4. 发送 immutable snapshot，不暴露内部可变状态；
-5. EventBus `emit()` 不等待异步 listener，因此 `accept()` 必须同步完成，异步结果走显式 completion callback；
-6. Bus 不 replay；当前状态要在 `session_start` / `session_tree` 重发，早到信号要按 session 缓存后 reconcile；
-7. protocol、installer 或 manifest 改动同时更新所有受影响的 package、README 和 coexistence tests。
+3. 接收 payload 一律视为 `unknown`，验证 discriminant、exact keys、上限与 session identity；
+4. EventBus `emit()` 不等待异步 listener：request/reply 的 `accept()` 必须同步，异步结果走 completion callback；同步 query 只能在 `emit()` 返回前回答；
+5. 持久状态各自从 branch journal 恢复；互斥 query 读取当前 session 的 live state，不伪装成 retained broadcast；
+6. protocol、installer 或 manifest 改动同时更新所有受影响的 package、README 和 coexistence tests。
 
-Tradeoff：EventBus 兼容协议保持 package 独立，却没有编译期跨包契约；runtime decoder 与跨包测试是防漂移成本。直接 service 保留类型与调用路径，但仅适用于明确声明的同进程、同信任域 hard dependency。详见 [09 · 跨扩展通用协议](09-cross-extension-protocols.md)。
+Tradeoff：EventBus compatibility 协议保持 package 独立，却没有编译期跨包契约；runtime decoder 与跨包测试是防漂移成本。Direct service 保留类型与调用路径，但仅适用于明确声明的同进程、同信任域 hard dependency。详见 [09 · 跨扩展通用协议](09-cross-extension-protocols.md)。
 
 ## 9. 长生命周期资源：懒加载、去重、按 cwd 轮换、有界关闭
 
@@ -503,7 +502,7 @@ flowchart TB
 | 扩展 | 最值得学习的设计点 | 容易抄错的地方 |
 | --- | --- | --- |
 | RG | 基于当前 active set 重排，不重建全局集合 | 把 `grep` 永久删除而不尊重其他扩展 |
-| Plan | planning/blocked/approval/executing 状态机与 tool gate | 只靠 prompt 声称“只读” |
+| Plan | read-only planning/clarification/approval gate 与 Todo handoff | 只靠 prompt 声称“只读”，或批准后保留第二套 progress state |
 | Goal | `agent_settled` continuation 与空转保护 | 在 `agent_end` 重入新 run |
 | LSP | lazy manager、cwd 路由、取消/超时/清理 | factory 启进程或无限返回 diagnostics |
 | Ast-grep | pinned native CLI、双重路径约束、preview fingerprint 与原子单文件提交 | shell 拼命令、preview 即写入、跨文件伪事务或复用过期预览 |

@@ -21,8 +21,9 @@ import {
 
 export interface GoalToolRuntime {
   getGoal(): GoalState | null;
+  isPlanActive(ctx: ExtensionContext): boolean;
   setGoal(next: GoalState | null, action: GoalJournalEntry["action"], ctx: ExtensionContext): GoalState | null;
-  queueContinuation(ctx: ExtensionContext, forceThroughPlan?: boolean): void;
+  queueContinuation(ctx: ExtensionContext): void;
 }
 interface CompletionEvidenceItem {
   requirement: string;
@@ -107,13 +108,16 @@ export function registerGoalTools(pi: ExtensionAPI, runtime: GoalToolRuntime): v
     parameters: CreateGoalParams,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
+      if (runtime.isPlanActive(ctx)) {
+        throw new Error("Goal cannot start while Plan mode is active. Approve or cancel Plan first.");
+      }
       const current = runtime.getGoal();
       if (current && current.status !== "complete") {
         throw new Error("An unfinished goal already exists. Ask the user to clear or replace it.");
       }
       const next = createGoal(params.objective, normalizeTokenBudget(params.tokenBudget));
       const applied = runtime.setGoal(next, "set", ctx);
-      runtime.queueContinuation(ctx, true);
+      runtime.queueContinuation(ctx);
       return { content: [{ type: "text", text: JSON.stringify({ goal: applied }, null, 2) }], details: { goal: applied } };
     },
   });

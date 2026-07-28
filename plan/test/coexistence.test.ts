@@ -6,7 +6,7 @@ import planExtension from "../src/index.ts";
 import { blockedDecision, ExtensionHarness } from "./harness.ts";
 import type { PlanExtensionDependencies } from "../src/index.ts";
 import { InMemoryPlanArtifactStore } from "./harness.ts";
-import type { TodoService } from "pi-todo-dev";
+import type { TodoService, TodoToolDetails } from "pi-todo-dev";
 
 function registerTestPlan(
   harness: ExtensionHarness,
@@ -126,275 +126,95 @@ test("blocked Plan results stay read-only and resume with the recorded evidence"
   assert.match(systemPrompt, /credential-store read result/);
 });
 
-test("Goal continuation remains paused while Plan is blocked", async () => {
-  const harness = new ExtensionHarness();
-  goalExtension(harness.api);
-  registerTestPlan(harness);
-  await harness.emit("session_start", { type: "session_start", reason: "startup" });
-  await harness.command("goal", "--tokens 50k ship safely");
-  harness.clearPendingMessages();
-  await harness.command("plan");
-  await harness.tool("report_plan_blocked", {
-    summary: "A signing credential is unavailable.",
-    blockingFacts: ["The credential store has no signing key."],
-    evidenceSources: ["credential-store read result"],
-    resolutions: [{ kind: "prerequisite", label: "Provide credential", description: "Add the required signing key." }],
-  });
-  await harness.emit("agent_start", { type: "agent_start" });
-  const before = harness.sentMessages.length;
-  await harness.emit("agent_end", {
-    type: "agent_end",
-    messages: [{ role: "assistant", stopReason: "stop", usage: { totalTokens: 100 } }],
-  });
-  assert.equal(harness.sentMessages.length, before);
+test("Goal and Plan reject overlapping activation in either load order", async (t) => {
+  for (const order of ["goal-first", "plan-first"] as const) {
+    await t.test(order, async () => {
+      const harness = new ExtensionHarness();
+      if (order === "goal-first") {
+        goalExtension(harness.api);
+        registerTestPlan(harness);
+      } else {
+        registerTestPlan(harness);
+        goalExtension(harness.api);
+      }
+      await harness.emit("session_start", { type: "session_start", reason: "startup" });
+
+      await harness.command("goal", "ship safely");
+      harness.clearPendingMessages();
+      await harness.command("plan");
+      assert.match(harness.statuses.get("goal") ?? "", /^Goal active/);
+      assert.equal(harness.statuses.get("plan"), undefined);
+      assert.equal(harness.notifications.at(-1)?.message, "Plan cannot start while Goal mode is active. Pause, complete, or clear Goal first.");
+
+      await harness.command("goal", "pause");
+      await harness.command("plan");
+      assert.equal(harness.statuses.get("plan"), "Plan");
+      assert.equal(harness.getActiveTools().includes("create_goal"), false);
+
+      await harness.command("goal", "resume");
+      assert.equal(harness.statuses.get("goal"), "Goal paused");
+      assert.equal(harness.notifications.at(-1)?.message, "Goal cannot resume while Plan mode is active. Approve or cancel Plan first.");
+      await assert.rejects(
+        harness.tool("create_goal", { objective: "must not overlap" }),
+        /Goal cannot start while Plan mode is active/,
+      );
+
+      await harness.command("plan", "cancel");
+      await harness.command("goal", "resume");
+      assert.match(harness.statuses.get("goal") ?? "", /^Goal active/);
+      assert.equal(harness.statuses.get("plan"), undefined);
+    });
+  }
 });
 
-test("Goal and Plan coexist through planning, approval, execution, and continuation", async () => {
+test("Plan approval exits Plan and creates an ordinary Todo board", async () => {
   const harness = new ExtensionHarness();
-  goalExtension(harness.api);
   registerTestPlan(harness);
   await harness.emit("session_start", { type: "session_start", reason: "startup" });
-  assert.equal(harness.statuses.get("goal"), undefined);
-  assert.equal(harness.statuses.get("plan"), undefined);
-  assert.equal(harness.widgets.get("plan"), undefined);
-  assert.equal(harness.widgets.get("goal"), undefined);
-
-  assert.deepEqual(harness.getActiveTools(), [
-    "read",
-    "bash",
-    "edit",
-    "write",
-    "unknown_writer",
-    "create_goal",
-    "ask",
-    "todo",
-  ]);
-
-  await harness.command("goal", "--tokens 50k ship the feature with verification");
-  assert.equal(harness.statuses.get("goal"), "Goal active (0s · 0 / 50K)");
-  assert.equal(harness.widgets.get("goal"), undefined);
-  assert.equal(harness.sentMessages.length, 1, "setting a Goal queues exactly one initial turn");
-  assert.ok(harness.getActiveTools().includes("get_goal"));
-  assert.ok(harness.getActiveTools().includes("update_goal"));
-
-  harness.clearPendingMessages();
-  await harness.emit("agent_start", { type: "agent_start" });
   await harness.command("plan");
-  assert.equal(harness.statuses.get("goal"), "Goal active (0s · 0 / 50K)");
-  assert.equal(harness.statuses.get("plan"), "Plan");
-  assert.equal(harness.widgets.get("goal"), undefined);
-  assert.equal(harness.widgets.get("plan"), undefined);
-  assert.equal(harness.sentMessages.length, 1, "entering Plan must not queue a planning turn");
-  assert.deepEqual(harness.getActiveTools(), [
-    "read",
-    "grep",
-    "find",
-    "ls",
-    "create_goal",
-    "ask",
-    "get_goal",
-    "submit_plan",
-    "report_plan_blocked",
-    "request_plan_choice",
-  ]);
-
-  for (const toolName of ["bash", "edit", "write", "unknown_writer", "update_goal"]) {
-    const decisions = await harness.emit("tool_call", {
-      type: "tool_call",
-      toolName,
-      toolCallId: `blocked-${toolName}`,
-      input: {},
-    });
-    assert.equal(blockedDecision(decisions)?.block, true, `${toolName} must be blocked before approval`);
-  }
-  assert.equal(
-    blockedDecision(
-      await harness.emit("tool_call", { type: "tool_call", toolName: "read", toolCallId: "safe-read", input: {} }),
-    ),
-    undefined,
-  );
-
-  harness.clearPendingMessages();
-  await harness.emit("agent_start", { type: "agent_start" });
-  await harness.emit("agent_end", {
-    type: "agent_end",
-    messages: [{ role: "assistant", stopReason: "stop", usage: { totalTokens: 100 } }],
-  });
-  assert.equal(harness.sentMessages.length, 1, "Goal automatic continuation is suppressed while Plan is read-only");
-
   await harness.tool("submit_plan", {
     summary: "Ship safely",
     plan: "Inspect, implement, and verify.",
     steps: ["Inspect", "Implement", "Verify"],
   });
-  assert.equal(harness.statuses.get("plan"), "Plan");
-  assert.deepEqual(harness.widgets.get("plan"), ["· step-1 Inspect", "· step-2 Implement", "· step-3 Verify"]);
-  assert.deepEqual(harness.getActiveTools(), ["read", "grep", "find", "ls", "create_goal", "ask", "get_goal"]);
-  assert.equal(
-    blockedDecision(
-      await harness.emit("tool_call", { type: "tool_call", toolName: "submit_plan", toolCallId: "again", input: {} }),
-    )?.block,
-    true,
-  );
 
   harness.clearPendingMessages();
   await harness.command("plan", "approve");
+
   assert.equal(harness.statuses.get("plan"), undefined);
   assert.equal(harness.widgets.get("plan"), undefined);
-  assert.equal(harness.sentMessages.length, 2, "approval queues only the structured execution turn");
-  for (const toolName of ["bash", "edit", "write", "unknown_writer", "update_goal", "update_plan_step"]) {
-    assert.ok(harness.getActiveTools().includes(toolName), `${toolName} must be active during approved execution`);
-  }
+  assert.equal(harness.getActiveTools().includes("update_plan_step"), false);
+  assert.equal(harness.getActiveTools().includes("todo"), true);
+  assert.equal(harness.sentMessages.length, 1, "approval queues one execution turn");
+  const execution = harness.sentMessages[0]?.message;
+  assert.ok(execution && typeof execution === "object" && "customType" in execution);
+  assert.equal(execution.customType, "plan-execution-v1");
 
-  harness.clearPendingMessages();
-  await harness.emit("agent_start", { type: "agent_start" });
-  const beforeAutomatic = harness.sentMessages.length;
-  await harness.emit("agent_end", {
-    type: "agent_end",
-    messages: [{ role: "assistant", stopReason: "stop", usage: { totalTokens: 100 } }],
-  });
-  await harness.emit("agent_end", {
-    type: "agent_end",
-    messages: [{ role: "assistant", stopReason: "stop", usage: { totalTokens: 100 } }],
-  });
-  assert.equal(
-    harness.sentMessages.length,
-    beforeAutomatic + 1,
-    "Goal keeps at most one automatic continuation queued after Plan approval",
-  );
+  const viewed = await harness.tool("todo", { op: "view" });
+  assert.ok(viewed && typeof viewed === "object" && "content" in viewed && Array.isArray(viewed.content));
+  const text = viewed.content[0]?.text ?? "";
+  assert.match(text, /→ #1 Inspect/);
+  assert.match(text, /○ #2 Implement/);
+  assert.match(text, /○ #3 Verify/);
 });
 
-test("cancelling a submitted Plan keeps Goal active and queues one continuation", async () => {
+test("starting Plan settles the current non-Goal agent without queuing a planning turn", async () => {
   const harness = new ExtensionHarness();
-  goalExtension(harness.api);
   registerTestPlan(harness);
   await harness.emit("session_start", { type: "session_start", reason: "startup" });
-
-  await harness.command("goal", "continue after the submitted plan is cancelled");
-  harness.clearPendingMessages();
-  await harness.emit("agent_start", { type: "agent_start" });
-  await harness.command("plan");
-  harness.clearPendingMessages();
-  await harness.emit("agent_start", { type: "agent_start" });
-
-  const messagesBeforeCancel = harness.sentMessages.length;
-  const result = await harness.tool("submit_plan", {
-    summary: "Cancelled plan",
-    plan: "Do not execute after cancellation.",
-    steps: ["Must not run"],
-  });
-  assert.ok(result && typeof result === "object" && "terminate" in result && result.terminate === true);
-  await harness.command("plan", "cancel");
-  assert.match(harness.statuses.get("goal") ?? "", /^Goal active/);
-  assert.equal(harness.widgets.get("goal"), undefined);
-  assert.equal(harness.statuses.get("plan"), undefined);
-  assert.equal(harness.widgets.get("plan"), undefined);
-  assert.equal(
-    harness.notifications.some((notification) => notification.message === "Goal paused because Plan was cancelled."),
-    false,
-  );
-  assert.equal(
-    harness.sentMessages.length,
-    messagesBeforeCancel + 1,
-    "Plan cancellation must release exactly one Goal continuation",
-  );
-  const continuation = harness.sentMessages.at(-1);
-  assert.ok(continuation);
-  function isHiddenGoalContinuation(value: unknown): value is {
-    customType: "goal-continuation-v1";
-    display: false;
-  } {
-    if (!value || typeof value !== "object") return false;
-    return "customType" in value
-      && value.customType === "goal-continuation-v1"
-      && "display" in value
-      && value.display === false;
-  }
-  assert.ok(isHiddenGoalContinuation(continuation.message));
-
-  const messagesBeforeEnd = harness.sentMessages.length;
-  await harness.emit("agent_end", {
-    type: "agent_end",
-    messages: [{ role: "assistant", stopReason: "stop" }],
-  });
-  assert.equal(harness.sentMessages.length, messagesBeforeEnd, "the original Plan turn must not queue a duplicate continuation");
-});
-
-test("mode switches settle the current agent before queuing the next phase", async () => {
-  const harness = new ExtensionHarness();
-  goalExtension(harness.api);
-  registerTestPlan(harness);
-  await harness.emit("session_start", { type: "session_start", reason: "startup" });
-
-  await harness.command("goal", "coordinate an interrupted planning flow");
-  harness.agentOperations.length = 0;
   harness.setIdle(false);
   harness.deferWaitForIdle();
+
   const pendingPlanCommand = harness.command("plan");
   await Promise.resolve();
-
   assert.deepEqual(harness.agentOperations, ["abort", "wait"]);
-  assert.equal(harness.sentMessages.length, 1, "/plan must not queue while the current agent settles");
-  assert.equal(harness.statuses.get("plan"), "Plan");
-  assert.equal(harness.widgets.get("plan"), undefined);
-  assert.deepEqual(harness.getActiveTools(), [
-    "read",
-    "grep",
-    "find",
-    "ls",
-    "create_goal",
-    "ask",
-    "get_goal",
-    "submit_plan",
-    "report_plan_blocked",
-    "request_plan_choice",
-  ]);
+  assert.equal(harness.sentMessages.length, 0);
 
   harness.releaseWaitForIdle();
   await pendingPlanCommand;
-  assert.deepEqual(harness.agentOperations, ["abort", "wait"]);
-  assert.equal(harness.abortCount, 1);
-  assert.equal(harness.waitForIdleCount, 1);
-  assert.equal(harness.sentMessages.length, 1);
-  assert.match(harness.statuses.get("goal") ?? "", /^Goal active/);
   assert.equal(harness.statuses.get("plan"), "Plan");
-  assert.equal(harness.widgets.get("goal"), undefined);
-  assert.equal(harness.widgets.get("plan"), undefined);
-
-  harness.clearPendingMessages();
-  await harness.emit("agent_start", { type: "agent_start" });
-  await harness.emit("agent_end", {
-    type: "agent_end",
-    messages: [{ role: "assistant", stopReason: "aborted" }],
-  });
-  assert.match(harness.statuses.get("goal") ?? "", /^Goal active/);
-  assert.equal(harness.sentMessages.length, 1, "Plan-controlled abort must not pause or continue Goal");
-
-  await harness.emit("agent_start", { type: "agent_start" });
-  await harness.emit("agent_end", {
-    type: "agent_end",
-    messages: [{ role: "assistant", stopReason: "error", errorMessage: "stream ended before a terminal response event" }],
-  });
-  assert.match(harness.statuses.get("goal") ?? "", /^Goal active/);
-  assert.equal(harness.sentMessages.length, 1, "Plan-controlled stream errors must remain owned by Plan");
-
-  harness.agentOperations.length = 0;
-  harness.setIdle(false);
-  await harness.command("plan", "resume");
-  assert.deepEqual(harness.agentOperations, ["abort", "wait", "send"]);
-  assert.equal(harness.sentMessages.length, 2);
-
-  harness.agentOperations.length = 0;
-  await harness.command("goal", "pause");
-  assert.deepEqual(harness.agentOperations, ["abort", "wait"]);
-  assert.equal(harness.statuses.get("goal"), "Goal paused");
-  assert.equal(harness.widgets.get("goal"), undefined);
-
-  await harness.command("plan", "cancel");
-  assert.equal(harness.statuses.get("plan"), undefined);
-  assert.equal(harness.widgets.get("plan"), undefined);
+  assert.equal(harness.sentMessages.length, 0);
 });
-
 test("Goal terminal state stops continuation while the final turn remains accounted", async () => {
   const harness = new ExtensionHarness();
   goalExtension(harness.api);
@@ -495,7 +315,7 @@ test("Goal terminal updates require evidence or a structured blocker", async () 
   assert.match(JSON.stringify(result), /unblocksWhen/);
 });
 
-test("headless Plan waits for an explicit command and restores tools on cancel", async () => {
+test("headless Plan waits for explicit approval and restores tools into Todo execution", async () => {
   const originalTools = ["read", "bash", "edit", "write", "unknown_writer"];
   const harness = new ExtensionHarness(originalTools, false);
   registerTestPlan(harness);
@@ -510,13 +330,12 @@ test("headless Plan waits for an explicit command and restores tools on cancel",
     plan: "Inspect and execute only after approval.",
     steps: ["Inspect", "Execute"],
   });
-  assert.equal(harness.sentMessages.length, 0, "headless submission must not wait on or invent a dialog choice");
+  assert.equal(harness.sentMessages.length, 0, "headless submission must not invent an approval choice");
   assert.deepEqual(harness.getActiveTools(), ["read", "grep", "find", "ls", "ask"]);
 
   await harness.command("plan", "approve");
   assert.equal(harness.sentMessages.length, 1);
-  assert.deepEqual(harness.getActiveTools(), [...originalTools, "ask", "todo", "update_plan_step"]);
-  harness.clearPendingMessages();
+  assert.deepEqual(harness.getActiveTools(), [...originalTools, "ask", "todo"]);
   await harness.command("plan", "cancel");
   assert.deepEqual(harness.getActiveTools(), [...originalTools, "ask", "todo"]);
 });
@@ -700,7 +519,7 @@ test("submit_plan returns a compact summary before awaiting explicit approval", 
   if (typeof details.planPath !== "string") throw new Error("Submitted Plan details must expose an artifact path.");
   assert.equal(approvalPreview.includes(details.planPath), false);
   assert.equal(harness.statuses.get("plan"), "Plan");
-  assert.deepEqual(harness.widgets.get("plan"), ["· step-1 Implement and verify"]);
+  assert.deepEqual(harness.widgets.get("plan"), ["· 1. Implement and verify"]);
 
   const messagesBeforeResume = harness.sentMessages.length;
   const abortsBeforeResume = harness.abortCount;
@@ -715,11 +534,10 @@ test("submit_plan returns a compact summary before awaiting explicit approval", 
   await harness.command("plan", "approve");
   assert.equal(harness.statuses.get("plan"), undefined);
   assert.equal(harness.widgets.get("plan"), undefined);
-  await harness.tool("update_plan_step", { id: "step-1", status: "inProgress" }, { toolCallId: "progress-1" });
-  assert.ok(harness.getActiveTools().includes("update_plan_step"));
-  await harness.tool("update_plan_step", { id: "step-1", status: "completed" }, { toolCallId: "progress-2" });
-  assert.equal(harness.statuses.get("plan"), undefined);
-  assert.equal(harness.widgets.get("plan"), undefined);
+  assert.equal(harness.getActiveTools().includes("update_plan_step"), false);
+  const todoView = await harness.tool("todo", { op: "view" });
+  assert.ok(todoView && typeof todoView === "object" && "content" in todoView && Array.isArray(todoView.content));
+  assert.match(todoView.content[0]?.text ?? "", /→ #1 Implement and verify/);
   assert.deepEqual(harness.getActiveTools(), [...originalTools, "ask", "todo"]);
 });
 
@@ -761,7 +579,7 @@ test("/plan review reopens a submitted plan after Stay and can approve it", asyn
   assert.match(harness.customViews[0].join("\n"), /4\. Stay in plan mode/);
   assert.match(harness.customViews[0].join("\n"), /5\. Cancel plan/);
   assert.ok(harness.customViews[0].every((line) => visibleWidth(line) === 100), "every framed row fills the dialog width");
-  assert.equal(harness.notifications.at(-1)?.message, "Plan remains awaiting approval.");
+  assert.equal(harness.notifications.at(-1)?.message, "Plan remains awaiting approval. Send your change requests, then use /plan refine <feedback>; approve when no changes remain.");
   assert.equal(harness.sentMessages.length, messagesBeforeReview);
   assert.deepEqual(harness.getActiveTools(), ["read", "grep", "find", "ls", "ask"]);
 
@@ -769,8 +587,9 @@ test("/plan review reopens a submitted plan after Stay and can approve it", asyn
   await harness.command("plan", "review");
   assert.equal(harness.customViews.length, 2, "review can be reopened after choosing Stay");
   assert.equal(harness.sentMessages.length, messagesBeforeReview + 1);
-  assert.ok(harness.getActiveTools().includes("update_plan_step"));
-  assert.equal(harness.notifications.at(-1)?.message, "Plan approved; original tools restored and execution queued.");
+  assert.equal(harness.getActiveTools().includes("update_plan_step"), false);
+  assert.equal(harness.getActiveTools().includes("todo"), true);
+  assert.equal(harness.notifications.at(-1)?.message, "Plan approved; steps transferred to Todo, Plan exited, and execution queued.");
 });
 
 test("a settled submitted turn opens review automatically and Copy keeps it open", async () => {
@@ -802,34 +621,57 @@ test("a settled submitted turn opens review automatically and Copy keeps it open
   assert.match(copiedTexts[0], /Copy this complete submitted Plan/);
   assert.match(harness.customViews[0].join("\n").replace(/\u001b\[[0-9;]*m/g, ""), /⧉ 3\. Copy plan/);
   assert.match(harness.customViews[0].join("\n"), /c copy/);
-  assert.equal(harness.notifications.at(-1)?.message, "Plan remains awaiting approval.");
+  assert.equal(harness.notifications.at(-1)?.message, "Plan remains awaiting approval. Send your change requests, then use /plan refine <feedback>; approve when no changes remain.");
   assert.deepEqual(harness.getActiveTools(), ["read", "grep", "find", "ls", "ask"]);
 
   await harness.emit("agent_settled", { type: "agent_settled" });
   assert.equal(harness.customViews.length, 1, "later settled events do not reopen the same submission");
 });
 
-test("session-tree navigation reconciles Plan coordination regardless of extension load order", async () => {
-  const harness = new ExtensionHarness();
-  registerTestPlan(harness);
-  goalExtension(harness.api);
-  await harness.emit("session_start", { type: "session_start", reason: "startup" });
-  await harness.command("goal", "remain active across session-tree navigation");
-  harness.clearPendingMessages();
-  await harness.command("plan");
-  assert.equal(harness.getActiveTools().includes("update_goal"), false);
+test("restoring conflicting active Goal and Plan state pauses Goal regardless of load order", async (t) => {
+  for (const order of ["goal-first", "plan-first"] as const) {
+    await t.test(order, async (subtest) => {
+      subtest.mock.timers.enable({ apis: ["setTimeout"] });
+      const harness = new ExtensionHarness();
+      if (order === "goal-first") {
+        goalExtension(harness.api);
+        registerTestPlan(harness);
+      } else {
+        registerTestPlan(harness);
+        goalExtension(harness.api);
+      }
+      const goal = {
+        version: 1,
+        id: "goal-restored",
+        objective: "restore safely",
+        status: "active",
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      const plan = {
+        version: 4,
+        phase: "planning",
+        steps: [],
+        enteredWithTools: ["read"],
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      harness.entries.push(
+        { type: "custom", customType: "goal-state-v1", data: { version: 1, action: "set", goal } },
+        { type: "custom", customType: "plan-state-v4", data: { version: 4, action: "start", state: plan } },
+      );
 
-  const goalEntries = harness.entries.filter((entry) => entry.customType === "goal-state-v1");
-  harness.entries.splice(0, harness.entries.length, ...goalEntries);
-  harness.clearPendingMessages();
-  harness.setSessionId("session-2");
-  await harness.emit("session_tree", { type: "session_tree" });
-
-  assert.equal(harness.statuses.get("plan"), undefined);
-  assert.equal(harness.widgets.get("plan"), undefined);
-  assert.match(harness.statuses.get("goal") ?? "", /^Goal active/);
-  assert.equal(harness.getActiveTools().includes("submit_plan"), false);
-  assert.equal(harness.getActiveTools().includes("update_goal"), true);
+      await harness.emit("session_start", { type: "session_start", reason: "startup" });
+      subtest.mock.timers.tick(0);
+      assert.equal(harness.statuses.get("plan"), "Plan");
+      assert.equal(harness.statuses.get("goal"), "Goal paused");
+      assert.equal(harness.getActiveTools().includes("update_goal"), false);
+      assert.match(harness.notifications.at(-1)?.message ?? "", /Restored Goal was paused because Plan mode is active/);
+      subtest.mock.timers.reset();
+    });
+  }
 });
 
 test("tool failures reject instead of returning successful error-shaped results", async () => {
@@ -848,6 +690,7 @@ test("tool failures reject instead of returning successful error-shaped results"
   await harness.tool("create_goal", { objective: "finish one goal" });
   await assert.rejects(harness.tool("create_goal", { objective: "replace silently" }), /unfinished goal/);
   harness.clearPendingMessages();
+  await harness.command("goal", "pause");
 
   await harness.command("plan");
   harness.clearPendingMessages();
@@ -859,7 +702,6 @@ test("tool failures reject instead of returning successful error-shaped results"
     steps: ["No-op"],
   }), /byte limit/);
   assert.equal(harness.entries.length, entriesBeforeInvalidSubmission);
-  await assert.rejects(harness.tool("update_plan_step", { id: "step-1", status: "completed" }), /No approved plan/);
 });
 
 test("submit_plan returns without waiting and remains recoverable until an explicit command", async () => {
@@ -881,10 +723,11 @@ test("submit_plan returns without waiting and remains recoverable until an expli
   assert.equal(harness.sentMessages.length, messagesBeforeSubmission);
   assert.deepEqual(harness.getActiveTools(), ["read", "grep", "find", "ls", "ask"]);
   assert.equal(harness.statuses.get("plan"), "Plan");
-  assert.match(harness.widgets.get("plan")?.[0] ?? "", /^· step-1 Execute$/);
+  assert.match(harness.widgets.get("plan")?.[0] ?? "", /^· 1\. Execute$/);
 
   await harness.command("plan", "approve");
-  assert.ok(harness.getActiveTools().includes("update_plan_step"));
+  assert.equal(harness.getActiveTools().includes("update_plan_step"), false);
+  assert.equal(harness.getActiveTools().includes("todo"), true);
 });
 
 test("malformed latest journal entries do not resurrect earlier Goal or Plan state", async () => {
@@ -956,7 +799,7 @@ test("artifact persistence failures roll back planning state and retry safely", 
   await harness.command("plan");
   const submission = { summary: "Transactional", plan: "## Transactional", steps: ["Verify"] };
   const submitEntries = () => harness.entries.filter((entry) => {
-    return entry.customType === "plan-state-v3"
+    return entry.customType === "plan-state-v4"
       && entry.data && typeof entry.data === "object"
       && "action" in entry.data && entry.data.action === "submit";
   });
@@ -992,7 +835,7 @@ test("artifact persistence rejects concurrent and stale Plan submissions", async
   deferred.resolve();
   await first;
   const submitEntries = harness.entries.filter((entry) => {
-    return entry.customType === "plan-state-v3"
+    return entry.customType === "plan-state-v4"
       && entry.data && typeof entry.data === "object"
       && "action" in entry.data && entry.data.action === "submit";
   });
@@ -1011,67 +854,89 @@ test("artifact persistence rejects concurrent and stale Plan submissions", async
   await assert.rejects(staleSubmission, /Plan state changed while the submitted Plan was being persisted\./);
   assert.equal(staleStore.files.size, 0);
   assert.equal(
-    staleHarness.entries.some((entry) => entry.customType === "plan-state-v3" && entry.data && typeof entry.data === "object" && "action" in entry.data && entry.data.action === "submit"),
+    staleHarness.entries.some((entry) => entry.customType === "plan-state-v4" && entry.data && typeof entry.data === "object" && "action" in entry.data && entry.data.action === "submit"),
     false,
   );
 });
 
-test("Todo update failures leave Plan execution active and permit a retry", async () => {
+test("Todo handoff failures keep the submitted Plan recoverable and permit retry", async () => {
   const harness = new ExtensionHarness();
-  let status: "pending" | "inProgress" | "completed" | "blocked" = "pending";
-  let failUpdate = false;
+  let failHandoff = true;
+  let handoffCalls = 0;
+  const handoffPhases: string[] = [];
+  const syncedPhases: string[] = [];
+  const handoffState = {
+    version: 1 as const,
+    boardId: "todo-handoff",
+    revision: 1,
+    nextTaskId: 2,
+    phases: [{
+      name: "Plan",
+      tasks: [{ id: 1, content: "Verify", status: "inProgress" as const, createdAt: 1, updatedAt: 1 }],
+    }],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const handoffDetails: TodoToolDetails = {
+    kind: "pi-extensions:todo-tool-details",
+    version: 1,
+    sequence: 1,
+    op: "init",
+    boardId: "todo-handoff",
+    revision: 1,
+    changedTaskIds: [1],
+    counts: { total: 1, pending: 0, inProgress: 1, blocked: 0, completed: 0, dropped: 0 },
+    state: handoffState,
+  };
   const todoService: TodoService = {
     lifetime: new AbortController().signal,
     execute() {
-      throw new Error("Todo board is not used by Plan progress.");
+      throw new Error("Todo service execution is outside this test.");
     },
-    syncPlanPhase() {},
-    progress: {
-      async open(request) {
-        return { executionId: request.executionId, revision: 1, steps: [{ id: "step-1", status }] };
-      },
-      async read(request) {
-        return { executionId: request.executionId, revision: 1, steps: [{ id: "step-1", status }] };
-      },
-      async update(request) {
-        if (failUpdate) throw new Error("Todo update unavailable");
-        status = request.status;
-        return { executionId: request.executionId, revision: status === "pending" ? 1 : 2, steps: [{ id: "step-1", status }] };
-      },
-      async close() {},
+    handoffPlan(request) {
+      handoffCalls += 1;
+      handoffPhases.push(request.phase);
+      if (failHandoff) throw new Error("Todo handoff unavailable");
+      return {
+        content: "Todo · Plan · 0/1 completed\n→ #1 Verify",
+        details: handoffDetails,
+      };
+    },
+    syncPlanPhase(input) {
+      syncedPhases.push(input.phase);
     },
   };
   registerTestPlan(harness, { todoService });
   await harness.emit("session_start", { type: "session_start", reason: "startup" });
   await harness.command("plan");
   await harness.tool("submit_plan", {
-    summary: "Transactional progress",
-    plan: "Advance only after Todo commits progress.",
+    summary: "Transactional handoff",
+    plan: "Transfer only after Todo commits the ordinary board.",
     steps: ["Verify"],
   });
+
+  await assert.rejects(harness.command("plan", "approve"), /Todo handoff unavailable/);
+  assert.equal(handoffCalls, 1);
+  assert.equal(harness.statuses.get("plan"), "Plan");
+  assert.equal(harness.sentMessages.length, 0);
+  const rollbackEntry = harness.entries.at(-1)?.data;
+  assert.ok(rollbackEntry && typeof rollbackEntry === "object");
+  assert.equal("version" in rollbackEntry ? rollbackEntry.version : undefined, 4);
+  assert.equal("action" in rollbackEntry ? rollbackEntry.action : undefined, "submit");
+  assert.ok("state" in rollbackEntry && rollbackEntry.state && typeof rollbackEntry.state === "object");
+
+  failHandoff = false;
   await harness.command("plan", "approve");
-  assert.equal(harness.widgets.get("plan"), undefined, "Todo owns the managed progress projection");
+  assert.equal(handoffCalls, 2);
+  assert.deepEqual(handoffPhases, ["Transactional handoff", "Transactional handoff"]);
   assert.equal(harness.statuses.get("plan"), undefined);
-
-  failUpdate = true;
-  await assert.rejects(
-    harness.tool("update_plan_step", { id: "step-1", status: "inProgress" }),
-    /Todo update unavailable/,
-  );
-  assert.equal(status, "pending");
-  assert.ok(harness.getActiveTools().includes("update_plan_step"));
-
-  failUpdate = false;
-  await harness.tool("update_plan_step", { id: "step-1", status: "inProgress" });
-  assert.equal(status, "inProgress");
-  await harness.tool("update_plan_step", { id: "step-1", status: "completed" });
-  assert.equal(status, "completed");
-  assert.equal(harness.widgets.get("plan"), undefined);
-  assert.equal(harness.getActiveTools().includes("update_plan_step"), false);
+  assert.equal(harness.sentMessages.length, 1);
+  assert.equal(syncedPhases.at(-1), "off");
 });
 
-test("legacy v1 local progress restores and completes through the v3 journal", async () => {
-  const harness = new ExtensionHarness(["read", "bash", "edit"]);
+test("legacy executing Plan journals restore as already handed off", async () => {
+  const originalTools = ["read", "bash", "edit"];
+  const harness = new ExtensionHarness(originalTools);
   registerTestPlan(harness);
   harness.entries.push({
     type: "custom",
@@ -1085,73 +950,16 @@ test("legacy v1 local progress restores and completes through the v3 journal", a
         summary: "Legacy execution",
         plan: "Finish restored work.",
         steps: [{ id: "step-1", text: "Verify", status: "inProgress" }],
-        enteredWithTools: ["read", "bash", "edit"],
+        enteredWithTools: originalTools,
         createdAt: 1,
         updatedAt: 2,
       },
     },
   });
+
   await harness.emit("session_start", { type: "session_start", reason: "resume" });
-  assert.deepEqual(harness.widgets.get("plan"), ["→ step-1 Verify"]);
-  assert.ok(harness.getActiveTools().includes("update_plan_step"));
-
-  await harness.tool("update_plan_step", { id: "step-1", status: "completed" });
+  assert.equal(harness.statuses.get("plan"), undefined);
   assert.equal(harness.widgets.get("plan"), undefined);
-  assert.deepEqual(harness.getActiveTools(), ["read", "bash", "edit", "ask", "todo"]);
-  assert.equal(harness.entries.at(-1)?.customType, "plan-state-v3");
-  assert.deepEqual(harness.entries.at(-1)?.data, { version: 3, action: "complete", state: null });
-});
-
-test("Todo close failure cannot roll back a durable Plan cancellation", async () => {
-  const originalTools = ["read", "bash", "edit"];
-  const harness = new ExtensionHarness(originalTools);
-  const todoService: TodoService = {
-    lifetime: new AbortController().signal,
-    execute() {
-      throw new Error("Todo board is not used by Plan progress.");
-    },
-    syncPlanPhase() {},
-    progress: {
-      async open(request) {
-        return {
-          executionId: request.executionId,
-          revision: 1,
-          steps: [{ id: "step-1", status: "pending" }],
-        };
-      },
-      async read(request) {
-        return {
-          executionId: request.executionId,
-          revision: 1,
-          steps: [{ id: "step-1", status: "pending" }],
-        };
-      },
-      async update(request) {
-        return {
-          executionId: request.executionId,
-          revision: 2,
-          steps: [{ id: "step-1", status: request.status }],
-        };
-      },
-      async close() {
-        throw new Error("cleanup unavailable");
-      },
-    },
-  };
-  registerTestPlan(harness, { todoService });
-  await harness.emit("session_start", { type: "session_start", reason: "startup" });
-  await harness.command("plan");
-  await harness.tool("submit_plan", {
-    summary: "Cancelable Todo progress",
-    plan: "Cancel safely.",
-    steps: ["Verify"],
-  });
-  await harness.command("plan", "approve");
-  assert.equal(harness.statuses.get("plan"), undefined);
-
-  await harness.command("plan", "cancel");
-  assert.equal(harness.statuses.get("plan"), undefined);
-  assert.deepEqual(harness.getActiveTools(), [...originalTools, "ask"]);
-  assert.ok(harness.notifications.some((notification) => notification.message.includes("Todo managed progress close failed after Plan exited: cleanup unavailable")));
-  assert.deepEqual(harness.entries.at(-1)?.data, { version: 3, action: "cancel", state: null });
+  assert.equal(harness.getActiveTools().includes("update_plan_step"), false);
+  assert.deepEqual(harness.getActiveTools(), [...originalTools, "ask", "todo"]);
 });
