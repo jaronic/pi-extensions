@@ -121,7 +121,12 @@ function decodeOperation(value: unknown, index: number, budget: PayloadBudget): 
   if ((op === "insert_before" || op === "insert_after") && hasEnd) {
     fail("E_BAD_REQUEST", `edits[${index}].end is not allowed for ${op}.`);
   }
-  if (op === "delete" && hasLines) fail("E_BAD_REQUEST", `edits[${index}].lines is not allowed for delete.`);
+  if (op === "delete" && hasLines) {
+    fail(
+      "E_BAD_REQUEST",
+      `edits[${index}].lines is not allowed for delete. Omit the lines key entirely and send only op/start/end; use replace when the range should become new content.`,
+    );
+  }
   if ((op === "replace" || op === "insert_before" || op === "insert_after") && !hasLines) {
     fail("E_BAD_REQUEST", `edits[${index}].lines is required for ${op}.`);
   }

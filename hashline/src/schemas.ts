@@ -31,7 +31,7 @@ const editOperationSchema = Type.Object(
       Type.Array(Type.String(), {
         maxItems: MAX_EDIT_PAYLOAD_LINES,
         minItems: 1,
-        description: "Final logical lines without terminators; required for replace/inserts and forbidden for delete",
+        description: "Final logical lines without terminators; required for replace/inserts; must be omitted entirely for delete (never null or an empty array)",
       }),
     ),
   },

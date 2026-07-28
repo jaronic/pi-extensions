@@ -94,7 +94,7 @@ test("runtime validation rejects field-matrix, line, payload, and changed-byte v
   const token = snapshotTokenForBytes(Buffer.from("a\n"));
   assert.throws(
     () => decodeHashlineEditInput({ path: "x", snapshot: token, edits: [{ op: "delete", start: 1, lines: ["x"] }] }),
-    /\[E_BAD_REQUEST\]/,
+    /\[E_BAD_REQUEST\].*Omit the lines key entirely.*use replace/,
   );
   assert.throws(
     () => decodeHashlineEditInput({ path: "x", snapshot: token, edits: [{ op: "insert_before", start: 1, end: 1, lines: ["x"] }] }),

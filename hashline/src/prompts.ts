@@ -10,6 +10,7 @@ export const EDIT_PROMPT_SNIPPET = "Edit previously read lines only when the fil
 export const EDIT_PROMPT_GUIDELINES = [
   "All edit line numbers refer to the same original snapshot; do not shift later operations after earlier ones.",
   "For replace/delete, end is inclusive and defaults to start; insert_before/insert_after use start as the anchor and omit end.",
+  "delete sends only op/start/end and must omit the lines key entirely (never null or an empty array); use replace when the range should become new content.",
   "Put final logical line content in lines without read line-number prefixes or newline characters.",
   "After stale, unseen-line, or no-change errors, re-read and rebuild the edit instead of widening the range.",
   "Use write for new files or complete rewrites, and lsp for symbol renames or code actions.",
