@@ -17,6 +17,7 @@ import {
   type WorkspaceEdit,
 } from "vscode-languageserver-protocol";
 import { loadConfig } from "./config.ts";
+import { createLogger } from "./logger.ts";
 import {
   formatCodeActions,
   formatDiagnostics,
@@ -85,6 +86,7 @@ export default function lspExtension(pi: ExtensionAPI): void {
   let manager: ServerManager | undefined;
   let managerPromise: Promise<ServerManager> | undefined;
   const outputStore = new LspOutputStore();
+  const logger = createLogger("lsp", "PI_LSP_LOG");
 
   const getManager = async (ctx: ExtensionContext): Promise<ServerManager> => {
     if (manager && manager.cwd === ctx.cwd) return manager;
@@ -94,7 +96,7 @@ export default function lspExtension(pi: ExtensionAPI): void {
       manager = undefined;
       if (previous) await previous.shutdown();
       const config = await loadConfig(ctx.cwd, ctx.isProjectTrusted());
-      manager = new ServerManager(ctx.cwd, config);
+      manager = new ServerManager(ctx.cwd, config, logger);
       return manager;
     })().finally(() => {
       managerPromise = undefined;
@@ -132,6 +134,22 @@ export default function lspExtension(pi: ExtensionAPI): void {
             fullOutputPath: bounded.fullOutputPath,
           },
         };
+      } catch (error) {
+        // Record the full request shape so a failed call can be reproduced from
+        // the log alone; ServerManager adds the matching server/stderr context.
+        logger.error("tool_failed", {
+          action: params.action,
+          file: params.file,
+          server: params.server,
+          line: params.line,
+          column: params.column,
+          symbol: params.symbol,
+          query: params.query,
+          newName: params.newName,
+          cwd: ctx.cwd,
+          error,
+        });
+        throw error;
       } finally {
         ctx.ui.setStatus("lsp", undefined);
       }
@@ -146,6 +164,7 @@ export default function lspExtension(pi: ExtensionAPI): void {
         const bounded = await outputStore.bound(formatStatus(activeManager.status()));
         ctx.ui.notify(bounded.text, "info");
       } catch (error) {
+        logger.error("command_failed", { command: "lsp", cwd: ctx.cwd, error });
         ctx.ui.notify(messageOf(error), "error");
       }
     },

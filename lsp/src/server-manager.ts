@@ -1,6 +1,7 @@
 import { relative } from "node:path";
 import { languageIdForFile, matchingServers, serverIdForSelector } from "./config.ts";
 import { LspClient } from "./lsp-client.ts";
+import type { Logger } from "./logger.ts";
 import { findWorkspaceRoot, isWithin } from "./roots.ts";
 import type { ClientStatus, LspAction, LspConfig, ServerConfig, ServerRole } from "./types.ts";
 
@@ -17,18 +18,22 @@ export interface DiagnosticResult {
   error?: string;
 }
 
+const NOOP_LOGGER: Logger = { error() {}, warn() {}, info() {}, debug() {} };
+
 export class ServerManager {
   readonly cwd: string;
   readonly config: LspConfig;
 
+  private readonly logger: Logger;
   private readonly clients = new Map<string, LspClient>();
   private readonly starting = new Map<string, Promise<LspClient>>();
   private readonly idleTimers = new Map<string, NodeJS.Timeout>();
   private shuttingDown = false;
 
-  constructor(cwd: string, config: LspConfig) {
+  constructor(cwd: string, config: LspConfig, logger: Logger = NOOP_LOGGER) {
     this.cwd = cwd;
     this.config = config;
+    this.logger = logger;
   }
 
   status(): { configured: Array<{ id: string; command: string; roles: ServerRole[] }>; active: ClientStatus[]; loadedFrom: string[] } {
@@ -61,7 +66,17 @@ export class ServerManager {
         if (!languageId) continue;
         return { client, server, languageId };
       } catch (error) {
-        failures.push(`${server.id}: ${messageOf(error)}`);
+        const detail = messageOf(error);
+        failures.push(`${server.id}: ${detail}`);
+        // The client-start failure carries the resolved command and captured
+        // server stderr in its message; keep it for post-hoc diagnosis.
+        this.logger.warn("client_start_failed", {
+          server: server.id,
+          action,
+          file: relative(this.cwd, file) || file,
+          command: server.command.join(" "),
+          error,
+        });
         if (requestedServer) break;
       }
     }
@@ -87,6 +102,12 @@ export class ServerManager {
         );
         return { server: server.id, root, diagnostics };
       } catch (error) {
+        this.logger.warn("diagnostics_failed", {
+          server: server.id,
+          file: relative(this.cwd, file) || file,
+          root,
+          error,
+        });
         return { server: server.id, root, error: messageOf(error) };
       }
     }));
