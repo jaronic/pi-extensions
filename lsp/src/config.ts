@@ -150,6 +150,7 @@ const RAW_CONFIG_KEYS = {
   requestTimeoutMs: true,
   diagnosticsSettleMs: true,
   maxResults: true,
+  logEnabled: true,
   logLevel: true,
   servers: true,
 } satisfies Record<keyof RawLspConfig, true>;
@@ -372,6 +373,10 @@ function normalizeServer(id: string, value: ServerConfigInput): ServerConfig {
 function decodeRawConfig(value: unknown, options: { allowLogLevel: boolean }): RawLspConfig {
   if (!isRecord(value)) throw new Error("root must be an object");
   assertKnownKeys(value, RAW_CONFIG_KEYS, "root");
+  if (value.logEnabled !== undefined) {
+    if (!options.allowLogLevel) throw new Error("logEnabled is only supported in the global config");
+    if (typeof value.logEnabled !== "boolean") throw new Error("logEnabled must be a boolean");
+  }
   if (value.logLevel !== undefined) {
     // The troubleshooting logger reads only the global config at extension
     // load, so a project-level logLevel would be silently ignored; reject it.

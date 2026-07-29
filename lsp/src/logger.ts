@@ -27,45 +27,46 @@ export interface Logger {
 
 const NOOP: Logger = { error() {}, warn() {}, info() {}, debug() {} };
 
-// Logging is off by default so an ordinary session performs no disk writes. The
-// level comes from the extension's own global Pi config file,
-// getAgentDir()/<extension>.json, via its top-level "logLevel" key; anything
-// else (missing file, malformed JSON, absent or unknown value) keeps logging
-// off. The file is read once when the extension loads; /reload re-reads it.
-function resolveLevel(extension: string): LogLevel | undefined {
+// Logging defaults to on at the error threshold so failures are always
+// captured. The extension's own global Pi config file,
+// getAgentDir()/<extension>.json, carries two top-level keys: "logEnabled"
+// (only an explicit false turns logging off) and "logLevel" (one of error,
+// warn, info, debug; missing or unknown values fall back to error). The file
+// is read once when the extension loads; /reload re-reads it.
+function resolveThreshold(extension: string): LogLevel | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(join(getAgentDir(), `${extension}.json`), "utf8"));
   } catch {
-    // Missing or unreadable config simply means logging stays off.
-    return undefined;
+    // Missing or unreadable config keeps the default: on at error.
+    return "error";
   }
-  if (typeof parsed !== "object" || parsed === null) return undefined;
-  const raw = (parsed as Record<string, unknown>).logLevel;
+  if (typeof parsed !== "object" || parsed === null) return "error";
+  const record = parsed as Record<string, unknown>;
+  if (record.logEnabled === false) return undefined;
+  const raw = record.logLevel;
   if (raw === "error" || raw === "warn" || raw === "info" || raw === "debug") return raw;
-  return undefined;
+  return "error";
 }
 
 export function createLogger(extension: string): Logger {
-  const threshold = resolveLevel(extension);
+  const threshold = resolveThreshold(extension);
   if (threshold === undefined) return NOOP;
-  let file: string;
-  try {
-    const directory = join(getAgentDir(), "logs");
-    mkdirSync(directory, { recursive: true });
-    file = join(directory, `${extension}.log`);
-  } catch {
-    // Cannot prepare a log directory; degrade to a no-op rather than fail.
-    return NOOP;
-  }
   const thresholdRank = LEVEL_ORDER[threshold];
-  const target = file;
+  // The log directory is created lazily on the first write so an event-free
+  // session still performs no disk writes even though logging is on.
+  let file: string | undefined;
 
   const write = (level: LogLevel, event: string, context?: Record<string, unknown>): void => {
     if (LEVEL_ORDER[level] > thresholdRank) return;
     try {
-      rotateIfNeeded(target);
-      appendFileSync(target, formatLine(extension, level, event, context));
+      if (file === undefined) {
+        const directory = join(getAgentDir(), "logs");
+        mkdirSync(directory, { recursive: true });
+        file = join(directory, `${extension}.log`);
+      }
+      rotateIfNeeded(file);
+      appendFileSync(file, formatLine(extension, level, event, context));
     } catch {
       // Troubleshooting logs are advisory; never surface a write error.
     }

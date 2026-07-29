@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { createLogger } from "../src/logger.ts";
 
@@ -30,35 +30,50 @@ async function readLines(logFile: string): Promise<Array<Record<string, unknown>
   return text.split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
-test("logging is off by default and writes nothing", async () => {
+test("logging is on at the error threshold by default", async () => {
   await withAgentDir(undefined, async (logFile) => {
     const logger = createLogger("hashline");
+    logger.debug("skipped");
     logger.error("boom", { detail: 1 });
+    const lines = await readLines(logFile);
+    assert.deepEqual(lines.map((line) => line.event), ["boom"]);
+  });
+});
+
+test("logEnabled false turns logging off", async () => {
+  await withAgentDir(JSON.stringify({ logEnabled: false, logLevel: "debug" }), async (logFile) => {
+    const logger = createLogger("hashline");
+    logger.error("boom");
     await assert.rejects(stat(logFile), "no log file should be created when disabled");
   });
 });
 
-test("a config without logLevel keeps logging off", async () => {
+test("a config without logging keys keeps the error default", async () => {
   await withAgentDir(JSON.stringify({ maxResults: 25 }), async (logFile) => {
     const logger = createLogger("hashline");
-    logger.error("boom");
-    await assert.rejects(stat(logFile), "no log file should be created without logLevel");
+    logger.warn("skipped");
+    logger.error("kept");
+    const lines = await readLines(logFile);
+    assert.deepEqual(lines.map((line) => line.event), ["kept"]);
   });
 });
 
-test("an unknown logLevel value keeps logging off", async () => {
+test("an unknown logLevel value falls back to error", async () => {
   await withAgentDir(JSON.stringify({ logLevel: "verbose" }), async (logFile) => {
     const logger = createLogger("hashline");
-    logger.error("boom");
-    await assert.rejects(stat(logFile), "no log file should be created for an unknown level");
+    logger.warn("skipped");
+    logger.error("kept");
+    const lines = await readLines(logFile);
+    assert.deepEqual(lines.map((line) => line.event), ["kept"]);
   });
 });
 
-test("a malformed config file keeps logging off", async () => {
+test("a malformed config file keeps the error default", async () => {
   await withAgentDir("{", async (logFile) => {
     const logger = createLogger("hashline");
-    logger.error("boom");
-    await assert.rejects(stat(logFile), "no log file should be created for malformed JSON");
+    logger.error("kept");
+    const lines = await readLines(logFile);
+    assert.deepEqual(lines.map((line) => line.event), ["kept"]);
   });
 });
 
@@ -98,7 +113,7 @@ test("debug threshold admits every level", async () => {
 });
 
 test("Error context is serialized with message and stack", async () => {
-  await withAgentDir(JSON.stringify({ logLevel: "error" }), async (logFile) => {
+  await withAgentDir(undefined, async (logFile) => {
     const logger = createLogger("hashline");
     logger.error("edit_failed", { error: new Error("kaboom") });
     const [entry] = await readLines(logFile);
@@ -110,7 +125,7 @@ test("Error context is serialized with message and stack", async () => {
 });
 
 test("C1 control characters are neutralized in logged strings", async () => {
-  await withAgentDir(JSON.stringify({ logLevel: "error" }), async (logFile) => {
+  await withAgentDir(undefined, async (logFile) => {
     const logger = createLogger("hashline");
     logger.error("evt", { note: "before\u009Bafter" });
     const [entry] = await readLines(logFile);
@@ -120,11 +135,12 @@ test("C1 control characters are neutralized in logged strings", async () => {
 });
 
 test("the log rotates to .log.1 once it exceeds the size cap", async () => {
-  await withAgentDir(JSON.stringify({ logLevel: "error" }), async (logFile) => {
-    // Creating the logger first ensures the logs/ directory exists, then a
-    // pre-filled file forces the size-cap branch on the next append.
-    const logger = createLogger("hashline");
+  await withAgentDir(undefined, async (logFile) => {
+    // The log directory is created lazily on the first write; pre-create it so
+    // a full-size file forces the size-cap branch on the next append.
+    await mkdir(dirname(logFile), { recursive: true });
     await writeFile(logFile, "x".repeat(5 * 1024 * 1024 + 1));
+    const logger = createLogger("hashline");
     logger.error("after_rotate");
     const rotated = await stat(`${logFile}.1`);
     assert.ok(rotated.size > 5 * 1024 * 1024, "old content moved to backup");
@@ -139,7 +155,6 @@ test("a log directory that cannot be created degrades to a no-op", async () => {
   const saved = process.env[AGENT_DIR_ENV];
   process.env[AGENT_DIR_ENV] = dir;
   try {
-    await writeFile(join(dir, "hashline.json"), JSON.stringify({ logLevel: "error" }));
     // A regular file named "logs" makes join(dir, "logs") impossible to mkdir.
     await writeFile(join(dir, "logs"), "not a directory");
     const logger = createLogger("hashline");

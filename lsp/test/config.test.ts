@@ -133,6 +133,7 @@ test("loadConfig rejects unknown properties, wrong types, and unsafe bounds", as
     [{ servers: { bad: { readyNotification: { method: "ready", typo: true } } } }, /unknown property typo/],
     [{ logLevel: "verbose" }, /logLevel must be one of error, warn, info, debug/],
     [{ logLevel: 1 }, /logLevel must be one of error, warn, info, debug/],
+    [{ logEnabled: "no" }, /logEnabled must be a boolean/],
   ];
   try {
     for (const [value, pattern] of cases) {
@@ -144,23 +145,28 @@ test("loadConfig rejects unknown properties, wrong types, and unsafe bounds", as
   }
 });
 
-test("loadConfig accepts logLevel only in the global config", async () => {
+test("loadConfig accepts logEnabled and logLevel only in the global config", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-lsp-config-loglevel-"));
   const agentDir = join(root, "agent");
   const cwd = join(root, "workspace");
   const projectDir = join(cwd, ".pi");
   await Promise.all([mkdir(agentDir, { recursive: true }), mkdir(projectDir, { recursive: true })]);
   try {
-    await writeFile(join(agentDir, "lsp.json"), JSON.stringify({ logLevel: "debug" }));
+    await writeFile(join(agentDir, "lsp.json"), JSON.stringify({ logEnabled: true, logLevel: "debug" }));
     const globalOnly = await loadConfig(cwd, false, { agentDir });
     assert.equal(globalOnly.loadedFrom.length, 1);
 
-    // A project-level logLevel would be silently ignored by the logger, which
-    // reads only the global file at extension load, so it is rejected instead.
+    // Project-level logging keys would be silently ignored by the logger,
+    // which reads only the global file at extension load, so they are rejected.
     await writeFile(join(projectDir, "lsp.json"), JSON.stringify({ logLevel: "debug" }));
     await assert.rejects(
       loadConfig(cwd, true, { agentDir }),
       /logLevel is only supported in the global config/,
+    );
+    await writeFile(join(projectDir, "lsp.json"), JSON.stringify({ logEnabled: false }));
+    await assert.rejects(
+      loadConfig(cwd, true, { agentDir }),
+      /logEnabled is only supported in the global config/,
     );
   } finally {
     await rm(root, { recursive: true, force: true });

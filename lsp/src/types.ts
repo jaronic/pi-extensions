@@ -46,6 +46,7 @@ export interface RawLspConfig {
   requestTimeoutMs?: number;
   diagnosticsSettleMs?: number;
   maxResults?: number;
+  logEnabled?: boolean;
   logLevel?: "error" | "warn" | "info" | "debug";
   servers?: Record<string, ServerConfigInput>;
 }
