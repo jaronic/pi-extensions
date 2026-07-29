@@ -110,9 +110,9 @@ test("global Todo service shares the model-visible branch board and survives res
   assert.equal(typeof description, "string");
   assert.equal(typeof promptSnippet, "string");
   assert.equal(Array.isArray(promptGuidelines), true);
-  if (typeof description === "string") assert.match(description, /globally available Todo/);
+  if (typeof description === "string") assert.match(description, /Globally available, branch-local Todo execution ledger/);
   if (typeof promptSnippet === "string") assert.match(promptSnippet, /execution-ready branch-local checklist/);
-  if (Array.isArray(promptGuidelines)) assert.match(promptGuidelines.join("\n"), /only after work has entered execution/);
+  if (Array.isArray(promptGuidelines)) assert.match(promptGuidelines.join("\n"), /whenever you judge a persistent checklist adds value/);
   assert.equal(harness.coordinationListenerCount(TODO_SERVICE_CHANNEL), 1);
   await assert.rejects(
     requestTodoService(harness.api, {

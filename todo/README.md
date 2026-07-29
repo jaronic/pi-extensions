@@ -10,12 +10,12 @@ Todo 是执行账本，不是 Plan 审批、Goal 终态判断或项目级 issue 
 
 Todo 适合以下工作：
 
-- 已经过调查确认范围，并能列出三个以上彼此独立、可验证的执行步骤；
-- 用户明确要求 Todo 跟踪，或明确给出至少三个需要完成的执行事项；
+- 多步骤执行，模型判断持久化 checklist 对推进和追踪有价值；
+- 用户明确要求 Todo 跟踪，或明确给出多个需要完成的执行事项；
 - 执行中需要跨 turn、compaction、reload 或 branch navigation 保留精确进度；
 - 用户希望在 TUI 中持续看到当前项、剩余项和 blocker。
 
-仅包含需求、示例、问题、选项或假设的列表不应触发看板；先调查或澄清，确定进入执行后再创建。单步修改和纯问答不应创建看板。Todo 也不替代团队 backlog、长期项目管理或跨 session 同步。
+是否创建看板由模型自主判断：对只含需求、示例、问题、选项或假设的列表，提示词引导模型先判断各项是否真正属于执行范围，而非机械镜像；单步修改和纯问答通常不需要看板。Plan 批准的步骤则一定转交到这张看板并继续执行，模型不可跳过或另建替代。Todo 也不替代团队 backlog、长期项目管理或跨 session 同步。
 
 启用后：
 
@@ -62,7 +62,7 @@ pi --no-session --extension ./src/index.ts
 
 `pi.registerTool()` 使当前 active tool schema、description、`promptSnippet` 和 `promptGuidelines` 进入模型边界；Todo 不额外调用 `setActiveTools()`，因此不会覆盖其他扩展的工具集合。Plan 的只读 planning/clarification/approval/blocked 阶段会通过自己的 lease 隐藏 mutation-capable Todo，并用 direct phase sync 冻结其他入口；批准 handoff 后 Plan 关闭并恢复普通 `todo` 工具。
 
-普通 Todo 只应在工作已进入执行、用户明确要求追踪，或用户明确给出至少三个执行事项时初始化；列表本身不是充分条件。对需求、示例、问题、选项或假设先调查或澄清，确认可执行范围后再建板。
+普通 Todo 的创建时机由模型自主判断：多步骤执行或用户要求追踪时收益最大，列表本身不构成建板义务，模型会先判断各项是否为真实执行范围。Plan 批准的步骤一定通过 handoff 进入这张看板并强制沿转交任务继续。初始化必须发生在第一个被追踪执行步骤之前。
 
 | `op` | 必填字段 | 行为 |
 | --- | --- | --- |

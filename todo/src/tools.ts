@@ -220,10 +220,10 @@ export function registerTodoTool(pi: ExtensionAPI, runtime: TodoToolRuntime): vo
     name: "todo",
     label: "Todo",
     description:
-      "Use the globally available Todo execution ledger only for branch-local work that has entered execution after scope is understood, or when the user explicitly asks to track a checklist. It exposes stable task IDs to the model and a versioned service to other extensions; it is not Plan approval, Goal completion, or a project backlog.",
+      "Globally available, branch-local Todo execution ledger: it organizes multi-step work into ordered phases and tasks with stable numeric #IDs, keeps at most one task inProgress, and preserves done/blocked/dropped/reopened transitions across turns, compaction, and reloads. Plan approval hands its approved steps onto this same board, and other extensions share it through a versioned service. Judge for yourself when tracking work here adds value — typically multi-step execution or when the user asks to track a checklist.",
     promptSnippet: "Track an execution-ready branch-local checklist with one active task",
     promptGuidelines: [
-      "Use the todo tool for branch-local execution tracking only after work has entered execution or the user explicitly requests Todo tracking.",
+      "Use the todo tool for branch-local execution tracking whenever you judge a persistent checklist adds value; after Plan approval, continuing through the transferred board is mandatory, not optional.",
       ...TODO_PROMPT_GUIDELINES,
     ],
     parameters: TodoParams,

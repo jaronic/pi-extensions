@@ -23,13 +23,13 @@ test("prompt is absent without an active or blocked board", () => {
   assert.equal(todoSystemPrompt(settled), undefined);
 });
 
-test("static guidance defers board creation until execution is justified", () => {
+test("static guidance leaves board creation to model judgment while keeping Plan handoff mandatory", () => {
   const guidance = TODO_PROMPT_GUIDELINES.join("\n");
-  assert.match(guidance, /only once work has entered execution/);
-  assert.match(guidance, /after investigation has established three or more independent, verifiable execution steps/);
-  assert.match(guidance, /Do not create a board solely because a request contains a list/);
+  assert.match(guidance, /Decide for yourself when a Todo board is worth creating/);
+  assert.match(guidance, /Plan approval always hands its approved steps onto this board/);
+  assert.match(guidance, /judge whether the items are actual execution scope/);
   assert.match(guidance, /Initialize only before the first tracked execution step/);
-  assert.doesNotMatch(guidance, /whenever the user provides a list/);
+  assert.doesNotMatch(guidance, /only once work has entered execution/);
 });
 
 test("active prompt contains bounded open state, exact counts, and no closed task text", () => {

@@ -8,7 +8,7 @@ import {
 } from "./state.ts";
 
 export const TODO_PROMPT_GUIDELINES = [
-  "Create a Todo board only once work has entered execution: after investigation has established three or more independent, verifiable execution steps; when the user explicitly asks to track a Todo checklist; or when the user explicitly provides three or more execution items to complete. Do not create a board solely because a request contains a list of requirements, examples, questions, options, or hypotheses.",
+  "Decide for yourself when a Todo board is worth creating: it pays off for multi-step execution and whenever the user asks to track a checklist, while single-step work or pure Q&A rarely needs one. Plan approval always hands its approved steps onto this board; never skip or replace that transferred board. Before mirroring a request's list into tasks, judge whether the items are actual execution scope rather than requirements, examples, questions, options, or hypotheses.",
   "Preserve every explicit user item as a separate task. Never merge, sample, omit, or silently truncate items; report a hard limit instead.",
   "Use concise actionable task text describing what must be accomplished. Initialize only before the first tracked execution step, and append newly discovered or newly requested scope immediately.",
   "Update the active task in the same turn as observable progress. Mark done only after implementation and that task's verification are complete.",
