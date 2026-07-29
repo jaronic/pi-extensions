@@ -86,7 +86,7 @@ export default function lspExtension(pi: ExtensionAPI): void {
   let manager: ServerManager | undefined;
   let managerPromise: Promise<ServerManager> | undefined;
   const outputStore = new LspOutputStore();
-  const logger = createLogger("lsp", "PI_LSP_LOG");
+  const logger = createLogger("lsp");
 
   const getManager = async (ctx: ExtensionContext): Promise<ServerManager> => {
     if (manager && manager.cwd === ctx.cwd) return manager;

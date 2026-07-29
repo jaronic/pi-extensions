@@ -150,6 +150,7 @@ const RAW_CONFIG_KEYS = {
   requestTimeoutMs: true,
   diagnosticsSettleMs: true,
   maxResults: true,
+  logLevel: true,
   servers: true,
 } satisfies Record<keyof RawLspConfig, true>;
 const SERVER_CONFIG_KEYS = {
@@ -205,8 +206,8 @@ export async function loadConfig(
 
   const paths = lspConfigPaths(cwd, includeProject, options);
 
-  for (const path of paths) {
-    const raw = await readConfig(path);
+  for (const [index, path] of paths.entries()) {
+    const raw = await readConfig(path, { allowLogLevel: index === 0 });
     if (!raw) continue;
     loadedFrom.push(path);
     if (raw.idleTimeoutMs !== undefined) idleTimeoutMs = nonNegativeInt(raw.idleTimeoutMs, `${path}: idleTimeoutMs`);
@@ -272,7 +273,7 @@ export function languageIdForFile(server: ServerConfig, file: string): string | 
   return extension ? server.extensions[extension] : undefined;
 }
 
-async function readConfig(path: string): Promise<RawLspConfig | undefined> {
+async function readConfig(path: string, options: { allowLogLevel: boolean }): Promise<RawLspConfig | undefined> {
   let text: string;
   try {
     text = await readFile(path, "utf8");
@@ -282,7 +283,7 @@ async function readConfig(path: string): Promise<RawLspConfig | undefined> {
   }
   try {
     const parsed: unknown = JSON.parse(text);
-    return decodeRawConfig(parsed);
+    return decodeRawConfig(parsed, options);
   } catch (error) {
     throw new Error(`Invalid LSP config ${path}: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -368,9 +369,17 @@ function normalizeServer(id: string, value: ServerConfigInput): ServerConfig {
   };
 }
 
-function decodeRawConfig(value: unknown): RawLspConfig {
+function decodeRawConfig(value: unknown, options: { allowLogLevel: boolean }): RawLspConfig {
   if (!isRecord(value)) throw new Error("root must be an object");
   assertKnownKeys(value, RAW_CONFIG_KEYS, "root");
+  if (value.logLevel !== undefined) {
+    // The troubleshooting logger reads only the global config at extension
+    // load, so a project-level logLevel would be silently ignored; reject it.
+    if (!options.allowLogLevel) throw new Error("logLevel is only supported in the global config");
+    if (value.logLevel !== "error" && value.logLevel !== "warn" && value.logLevel !== "info" && value.logLevel !== "debug") {
+      throw new Error("logLevel must be one of error, warn, info, debug");
+    }
+  }
   if (value.servers !== undefined) {
     if (!isRecord(value.servers)) throw new Error("servers must be an object");
     for (const [id, patch] of Object.entries(value.servers)) validateServerPatch(patch, `server ${id}`);

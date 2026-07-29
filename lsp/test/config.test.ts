@@ -131,12 +131,37 @@ test("loadConfig rejects unknown properties, wrong types, and unsafe bounds", as
     [{ servers: { bad: { env: ["TOKEN"] } } }, /env must be an object with string values/],
     [{ servers: { bad: { priority: "high" } } }, /priority must be a finite number/],
     [{ servers: { bad: { readyNotification: { method: "ready", typo: true } } } }, /unknown property typo/],
+    [{ logLevel: "verbose" }, /logLevel must be one of error, warn, info, debug/],
+    [{ logLevel: 1 }, /logLevel must be one of error, warn, info, debug/],
   ];
   try {
     for (const [value, pattern] of cases) {
       await writeFile(path, JSON.stringify(value));
       await assert.rejects(loadConfig(join(root, "workspace"), false, { agentDir: root }), pattern);
     }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig accepts logLevel only in the global config", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-lsp-config-loglevel-"));
+  const agentDir = join(root, "agent");
+  const cwd = join(root, "workspace");
+  const projectDir = join(cwd, ".pi");
+  await Promise.all([mkdir(agentDir, { recursive: true }), mkdir(projectDir, { recursive: true })]);
+  try {
+    await writeFile(join(agentDir, "lsp.json"), JSON.stringify({ logLevel: "debug" }));
+    const globalOnly = await loadConfig(cwd, false, { agentDir });
+    assert.equal(globalOnly.loadedFrom.length, 1);
+
+    // A project-level logLevel would be silently ignored by the logger, which
+    // reads only the global file at extension load, so it is rejected instead.
+    await writeFile(join(projectDir, "lsp.json"), JSON.stringify({ logLevel: "debug" }));
+    await assert.rejects(
+      loadConfig(cwd, true, { agentDir }),
+      /logLevel is only supported in the global config/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

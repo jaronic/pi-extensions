@@ -168,6 +168,7 @@ position 有两种写法：
 | `requestTimeoutMs` | `15000` | 全局请求超时，必须为正整数且不超过 `2147483647`。 |
 | `diagnosticsSettleMs` | `500` | 打开/更新文档后等待 diagnostics 稳定的时间；可为 `0`，最大 `2147483647`。 |
 | `maxResults` | `100` | 默认格式化结果数，必须为 `1..500` 的整数。 |
+| `logLevel` | 关闭 | 排查日志级别 `error`/`warn`/`info`/`debug`；只有全局文件生效，项目配置设置会被严格 decoder 拒绝。 |
 | `servers` | 内置集合 | 以 server ID 为 key 的新增配置或 patch。 |
 
 ### Server 字段
@@ -220,13 +221,16 @@ Server patch 除 `initOptions` 外是浅合并。修改嵌套对象时应提供�
 
 ## 排查日志
 
-默认不写任何日志文件，普通 session 无磁盘副作用。需要排查问题时通过环境变量开启：
+默认不写任何日志文件，普通 session 无磁盘副作用。需要排查问题时在全局配置 `~/.pi/agent/lsp.json`（遵循 `PI_CODING_AGENT_DIR`）中设置顶层 `logLevel`：
 
-- `PI_LSP_LOG` 控制本扩展；`PI_EXT_LOG` 为本仓库多个扩展共享的开关，`PI_LSP_LOG` 优先级更高。
-- 取值：`error`（默认级别）、`warn`、`info`、`debug`；`1`/`true`/`on`/`yes` 等价 `error`；`0`/`off`/`false`/`no` 或留空为关闭。
-- 日志写入 `getAgentDir()/logs/lsp.log`（即 `~/.pi/agent/logs/lsp.log`，遵循 `PI_CODING_AGENT_DIR`）。文件超过 5 MiB 轮转为 `lsp.log.1`，只保留一份备份。
+```json
+{ "logLevel": "debug" }
+```
+
+- 取值：`error`、`warn`、`info`、`debug`；缺失或其他取值保持关闭。只有全局文件生效：logger 在扩展加载时只读取全局配置一次，项目级 `.pi/lsp.json` 设置 `logLevel` 会被严格 decoder 拒绝；修改后 `/reload` 生效。
+- 日志写入 `getAgentDir()/logs/lsp.log`（即 `~/.pi/agent/logs/lsp.log`）。文件超过 5 MiB 轮转为 `lsp.log.1`，只保留一份备份。
 - 每行是一条 JSON：`ts`、`level`、`ext`、`event` 与 `context`。工具失败记录完整请求形状（action、file、server、行列、symbol/query/newName），server 启动与诊断失败额外记录解析后的命令与捕获的 server stderr（包含在 error 消息中），便于脱离现场复现。C1 控制字符会被中和，避免在终端或编辑器中打开日志时执行转义序列。
-- 日志是尽力而为的旁路：写入或轮转失败会被静默吞掉，绝不影响工具执行或改变任何返回结果。想要“常开”，在 shell profile 中设置一次 `export PI_LSP_LOG=error` 即可。
+- 日志是尽力而为的旁路：写入或轮转失败会被静默吞掉，绝不影响工具执行或改变任何返回结果。想要“常开”，在 `lsp.json` 里设置一次 `logLevel` 即可。
 
 ## 与 Plan、Goal 和 Todo 的关系
 
@@ -239,7 +243,7 @@ Server patch 除 `initOptions` 外是浅合并。修改嵌套对象时应提供�
 - `src/index.ts`：`lsp` 工具 schema、action dispatch、`/lsp`、状态 UI、tool-result 同步 wiring 和 shutdown。
 - `src/config.ts`：内置服务器、配置路径、严格 decoder、分层 patch、schema normalization、后缀/role 路由。
 - `src/server-manager.ts`：client 缓存、候选 fallback、并行 diagnostics、idle timer 和有界 shutdown。
-- `src/logger.ts`：默认关闭、`PI_LSP_LOG`/`PI_EXT_LOG` 开关、写入 `getAgentDir()/logs/lsp.log` 并有界轮转、C1 中和、吞掉自身失败的排查日志。与 hashline 的同名文件逐字节相同，避免跨包生产导入。
+- `src/logger.ts`：默认关闭、由全局 `lsp.json` 的 `logLevel` 开启、写入 `getAgentDir()/logs/lsp.log` 并有界轮转、C1 中和、吞掉自身失败的排查日志。与 hashline 的同名文件逐字节相同，避免跨包生产导入。
 - `src/lsp-client.ts`：子进程组、JSON-RPC、initialize/capability、文档同步、position encoding、timeout/cancel、ready notification 和升级式进程树回收。
 - `src/roots.ts`：区分用户 `@` mention 与 literal machine path 的 realpath workspace confinement，以及 root marker 选择。
 - `src/positions.ts`：1-based Unicode 输入到 LSP position 的转换及唯一 symbol 解析。

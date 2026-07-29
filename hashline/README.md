@@ -213,13 +213,16 @@ Hashline 是误编辑约束，不是权限系统：
 
 ## 排查日志
 
-默认不写任何日志文件，普通 session 无磁盘副作用。需要排查问题时通过环境变量开启：
+默认不写任何日志文件，普通 session 无磁盘副作用。需要排查问题时在全局配置 `~/.pi/agent/hashline.json`（遵循 `PI_CODING_AGENT_DIR`）中设置顶层 `logLevel`：
 
-- `PI_HASHLINE_LOG` 控制本扩展；`PI_EXT_LOG` 为本仓库多个扩展共享的开关，`PI_HASHLINE_LOG` 优先级更高。
-- 取值：`error`（默认级别）、`warn`、`info`、`debug`；`1`/`true`/`on`/`yes` 等价 `error`；`0`/`off`/`false`/`no` 或留空为关闭。
-- 日志写入 `getAgentDir()/logs/hashline.log`（即 `~/.pi/agent/logs/hashline.log`，遵循 `PI_CODING_AGENT_DIR`）。文件超过 5 MiB 轮转为 `hashline.log.1`，只保留一份备份。
+```json
+{ "logLevel": "debug" }
+```
+
+- 取值：`error`、`warn`、`info`、`debug`；缺失或其他取值保持关闭。`hashline.json` 目前只有这一个键；配置在扩展加载时读取一次，修改后 `/reload` 生效。
+- 日志写入 `getAgentDir()/logs/hashline.log`（即 `~/.pi/agent/logs/hashline.log`）。文件超过 5 MiB 轮转为 `hashline.log.1`，只保留一份备份。
 - 每行是一条 JSON：`ts`、`level`、`ext`、`event` 与 `context`。edit 失败记录 `path`、错误码、`snapshot` token、操作数与 runtime `generation`。为避免噪音，属于正常控制流的 CAS 拒绝（stale/unseen/no-change/path-mismatch/branch-changed 等）记为 `debug`，只有 `E_WRITE_FAILED` 与非 Hashline 的意外错误记为 `error`；read 失败记为 `debug`。C1 控制字符会被中和，避免在终端或编辑器中打开日志时执行转义序列。
-- 日志是尽力而为的旁路：写入或轮转失败会被静默吞掉，绝不影响工具执行、CAS 语义或改变任何返回结果。想要“常开”，在 shell profile 中设置一次 `export PI_HASHLINE_LOG=debug` 即可完整记录 CAS 拒绝链路。
+- 日志是尽力而为的旁路：写入或轮转失败会被静默吞掉，绝不影响工具执行、CAS 语义或改变任何返回结果。想要“常开”，在 `hashline.json` 里设置一次 `logLevel` 即可完整记录 CAS 拒绝链路。
 
 ## 实现节点
 
@@ -231,7 +234,7 @@ Hashline 是误编辑约束，不是权限系统：
 - `src/lines.ts`：严格 UTF-8、显式单 BOM 处理、物理行/EOL scanner 与 byte-preserving serializer。
 - `src/snapshots.ts`、`src/persistence.ts`：immutable seen ranges、LRU、v1 decoder 与 current-branch replay。
 - `src/output.ts`：有界 read body、变更 preview、follow-up snapshot，以及只在 journal 成功后返回的拒绝当前上下文。
-- `src/logger.ts`：默认关闭、`PI_HASHLINE_LOG`/`PI_EXT_LOG` 开关、写入 `getAgentDir()/logs/hashline.log` 并有界轮转、按 CAS 拒绝/意外错误分级、C1 中和、吞掉自身失败的排查日志。与 lsp 的同名文件逐字节相同，避免跨包生产导入。
+- `src/logger.ts`：默认关闭、由全局 `hashline.json` 的 `logLevel` 开启、写入 `getAgentDir()/logs/hashline.log` 并有界轮转、按 CAS 拒绝/意外错误分级、C1 中和、吞掉自身失败的排查日志。与 lsp 的同名文件逐字节相同，避免跨包生产导入。
 - `src/schemas.ts`、`src/prompts.ts`：TypeBox schema、硬上限与模型可见使用规则。
 
 ## 开发与验证

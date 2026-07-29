@@ -15,7 +15,7 @@ export default function hashlineExtension(pi: ExtensionAPI): void {
   let generation = 0;
   let store = new SnapshotStore();
   const recovery = new RecoveryStore();
-  const logger = createLogger("hashline", "PI_HASHLINE_LOG");
+  const logger = createLogger("hashline");
 
   const runtime: HashlineRuntime = {
     getGeneration: () => generation,

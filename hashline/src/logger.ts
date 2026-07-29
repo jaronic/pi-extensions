@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -28,19 +28,26 @@ export interface Logger {
 const NOOP: Logger = { error() {}, warn() {}, info() {}, debug() {} };
 
 // Logging is off by default so an ordinary session performs no disk writes. The
-// per-extension variable wins over the shared PI_EXT_LOG so one extension can be
-// traced in isolation. `1`/`true`/`on`/`yes` mean the error level; an explicit
-// level name selects that threshold; anything else falls back to error.
-function resolveLevel(envName: string): LogLevel | undefined {
-  const raw = (process.env[envName] ?? process.env.PI_EXT_LOG ?? "").trim().toLowerCase();
-  if (!raw || raw === "0" || raw === "off" || raw === "false" || raw === "no") return undefined;
-  if (raw === "1" || raw === "true" || raw === "on" || raw === "yes") return "error";
+// level comes from the extension's own global Pi config file,
+// getAgentDir()/<extension>.json, via its top-level "logLevel" key; anything
+// else (missing file, malformed JSON, absent or unknown value) keeps logging
+// off. The file is read once when the extension loads; /reload re-reads it.
+function resolveLevel(extension: string): LogLevel | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(join(getAgentDir(), `${extension}.json`), "utf8"));
+  } catch {
+    // Missing or unreadable config simply means logging stays off.
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const raw = (parsed as Record<string, unknown>).logLevel;
   if (raw === "error" || raw === "warn" || raw === "info" || raw === "debug") return raw;
-  return "error";
+  return undefined;
 }
 
-export function createLogger(extension: string, envName: string): Logger {
-  const threshold = resolveLevel(envName);
+export function createLogger(extension: string): Logger {
+  const threshold = resolveLevel(extension);
   if (threshold === undefined) return NOOP;
   let file: string;
   try {
