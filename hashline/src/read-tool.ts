@@ -11,6 +11,7 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { snapshotTokenForBytes } from "./digest.ts";
 import { abortIfNeeded, fail } from "./errors.ts";
+import type { Logger } from "./logger.ts";
 import { assertEditableLineSizes, decodeEditableBytes } from "./lines.ts";
 import { formatReadSnapshot } from "./output.ts";
 import { displayPath } from "./paths.ts";
@@ -31,6 +32,8 @@ interface CapturedFile {
   readonly linkCount: number;
 }
 
+class CaptureTooLargeError extends Error {}
+
 function sameFileState(
   left: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number },
   right: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number },
@@ -46,12 +49,14 @@ async function captureFile(absolutePath: string, signal: AbortSignal | undefined
   const initial = await stat(canonicalPath);
   abortIfNeeded(signal);
   if (!initial.isFile()) fail("E_NOT_EDITABLE", "Hashline read only supports existing regular files.");
+  if (initial.size > MAX_EDITABLE_FILE_BYTES) throw new CaptureTooLargeError();
   const handle = await open(canonicalPath, constants.O_RDONLY | constants.O_NONBLOCK);
   try {
     abortIfNeeded(signal);
     const before = await handle.stat();
     abortIfNeeded(signal);
     if (!before.isFile()) fail("E_NOT_EDITABLE", "Hashline read only supports existing regular files.");
+    if (before.size > MAX_EDITABLE_FILE_BYTES) throw new CaptureTooLargeError();
     const bytes = Buffer.allocUnsafe(before.size);
     let offset = 0;
     while (offset < bytes.length) {
@@ -102,7 +107,9 @@ function textResult(text: string, details: ReadToolDetails | undefined): AgentTo
   return Object.freeze({ content: [{ type: "text" as const, text }], details });
 }
 
-export function createHashlineReadTool(runtime: HashlineRuntime) {
+const NOOP_LOGGER: Logger = { error() {}, warn() {}, info() {}, debug() {} };
+
+export function createHashlineReadTool(runtime: HashlineRuntime, logger: Logger = NOOP_LOGGER) {
   const renderer = createReadToolDefinition(process.cwd());
   const renderCall: NonNullable<typeof renderer.renderCall> = (args, theme, context) => {
     const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
@@ -153,10 +160,26 @@ export function createHashlineReadTool(runtime: HashlineRuntime) {
           },
         },
       });
-      const builtinResult = await builtin.execute(toolCallId, params, signal, onUpdate, ctx).catch((error: unknown) => {
+      let builtinResult: AgentToolResult<ReadToolDetails | undefined>;
+      try {
+        builtinResult = await builtin.execute(toolCallId, params, signal, onUpdate, ctx);
+      } catch (error) {
         abortIfNeeded(signal);
+        if (error instanceof CaptureTooLargeError) {
+          try {
+            return await createReadToolDefinition(ctx.cwd).execute(toolCallId, params, signal, onUpdate, ctx);
+          } catch (fallbackError) {
+            abortIfNeeded(signal);
+            logger.debug("read_failed", { path: params.path, offset: params.offset, limit: params.limit, error: fallbackError });
+            throw fallbackError;
+          }
+        }
+        // Capture and built-in read failures both surface here; log the request
+        // shape so the failing path can be reproduced. Routine access errors are
+        // debug-level noise, so this stays below the error threshold.
+        logger.debug("read_failed", { path: params.path, offset: params.offset, limit: params.limit, error });
         throw error;
-      });
+      }
       const captured = await capturePromise;
       if (
         builtinResult.content.some((content) => content.type === "image") ||
@@ -211,7 +234,7 @@ export function createHashlineReadTool(runtime: HashlineRuntime) {
       abortIfNeeded(signal);
       if (runtime.getGeneration() !== generation) return noTokenResult;
       try {
-        runtime.commitRecord(record, entry);
+        runtime.commitRecord(record, entry, captured.bytes);
       } catch {
         return noTokenResult;
       }

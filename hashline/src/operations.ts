@@ -154,6 +154,29 @@ export function decodeHashlineEditInput(value: unknown): ValidatedHashlineEditIn
   return Object.freeze({ path: value.path, snapshot: parsedToken.token, edits: Object.freeze(decodedEdits) });
 }
 
+export function operationRequiredSeenRange(
+  operation: ValidatedEditOperation,
+  lineCount: number,
+  index: number,
+): SeenRange {
+  if (operation.start > lineCount) {
+    fail("E_RANGE", `edits[${index}].start ${operation.start} is beyond the ${lineCount}-line file.`);
+  }
+  if (operation.op === "replace" || operation.op === "delete") {
+    const end = operation.end ?? operation.start;
+    if (end < operation.start || end > lineCount) {
+      fail("E_RANGE", `edits[${index}] range ${operation.start}..${end} is outside the original file.`);
+    }
+    return Object.freeze({ start: operation.start, end });
+  }
+  return Object.freeze({
+    start: operation.op === "insert_before" ? Math.max(1, operation.start - 1) : operation.start,
+    end: operation.op === "insert_before"
+      ? operation.start
+      : Math.min(lineCount, operation.start + 1),
+  });
+}
+
 function missingSeenLine(ranges: readonly SeenRange[], start: number, end: number): number | undefined {
   let cursor = start;
   for (const range of ranges) {
@@ -163,6 +186,26 @@ function missingSeenLine(ranges: readonly SeenRange[], start: number, end: numbe
     if (cursor > end) return undefined;
   }
   return cursor <= end ? cursor : undefined;
+}
+
+export interface UnseenRequirement {
+  readonly start: number;
+  readonly end: number;
+  readonly missingLine: number;
+}
+
+export function firstUnseenRequirement(
+  operations: readonly ValidatedEditOperation[],
+  lineCount: number,
+  seen: readonly SeenRange[],
+): UnseenRequirement | undefined {
+  const normalizedSeen = normalizeSeenRanges(seen, lineCount);
+  for (let index = 0; index < operations.length; index += 1) {
+    const required = operationRequiredSeenRange(operations[index], lineCount, index);
+    const missingLine = missingSeenLine(normalizedSeen, required.start, required.end);
+    if (missingLine !== undefined) return Object.freeze({ ...required, missingLine });
+  }
+  return undefined;
 }
 
 export function planOperations(
@@ -180,21 +223,22 @@ export function planOperations(
   let oldChangedBytes = 0;
 
   operations.forEach((operation, index) => {
-    if (operation.start > sourceLines.length) {
-      fail("E_RANGE", `edits[${index}].start ${operation.start} is beyond the ${sourceLines.length}-line file.`);
-    }
-    if (operation.op === "replace" || operation.op === "delete") {
-      const end = operation.end ?? operation.start;
-      if (end < operation.start || end > sourceLines.length) {
-        fail("E_RANGE", `edits[${index}] range ${operation.start}..${end} is outside the original file.`);
-      }
-      const unseen = missingSeenLine(normalizedSeen, operation.start, end);
-      if (unseen !== undefined) {
+    const required = operationRequiredSeenRange(operation, sourceLines.length, index);
+    const unseen = missingSeenLine(normalizedSeen, required.start, required.end);
+    if (unseen !== undefined) {
+      if (operation.op === "replace" || operation.op === "delete") {
         fail(
           "E_UNSEEN_LINE",
-          `Line ${unseen} was not shown by this snapshot. Read ${authoredPath} with offset=${operation.start} limit=${end - operation.start + 1}, then rebuild the edit.`,
+          `Line ${unseen} was not shown by this snapshot. Required context for ${authoredPath}: offset=${required.start} limit=${required.end - required.start + 1}.`,
         );
       }
+      fail(
+        "E_UNSEEN_LINE",
+        `Insertion gap at line ${operation.start} is not fully shown. Required context for ${authoredPath}: offset=${required.start} limit=${required.end - required.start + 1}.`,
+      );
+    }
+    if (operation.op === "replace" || operation.op === "delete") {
+      const end = required.end;
       consumes.push({ start: operation.start, end, index });
       consumedLines += end - operation.start + 1;
       for (let line = operation.start; line <= end; line += 1) {
@@ -206,17 +250,6 @@ export function planOperations(
       if (operation.op === "replace") insertedLines += operation.lines?.length ?? 0;
     } else {
       const gap = operation.op === "insert_before" ? operation.start - 1 : operation.start;
-      const requiredStart = operation.op === "insert_before" ? Math.max(1, operation.start - 1) : operation.start;
-      const requiredEnd = operation.op === "insert_before"
-        ? operation.start
-        : Math.min(sourceLines.length, operation.start + 1);
-      const unseen = missingSeenLine(normalizedSeen, requiredStart, requiredEnd);
-      if (unseen !== undefined) {
-        fail(
-          "E_UNSEEN_LINE",
-          `Insertion gap at line ${operation.start} is not fully shown. Read ${authoredPath} with offset=${requiredStart} limit=${requiredEnd - requiredStart + 1}, then rebuild the edit.`,
-        );
-      }
       inserts.push({ gap, index });
       insertedLines += operation.lines?.length ?? 0;
     }

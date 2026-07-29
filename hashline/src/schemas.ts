@@ -18,6 +18,11 @@ export const MAX_EDIT_DETAILS_BYTES = 256 * 1024;
 export const EDIT_PREVIEW_CONTEXT = 2;
 export const MAX_EDIT_PREVIEW_LINES = 120;
 export const MAX_SNAPSHOT_ENTRY_BYTES = 32 * 1024;
+export const MAX_RECOVERY_FILE_BYTES = 4 * 1024 * 1024;
+export const MAX_RECOVERY_TOTAL_BYTES = 64 * 1024 * 1024;
+export const MAX_RECOVERY_ENTRIES = 128;
+export const MAX_RECOVERY_VERSIONS_PER_PATH = 4;
+export const MAX_RECOVERY_EDIT_DISTANCE = 512;
 
 export const EDIT_OPS = ["replace", "delete", "insert_before", "insert_after"] as const;
 export type HashlineEditOp = (typeof EDIT_OPS)[number];

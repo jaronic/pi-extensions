@@ -87,7 +87,63 @@ test("user workflow survives reload and keeps snapshots isolated by active branc
   assert.equal(await readFile(file, "utf8"), "TITLE\nrestored branch\nfooter\nepilogue\n");
 });
 
-test("user-facing unseen and stale failures prescribe a safe next action", async (t) => {
+test("reload and session tree replay metadata without reviving stale recovery source", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "hashline-reload-recovery-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = join(root, "reload.txt");
+  await writeFile(file, "head\nctx-a\nctx-b\ntarget\nctx-c\ntail\n", "utf8");
+
+  const first = new HashlineHarness(root);
+  hashlineExtension(first.api);
+  await first.emit("session_start", { type: "session_start", reason: "startup" });
+  const oldToken = snapshot(resultText(await first.tool("read", { path: "reload.txt" })));
+  const persisted = [...first.entries()];
+  await writeFile(file, "outside\nhead\nctx-a\nctx-b\ntarget\nctx-c\ntail\n", "utf8");
+
+  const reloaded = new HashlineHarness(root);
+  reloaded.setBranch(persisted);
+  hashlineExtension(reloaded.api);
+  await reloaded.emit("session_start", { type: "session_start", reason: "reload" });
+  let staleError: unknown;
+  try {
+    await reloaded.tool("edit", {
+      path: "reload.txt",
+      snapshot: oldToken,
+      edits: [{ op: "replace", start: 4, lines: ["changed"] }],
+    });
+  } catch (error) {
+    staleError = error;
+  }
+  const staleMessage = String(staleError);
+  assert.match(staleMessage, /\[E_STALE_SNAPSHOT\].*exact prior bytes.*recovery cache.*snapshot=/s);
+  assert.equal(await readFile(file, "utf8"), "outside\nhead\nctx-a\nctx-b\ntarget\nctx-c\ntail\n");
+
+  const corrected = await reloaded.tool("edit", {
+    path: "reload.txt",
+    snapshot: snapshot(staleMessage),
+    edits: [{ op: "replace", start: 5, lines: ["changed"] }],
+  });
+  assert.equal(await readFile(file, "utf8"), "outside\nhead\nctx-a\nctx-b\nchanged\nctx-c\ntail\n");
+
+  const correctedToken = snapshot(resultText(corrected));
+  reloaded.setBranch([...reloaded.entries()]);
+  await reloaded.emit("session_tree", { type: "session_tree" });
+  await writeFile(file, "tree\noutside\nhead\nctx-a\nctx-b\nchanged\nctx-c\ntail\n", "utf8");
+  let treeStaleError: unknown;
+  try {
+    await reloaded.tool("edit", {
+      path: "reload.txt",
+      snapshot: correctedToken,
+      edits: [{ op: "replace", start: 5, lines: ["must-not-rebase"] }],
+    });
+  } catch (error) {
+    treeStaleError = error;
+  }
+  assert.match(String(treeStaleError), /\[E_STALE_SNAPSHOT\].*exact prior bytes.*recovery cache/s);
+  assert.equal(await readFile(file, "utf8"), "tree\noutside\nhead\nctx-a\nctx-b\nchanged\nctx-c\ntail\n");
+});
+
+test("user-facing unseen and stale failures return current context for a direct retry", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hashline-guidance-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const file = join(root, "guide.txt");
@@ -97,25 +153,48 @@ test("user-facing unseen and stale failures prescribe a safe next action", async
   await harness.emit("session_start", { type: "session_start", reason: "startup" });
 
   const partialToken = snapshot(resultText(await harness.tool("read", { path: "guide.txt", offset: 1, limit: 1 })));
-  await assert.rejects(
-    harness.tool("edit", {
+  let unseenError: unknown;
+  try {
+    await harness.tool("edit", {
       path: "guide.txt",
       snapshot: partialToken,
-      edits: [{ op: "insert_after", start: 1, lines: ["blind"] }],
-    }),
-    /\[E_UNSEEN_LINE\].*offset=1 limit=2.*rebuild/s,
-  );
+      edits: [{ op: "insert_after", start: 1, lines: ["visible retry"] }],
+    });
+  } catch (error) {
+    unseenError = error;
+  }
+  const unseenMessage = String(unseenError);
+  assert.match(unseenMessage, /\[E_UNSEEN_LINE\].*Required current range is 1-2.*snapshot=.*1:one.*2:two/s);
+  assert.equal(snapshot(unseenMessage), partialToken);
+  await harness.tool("edit", {
+    path: "guide.txt",
+    snapshot: partialToken,
+    edits: [{ op: "insert_after", start: 1, lines: ["visible retry"] }],
+  });
+  assert.equal(await readFile(file, "utf8"), "one\nvisible retry\ntwo\nthree\n");
+
   const fullToken = snapshot(resultText(await harness.tool("read", { path: "guide.txt" })));
-  await writeFile(file, "external\ntwo\nthree\n", "utf8");
-  await assert.rejects(
-    harness.tool("edit", {
+  await writeFile(file, "external\nvisible retry\ntwo\nthree\n", "utf8");
+  let staleError: unknown;
+  try {
+    await harness.tool("edit", {
       path: "guide.txt",
       snapshot: fullToken,
-      edits: [{ op: "replace", start: 2, lines: ["TWO"] }],
-    }),
-    /\[E_STALE_SNAPSHOT\].*No hashline write was attempted.*Re-read.*never relocated/s,
-  );
-  assert.equal(await readFile(file, "utf8"), "external\ntwo\nthree\n");
+      edits: [{ op: "replace", start: 3, lines: ["TWO"] }],
+    });
+  } catch (error) {
+    staleError = error;
+  }
+  const staleMessage = String(staleError);
+  assert.match(staleMessage, /\[E_STALE_SNAPSHOT\].*target or its displayed context changed.*No hashline write was attempted.*snapshot=.*1:external/s);
+  assert.equal(await readFile(file, "utf8"), "external\nvisible retry\ntwo\nthree\n");
+
+  await harness.tool("edit", {
+    path: "guide.txt",
+    snapshot: snapshot(staleMessage),
+    edits: [{ op: "replace", start: 3, lines: ["TWO"] }],
+  });
+  assert.equal(await readFile(file, "utf8"), "external\nvisible retry\nTWO\nthree\n");
 });
 
 test("malformed branch metadata is summarized once without blocking healthy reads", async (t) => {

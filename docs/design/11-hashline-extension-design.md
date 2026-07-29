@@ -1,6 +1,6 @@
 # 11 · Hashline 扩展设计：用可重放快照约束精确行编辑
 
-> 文档状态：**Hashline v1 已实现并完成生产级严格代码审查**。顶层 `hashline/` package 的运行 API 基线为本仓库锁定的 `@earendil-works/pi-coding-agent 0.81.1`，兼容下限为 `>=0.81.0`。调研、设计、实现与审查更新至 2026-07-26；发布门禁证据见 §13、§15.4 与 §17。Oh My Pi 依据提交 `ba7db9943d0f58499b24c1f6bd64722580f772a5`，`pi-hashline-edit` 依据 `0.8.3` / 提交 `667111575ebba136dadfd6989379e7f67e0d40d9`。
+> 文档状态：**Hashline v1 已实现并完成生产级严格代码审查**。顶层 `hashline/` package 的运行 API 基线为本仓库锁定的 `@earendil-works/pi-coding-agent 0.82.1`，兼容下限为 `>=0.82.1`。调研、设计、实现与审查更新至 2026-07-29；发布门禁证据见 §13、§15.4 与 §17。Oh My Pi 依据 `@oh-my-pi/hashline 17.1.8` / 提交 `cc00ab161b2721e50d8a96a0dc9552abfd258b8b`，`pi-hashline-edit` 依据 `0.8.3` / 提交 `667111575ebba136dadfd6989379e7f67e0d40d9`。
 
 ## 1. 结论先行
 
@@ -10,45 +10,46 @@ Hashline v1 是一个独立顶层 Pi extension package，同时覆盖内建 `rea
 - `edit` 改为窄的结构化行编辑协议，单次只修改一个已有文件，多个操作全部引用同一份原始快照；
 - 快照令牌是原始文件字节的完整 SHA-256，而不是 2 字符行哈希或 4 位十六进制文件哈希；
 - 令牌只有在当前 session branch 的版本化 journal 中被记录、且绑定到同一 canonical path 时才有效；仅仅“算出了相同哈希”不构成来源证明；
-- edit 在同一文件 mutation queue 内重新读取并校验完整字节，任何 stale、未知、跨路径或未见行引用都在写入前原子拒绝；
-- v1 不自动重定位 stale anchor、不做三方 merge、不猜路径、不修补 payload、不解析语法块；失败后的唯一恢复路径是精确范围 `read`；
+- edit 在同一文件 mutation queue 内重新读取完整 bytes：digest 相同走 exact CAS；digest 漂移时，只有旧 source bytes 仍在 branch-local 有界 cache，且全部已展示目标/上下文能唯一映射到一个 byte-identical unchanged run，才按统一偏移继续；
+- unknown、unseen、无可验证映射的 stale 及可修正 semantic 拒绝均保持零写入，并尽力把当前坐标附近的 journaled `LINE:TEXT` 与新 snapshot 附在原错误中；
+- v1 不猜路径、不改 payload、不做三方 merge、不跨多个 diff hunk 拼接映射、不解析语法块；任何唯一性、上下文或统一偏移证明失败都 fail closed；
 - 成功结果保持 Pi 内建 `EditToolDetails` 的 `diff`、`patch`、`firstChangedLine` 形状，使内建 renderer、LSP 扩展和 session 行为继续工作；
-- snapshot 元数据写入 branch-local custom entry，不塞入内建 tool `details`，reload、resume、fork 和 `/tree` 后按当前 branch 重放。
+- snapshot 元数据写入 branch-local custom entry；旧 source bytes 只进不持久化的有界 recovery cache。reload、resume、fork 和 `/tree` 后按当前 branch 重放 metadata，但不复活旧正文。
 
-一句话定义：**Hashline 是一次带“我确实看过这版文件这些行”证明的 compare-and-set 行编辑，不是模糊 patch 引擎。**
+一句话定义：**Hashline 是带“我确实看过目标与上下文，当前映射仍可唯一证明”前置条件的精确行编辑，不是模糊 patch 引擎。**
 
 ## 2. 要解决的问题
 
 ### 2.1 现有 edit 的真实失败面
 
-Pi 0.81.1 的内建 `edit` 已经比单次字符串替换更强：一个调用可提交多个互不重叠的 `oldText → newText`，所有匹配都相对原文件计算，并通过 `withFileMutationQueue()` 序列化同文件写入。Hashline 不应重复解决“如何生成 diff”，而要收紧以下仍存在的定位风险：
+Pi 0.82.1 的内建 `edit` 已经比单次字符串替换更强：一个调用可提交多个互不重叠的 `oldText → newText`，所有匹配都相对原文件计算，并通过 `withFileMutationQueue()` 序列化同文件写入。Hashline 不应重复解决“如何生成 diff”，而要收紧以下仍存在的定位风险：
 
 | 失败模式 | 内建 exact-text edit 的表现 | Hashline v1 的约束 |
 | --- | --- | --- |
 | 模型复制了过大的 `oldText`，其中一处空白变化导致失配 | 安全失败，但重试上下文大 | 只传行号、快照与最终行内容 |
 | 模型复制了过小且不唯一的 `oldText` | 内建拒绝多匹配 | 行号在被读版本上唯一；整文件快照防漂移 |
-| 读取后文件被另一 tool、用户或 formatter 修改 | exact text 可能失配；若目标片段仍相同则可能继续写 | 任意原始字节变化都使整文件快照 stale |
-| 多个并行 edit 都从旧内容计算 | 依赖 mutation queue；第二个 exact match 通常失败 | queue 内做完整 CAS；第二个必定 stale |
+| 读取后文件被另一 tool、用户或 formatter 修改 | exact text 可能失配；若目标片段仍相同则可能继续写 | digest 漂移先进入严格 verified rebase；无法证明唯一 unchanged mapping 则零写入刷新 |
+| 多个并行 edit 都从旧内容计算 | 依赖 mutation queue；第二个 exact match 通常失败 | queue 内重读；相交目标拒绝，不相交且证明充分的目标可串行合并 |
 | 模型凭记忆编辑未展示区域 | 只要 oldText 正确仍可写 | 目标范围必须属于该快照的 `seen` 区间 |
 | 模型把 read 的行号前缀复制进新内容 | 可能把前缀写入文件 | prompt 明确禁止；实现只按结构化 `lines[]` 写入且不静默剥离 |
 | 行尾、BOM 或 trailing spaces 被忽略 | normalize 后匹配可能不体现全部字节变化 | 快照哈希覆盖原始 bytes；未触碰字节尽量保持不变 |
-| stale anchor 被“智能恢复”到错误位置 | 内建无此行为；部分社区实现会恢复 | v1 fail closed，不恢复、不滑动 |
+| stale anchor 被“智能恢复”到错误位置 | 内建无此行为；部分社区实现会恢复 | 只接受已展示 proof window 的唯一 byte-identical unchanged-run 映射；重复、变化或多偏移均 fail closed |
 
 ### 2.2 产品目标
 
 | 编号 | 目标 | 可观察验收 |
 | --- | --- | --- |
 | G1 | 读写版本强绑定 | `edit` 只接受当前 branch journal 中存在、路径匹配的 `h1_…` 快照 |
-| G2 | stale 必须无写入 | 从 read 到 edit 之间任意原始字节变化均抛 `E_STALE_SNAPSHOT`，文件保持 edit 调用前状态 |
+| G2 | stale 不误写 | raw bytes 漂移后只在唯一 byte-identical proof window 与统一 offset 均成立时 rebase；否则 `E_STALE_SNAPSHOT` 且零写入 |
 | G3 | 禁止盲改 | replace/delete 覆盖的每一行都已展示；insert 所在 gap 两侧存在的行都已展示 |
-| G4 | 同文件并发无 lost update | 两个引用同一快照的并发 edit 最多一个成功；另一调用在 queue 内重读后拒绝 |
+| G4 | 同文件并发无 lost update | queue 内按 live bytes 串行验证；相交同-token edit 后到者拒绝，不相交且证明充分者可 rebase 后成功，外部改动必须保留 |
 | G5 | 多操作一次提交 | 一个文件内多个不相交操作相对同一原始坐标解析，完成一次内存 apply 和一次 write |
 | G6 | branch 可恢复 | reload/resume 后可继续使用当前 branch 中未淘汰的快照；切换到不含该 read 的 branch 后令牌拒绝 |
 | G7 | 字节保真 | BOM、未修改行、现有行终止符和 trailing whitespace 不因 hashline 编辑被整体规范化 |
 | G8 | Pi 工具兼容 | read details 保持 `ReadToolDetails`；edit details 保持 `EditToolDetails`；输入继续包含顶层 `path` |
 | G9 | 输出有界 | read/preview/content/details 遵守 50 KiB、2000 行及插件自己的输入/文件上限，不返回半行 anchor |
 | G10 | 模式无关 | TUI、RPC、JSON、print 使用同一核心语义；没有依赖确认框或自定义终端组件的正确性路径 |
-| G11 | 失败可行动 | 每个 Hashline 自定义拒绝有稳定错误码、无写入说明和下一次精确 read 建议；内建 read host error 保持 Pi 语义；不返回伪成功 |
+| G11 | 失败可行动 | 每个 Hashline 自定义拒绝有稳定错误码与真实副作用状态；可恢复拒绝尽力携带已 journal 的当前上下文/token，刷新失败才要求显式 read；不返回伪成功 |
 | G12 | 可干净回退 | 卸载/取消链接并 `/reload` 后，Pi 原生 `read`/`edit` 自动恢复；工作区无私有 sidecar 文件 |
 
 ### 2.3 非目标
@@ -57,7 +58,7 @@ v1 明确不做：
 
 - 新建、删除、移动或重命名文件；新文件和完整重写继续使用 `write`；
 - 多文件 transaction；单次 edit 只接受一个 `path`；
-- stale anchor 自动平移、模糊匹配、三方 merge 或 session-chain replay；
+- 未经完整 proof 的 stale anchor 平移、模糊/多 hunk 匹配、三方 merge 或 session-chain replay；
 - Tree-sitter/LSP block 解析、AST rewrite 或 formatter；语义重构继续使用 `lsp`/专用工具；
 - 覆盖 `grep`、`rg`、`write`、`ls` 或 `find`；grep 命中本身不授予 edit provenance；
 - 对图片、二进制、无效 UTF-8、目录、设备文件、FIFO 或超过上限的大文件提供 hashline edit；
@@ -67,7 +68,7 @@ v1 明确不做：
 
 ## 3. Pi 与外部实现调研
 
-### 3.1 Pi 0.81.1 可依赖的事实
+### 3.1 Pi 0.82.1 可依赖的事实
 
 1. Extension 可注册与内建工具同名的 `read`、`edit` 等工具；后注册定义覆盖内建执行，交互模式会显示覆盖警告。
 2. 同名覆盖若省略 `renderCall`/`renderResult`，Pi 按 slot 继承内建 renderer；但 prompt metadata 不继承，扩展必须自己提供。
@@ -85,6 +86,20 @@ v1 明确不做：
 | Oh My Pi `@oh-my-pi/hashline`（所列提交） | `[path#4HEX]` 整文件标签；`LINE:TEXT`；SWAP/DEL/INS/REM/MV 与 Tree-sitter block DSL；session snapshot history；seen-line guard；stale line remap；路径按 tag 恢复；多 section preflight | 文件级版本绑定优于短行哈希；已见行；先 prepare 后 commit；BOM/EOL、no-op、错误上下文与测试面完整 | 16-bit tag 可碰撞且 live tag 相等时直接信任；自动 stale 恢复、路径回绑、boundary repair、block/file ops 扩大可信核心；DSL parser 复杂；多文件 preflight 不是磁盘 transaction |
 | `pi-hashline-edit 0.8.3`（所列提交） | 默认 2 字符（8-bit）三行窗口 line hash，可配 3–4；结构化 replace/append/prepend；snapshot 多版本；stale 时精确三方 merge；atomic rename；图片委托内建 read | 结构化 tool schema、单文件多操作、冲突检测、输出边界、symlink/hardlink 与 no-op 风险被认真处理 | 8-bit 默认 hash 误接受面过大；fuzzy hint/merge 仍可在 stale 后写；read/details 与当前 Pi 基线有漂移；原子 rename 的 inode/metadata 取舍不适合静默继承 |
 
+#### 3.2.1 Oh My Pi 的异常兜底链路
+
+固定提交的实际行为不是“Hashline 出错后委托内建 `edit`”，而是按风险分层处理：
+
+1. read/search snapshot capture 是 best-effort；文件超过 4 MiB 或读取失败时省略 tag，不制造不可兑现的 provenance。edit 缺 tag 或缺 snapshot 时仍失败，不回退到宽松写入。
+2. 每个 section 先 parse、解析 block、核对 tag/seen/path 并在内存 apply；多 section 先全部 prepare，再顺序 commit。因此语义错误在首个 write 前整体拒绝，但跨文件 commit I/O 失败仍没有 rollback；library `Patcher.apply()` 会报告哪些 section 已写、哪些未写。
+3. live 4-hex tag 相等时直接 apply；不等时，只有 session store 仍保存 tag 对应全文，且每个 anchor 与周边 unchanged context 都能映射、所有 offset 一致，才在 live text 上 replay。目标改变、删除、分裂或歧义时抛 `MismatchError`，附当前 tag 和 anchor ±2 行。
+4. 只有 `INS.HEAD:` / `INS.TAIL:` 时，位置被视为与正文无关，stale tag 仍可在 live text 上应用并警告；这是显式的宽化例外，不是 CAS。
+5. authored path 不存在时，可用“相同 basename + tag 的唯一 session snapshot”回绑路径，并再经 host writable-scope gate；歧义、internal URL 或越界路径拒绝。
+6. unseen anchor 最多内联 40 行当前内容；若全部行完整且未列截断，这些行会并入该 snapshot 的 seen set，同 tag 直接重试即可。范围过大或列被截断时不授权任何新增行，必须 ranged read。
+7. DSL 层会对部分高置信度错误做 warning + repair，例如 bare body 自动加 `+`、重复 boundary keeper、结构 closer 和 insertion indentation landing；两种解释会产生不同文件时则拒绝，不猜。
+8. no-op 首次返回明确诊断；同一 payload 连续 no-op 达阈值后升级为 `ToolError`，强制打断重试循环。
+9. 最终 write 或 close 失败按真实失败抛出；没有 fallback 到内建 `edit`。因此 OMP 的“兜底”本质是受约束恢复、诊断刷新和 fail-closed，而不是旁路安全前置条件。
+
 ### 3.3 采纳、延后与拒绝
 
 **采纳：**
@@ -93,21 +108,24 @@ v1 明确不做：
 - read 输出行号，edit 使用原始 1-based 坐标；
 - 记录模型实际展示过的行，edit 强制 provenance；
 - 单文件多操作先完整验证、再一次 apply/write；
-- no-op 作为错误，提示 re-read，而不是成功；
-- session 内有界快照历史，并在 branch 切换时重建；
+- no-op 作为错误，并附带当前上下文/token；
+- session 内有界 metadata 历史，并在 branch 切换时重建；
+- 不持久化、branch-local 且有 byte/entry/path 上限的旧 source cache；
+- stale 时只接受唯一、byte-identical、单 unchanged-run、统一 offset 的 verified rebase；
+- unknown/unseen/stale/semantic 拒绝尽力热刷新当前上下文；
 - 新快照随 edit 的有界变更上下文返回，支持附近的下一次修改。
 
 **延后：**
 
 - grep/search 产生快照：需要与本仓库 `rg` 及其他 grep override 设计版本化互操作；
-- syntax block：需要额外 parser/native 依赖、语言覆盖与错误恢复合同；
-- stale recovery：只有真实 edit telemetry/benchmark 证明 re-read 成本不可接受后，才可单独设计实验模式。
+- syntax block：需要额外 parser/native 依赖、语言覆盖与错误恢复合同。
 
 **拒绝：**
 
 - 2–4 字符 hash 作为写入前置条件；
 - 未在 branch store 登记但恰好等于 live hash 的“自证明”令牌；
-- stale 自动平移或三方 merge；
+- 仅凭目标行、短窗口或近似文本的 stale 平移，以及任何三方 merge；
+- 跨多个 diff hunk 拼接 operation 映射，或不同 operation 使用不同 offset；
 - 仅凭 tag 猜测另一个路径；
 - 自动删除“疑似重复”的 payload 行、补 closing delimiter 或宽化/缩窄范围；
 - 多文件调用宣称原子；
@@ -277,7 +295,7 @@ read promptSnippet:
 Read files with numbered lines and a branch-local snapshot token for precise edits
 
 edit promptSnippet:
-Edit previously read lines only when the file snapshot is still current
+Edit previously read lines with current snapshots or verified unchanged-line rebasing
 ```
 
 `promptGuidelines` 至少覆盖：
@@ -286,8 +304,9 @@ Edit previously read lines only when the file snapshot is still current
 2. 原样复制 snapshot，不猜、不复用另一 path/branch 的 token；
 3. 所有 edit 行号引用同一次调用的原文件，不按前序 operation 位移；
 4. `lines` 只放最终文件内容，不带 `N:` read prefix；
-5. stale/unseen/no-change 后先 re-read，不能扩大范围或改用模糊猜测；
-6. 新文件/完整重写使用 `write`；symbol rename/code action 使用 `lsp`。
+5. multi-operation stale recovery 要求从首个到最后目标的整段都已展示；错误指出 missing span 时先精确 `read`；
+6. stale 只在全部 target/context 唯一同偏移时 rebase；stale/unseen/no-change 拒绝优先使用错误里的 refreshed snapshot/rows，无 header 才重新 `read`；
+7. 新文件/完整重写使用 `write`；symbol rename/code action 使用 `lsp`。
 
 不再注入一整套 patch grammar，避免长期占用每轮 system prompt。
 
@@ -300,7 +319,7 @@ Edit previously read lines only when the file snapshot is still current
 | H1 | 每个可写 token 确定性携带 canonical base64url `h1_ + SHA-256(raw bytes)` 的完整 256-bit 摘要；不 trim、不 LF-normalize、不忽略 BOM |
 | H2 | token 必须在当前 branch replay 得到的 store 中存在；live hash 相同但 store 缺失仍拒绝 |
 | H3 | snapshot 绑定 read 时 canonical path；edit 解析后的 canonical path 必须完全相同 |
-| H4 | snapshot full digest 必须等于 queue 内刚读取的 live bytes；不接受前缀碰撞或 stale recovery |
+| H4 | snapshot full digest 等于 queue 内 live bytes 时走 exact CAS；不等时，只有 cached source、完整 seen proof、old/current 唯一单-run 映射与统一 offset 全部成立才可写 |
 | H5 | replace/delete 的每一行、insert gap 的每个现存端点都属于 snapshot seen ranges |
 | H6 | 一次请求的所有 operation 相对同一原始 line table；验证失败时零写入 |
 | H7 | write 发生前所有 schema、path、snapshot、seen、range、conflict、size、abort 与 no-op 检查均已通过 |
@@ -313,13 +332,15 @@ Edit previously read lines only when the file snapshot is still current
 | H14 | 非空输入文件不能经 hashline operation set 变为空 bytes；必须改用显式 `write` |
 | H15 | changed bytes 与完整 `EditToolDetails` 在 write 前受硬上限约束；超限时零写入，不截伪 patch |
 | H16 | output bytes、新 token、preview、journal record、完整 details 与有/无 token 两种成功结果都在 commit 前构造；write 成功后不得再执行可把成功副作用报告成失败的结果计算 |
+| H17 | 可刷新拒绝只有在 current metadata 已 journal 且 projection 成功后才能回显 source/header；否则只返回无 source 的原错误与 re-read 指令 |
+| H18 | RecoveryStore 不持久化、不 replay，受单文件/路径/entry/总 bytes LRU 硬上限，并随 branch lifecycle clear |
 
 ### 5.2 威胁模型
 
 | 威胁 | v1 是否覆盖 | 手段 |
 | --- | --- | --- |
 | 模型行号记错、范围写宽 | 是 | range bounds + seen-line + non-overlap |
-| 读取后同一文件变化 | 是（变化先于最终 precondition read） | raw SHA-256 CAS |
+| 读取后同一文件变化 | 是（变化先于最终 precondition read） | raw SHA-256 exact CAS；或完整 seen proof 的唯一 unchanged-run verified rebase |
 | Pi 内建 write/edit 与 Hashline edit 并发 | 是 | shared `withFileMutationQueue` |
 | 另一 extension 正确使用同一 queue | 是 | canonical queue key |
 | 另一 extension 绕过 queue | 部分 | final live digest 检查；commit 极短窗口仍是残余风险 |
@@ -343,37 +364,42 @@ hashline/
 ├── tsconfig.json
 ├── README.md
 ├── src/
-│   ├── index.ts              # composition root、生命周期、两个 override 注册
-│   ├── runtime.ts            # generation/store/commit 运行时边界
+│   ├── index.ts              # composition root、stores 生命周期、两个 override 注册
+│   ├── runtime.ts            # generation/metadata/recovery/commit 运行时边界
 │   ├── errors.ts             # 稳定错误码与取消 gate
 │   ├── schemas.ts            # TypeBox edit schema、limits
 │   ├── read-tool.ts          # 内建 read adapter、编号与 snapshot record
-│   ├── edit-tool.ts          # validate → queue → CAS → apply → write → result
+│   ├── edit-tool.ts          # validate → queue → CAS/rebase → apply/refresh → result
+│   ├── recovery.ts           # bounded source cache、unchanged runs、verified rebase
 │   ├── snapshots.ts          # immutable runtime projection、LRU、seen intervals
 │   ├── persistence.ts        # v1 journal decoder/replay/encoder
 │   ├── digest.ts             # raw SHA-256 与 token parsing
 │   ├── lines.ts              # byte-faithful physical line scanner/serializer
 │   ├── operations.ts         # semantic validation、conflict plan、pure apply
 │   ├── paths.ts              # @ normalization、lexical/canonical path、file kind
-│   ├── output.ts             # bounded read/result preview、stable errors
-│   └── prompts.ts            # description/snippet/guidelines
+│   ├── output.ts             # bounded read/result/refresh preview、stable errors
+│   ├── prompts.ts            # description/snippet/guidelines
+│   └── logger.ts             # opt-in bounded diagnostics、control neutralization
 └── test/
     ├── digest-lines.test.ts
     ├── operations.test.ts
     ├── snapshots.test.ts
+    ├── recovery.test.ts
     ├── tools.test.ts
     ├── e2e.test.ts
     ├── coexistence.test.ts
     └── harness.ts
 ```
 
+唯一新增 ordinary runtime dependency 是 exact-pinned `diff@8.0.4`，只供 `recovery.ts` 的有界 Myers line diff；Pi host packages 与 TypeBox 继续保持 peer dependencies，不依赖宿主的 transitive `diff`。
+
 `src/index.ts` 只负责：
 
-- 持有当前 `SnapshotStore` projection；
+- 持有当前 `SnapshotStore` metadata projection 与 `RecoveryStore` source cache；
 - 注册 `read`/`edit`；
-- 在 `session_start`/`session_tree` 清空并 replay；
-- 在 `session_shutdown` 清空内存；
-- 把 `appendEntry`、store getter 与更新回调显式传给工具模块。
+- 在 `session_start`/`session_tree` 同时清空两者，仅从 journal replay metadata；
+- 在 `session_shutdown` 清空全部内存；
+- 把 `appendEntry`、metadata/recovery getter 与原子更新回调显式传给工具模块。
 
 没有 DI container、event bus 包内调用、后台 timer、watcher、进程或网络。
 
@@ -382,29 +408,36 @@ hashline/
 ```mermaid
 flowchart TB
     Model --> Read[read override]
-    Read --> Builtin[Pi createReadToolDefinition]
-    Builtin --> Capture[Capture exact resolved bytes]
+    Read --> Capture[Pi read result + stable exact bytes]
     Capture --> Format[Bounded LINE:TEXT formatter]
-    Format --> Journal[hashline-snapshot-v1]
+    Format --> Journal[hashline-snapshot-v1 metadata]
+    Capture --> Recovery[Bounded branch-local source cache]
     Journal --> Store[Branch-local SnapshotStore]
     Format --> Model
 
     Model --> Edit[edit override]
-    Edit --> Validate[Schema + semantic validation]
+    Edit --> Validate[Schema validation]
     Validate --> Queue[withFileMutationQueue canonical file]
     Queue --> Live[Read live raw bytes]
-    Live --> CAS{known token + same path + same digest + seen lines?}
-    CAS -->|no| Reject[Throw stable error; no write]
-    CAS -->|yes| Apply[Pure multi-op apply]
+    Live --> Known{known token + same path?}
+    Known -->|no| Refresh[Journal bounded current context]
+    Known -->|yes| Digest{same raw digest?}
+    Digest -->|yes| Plan[Seen + semantic plan]
+    Digest -->|no| Rebase{unique byte-identical run + one offset?}
+    Rebase -->|yes| Plan
+    Rebase -->|no| Refresh
+    Plan -->|reject| Refresh
+    Plan -->|valid| Apply[Pure multi-op apply on live lines]
     Apply --> Prepare[Precompute bounded details, preview, record, result]
     Prepare --> Commit[One file write]
-    Commit --> Journal[Best-effort snapshot journal]
-    Prepare --> Result[Prebuilt success variants]
-    Commit --> Result
-    Journal --> Result
+    Commit --> Journal
+    Commit --> Result[Prebuilt truthful success]
+    Refresh --> Reject[Throw original stable error + refreshed token]
+    Reject --> Model
     Result --> Model
 
-    Branch[session_start / session_tree] --> Replay[Strict journal replay]
+    Branch[session_start / session_tree / shutdown] --> Clear[Clear metadata + source stores]
+    Branch --> Replay[Strict current-branch metadata replay]
     Replay --> Store
 ```
 
@@ -491,7 +524,7 @@ export const HASHLINE_SNAPSHOT_ENTRY =
 | `MAX_EDITABLE_FILE_BYTES` | 16 MiB | 限制一次 decode/apply/diff 的内存与 CPU；read 仍可无 token 展示更大文件 |
 | `MAX_SNAPSHOT_PATHS` | 128 | 一次 coding session 的活跃编辑文件上限 |
 | `MAX_VERSIONS_PER_PATH` | 8 | 支持合理的回看/分支 replay，不鼓励 stale retry |
-| `MAX_ACTIVE_SNAPSHOTS` | 512 | 元数据 LRU 总上限；淘汰后明确要求 re-read |
+| `MAX_ACTIVE_SNAPSHOTS` | 512 | 元数据 LRU 总上限；淘汰后该旧 token 变为 unknown，优先使用拒绝中已 journal 的 refreshed token，刷新失败才 re-read |
 | `MAX_SEEN_RANGES` | 64 | read 通常一段，edit preview 最多若干段 |
 | `MAX_PATH_CHARS` | 4096 | 防止恶意 journal/output 放大 |
 | `MAX_EDIT_OPERATIONS` | 100 | 单文件一次变更足够且验证复杂度有界 |
@@ -502,31 +535,48 @@ export const HASHLINE_SNAPSHOT_ENTRY =
 | `EDIT_PREVIEW_CONTEXT` | 2 行/侧 | 足够核对局部边界 |
 | `MAX_EDIT_PREVIEW_LINES` | 120 | 多处修改的 follow-up 输出有界 |
 
-LRU 只是可用 token projection，不删除 session 历史；被淘汰 token 必须 re-read，不能从 live hash 自行恢复。
+LRU 只是可用 token projection，不删除 session 历史；被淘汰 token 不能从 live hash 自行恢复。下一次 edit 会以 `E_SNAPSHOT_UNKNOWN` 零写入拒绝，并尽力 journal/返回当前 token 与有界 rows；只有 refresh 未成功时才要求显式 re-read。
 
-### 7.5 Branch lifecycle
+### 7.5 RecoveryStore 边界
+
+Verified rebase 需要旧 physical-line bytes，但 journal 继续禁止保存正文。因此 runtime 持有与 `SnapshotStore` 分离的 `RecoveryStore`：key 同样是 canonical path + token，只在对应 snapshot record 已成功 journal 后保存 read/edit 的原始 `Buffer`。该 Buffer 只通过 package-internal readonly lookup 供 diff 解码，不暴露给 tool input/output。
+
+| 常量 | 值 | 作用 |
+| --- | ---: | --- |
+| `MAX_RECOVERY_FILE_BYTES` | 4 MiB | 大于该值仍可 exact CAS，但不缓存旧正文 |
+| `MAX_RECOVERY_VERSIONS_PER_PATH` | 4 | 防止单个热文件占满 cache |
+| `MAX_RECOVERY_ENTRIES` | 128 | 限制对象/LRU 数量 |
+| `MAX_RECOVERY_TOTAL_BYTES` | 64 MiB | 限制全部旧正文常驻内存 |
+
+同 key 再插入只刷新 LRU recency，不重复计费；新 key 插入后，每路径、entry、总 bytes 任一超限都从最旧记录开始淘汰。淘汰只禁用该版本的 verified rebase，不删除 metadata token，也不影响 live digest 恰好仍相同时的 exact CAS。`session_start`、`session_tree`、`session_shutdown` 与 runtime replacement 必须 clear；journal replay 不重建 source cache，避免 branch 泄漏和 session 体积膨胀。
+
+### 7.6 Branch lifecycle
 
 ```mermaid
 sequenceDiagram
     participant Pi
     participant Ext as Hashline
     participant Branch as Session branch
-    participant Store
+    participant Meta as SnapshotStore
+    participant Source as RecoveryStore
 
     Pi->>Ext: session_start / session_tree
     Ext->>Ext: generation++
-    Ext->>Store: clear()
+    Ext->>Meta: clear()
+    Ext->>Source: clear()
     Ext->>Branch: getBranch()
     Branch-->>Ext: active branch entries in order
     loop valid hashline-snapshot-v1
-      Ext->>Store: record/merge + enforce LRU
+      Ext->>Meta: record/merge + enforce LRU
     end
-    Pi->>Ext: read/edit call
+    Pi->>Ext: live read/edit call
     Ext->>Branch: appendEntry(valid record)
-    Ext->>Store: commit same record
+    Ext->>Meta: commit same record
+    Ext->>Source: cache bytes when bounded
     Pi->>Ext: session_shutdown
     Ext->>Ext: generation++
-    Ext->>Store: clear()
+    Ext->>Meta: clear()
+    Ext->>Source: clear()
 ```
 
 - fork 只继承 fork point 之前的 snapshot entries；fork 后 read 仅在新 branch 生效；
@@ -544,16 +594,17 @@ Runtime 维护单调递增的 `generation`。`session_start` 与 `session_tree` 
 
 - `access` 委托 Node `fs.promises.access`，保持内建可读性检查；
 - `detectImageMimeType` 与 `readFile` 共享一个 capture promise；capture 先固定 canonical target，经 pre-stat、`O_NONBLOCK` open、handle fstat/read/post-stat 和 authored-path retarget 复核，只接受稳定 regular file；
-- 内建图片解码和 Hashline 后处理消费同一个 exact Buffer，不再二次打开或读取文件；
+- pre-stat 或 fstat 一旦发现 `size > MAX_EDITABLE_FILE_BYTES`，在 `Buffer.allocUnsafe` 前抛 package-private sentinel，wrapper 改走未注入 operations 的 Pi 内建 read；大文件/图片保持宿主只读行为且 Hashline 不额外复制正文；
+- 上限内的内建图片解码和 Hashline 后处理消费同一个 exact Buffer，不再二次打开或读取文件；
 - 每次 tool call 的 capture closure 独立，不跨调用共享 mutable bytes/path 状态。
 
 内建执行结束后：
 
 - 支持的图片 magic 一旦命中，无论内建解码成功还是返回损坏图片错误，都原样返回内建结果且不 mint token；
-- invalid UTF-8、NUL、hardlink target、空文件或超过 Hashline 上限的 regular file 返回内建结果/有界说明且不 mint token；directory、FIFO、device 和其他 non-regular input 在 non-blocking capture 中明确抛 `E_NOT_EDITABLE`；
+- invalid UTF-8、NUL、hardlink target、空文件或超过 Hashline 上限的 regular file 返回内建结果/有界说明且不 mint token；其中已知超大 regular file 在 allocation 前回退内建 read；directory、FIFO、device 和其他 non-regular input 在 non-blocking capture 中明确抛 `E_NOT_EDITABLE`；
 - 可编辑文本忽略内建 plain text body，使用 captured exact bytes、同一 offset/limit 与 Pi truncate helper 生成 hashline body；details 仍只有兼容的 `truncation?`。
 
-这种适配使展示 bytes 与 token bytes 来自同一稳定 file handle，同时保留内建 path resolution、图片处理、schema、renderer 与 details shape。
+这种适配使可写 snapshot 的展示 bytes 与 token bytes 来自同一稳定 file handle，同时保留内建 path resolution、图片/大文件处理、schema、renderer 与 details shape。
 
 ### 8.2 Line scanner
 
@@ -621,11 +672,25 @@ validate args
 - `insert_before N`：N 必须 seen；若 `N > 1`，N-1 也必须 seen；
 - `insert_after N`：N 必须 seen；若 `N < lineCount`，N+1 也必须 seen；
 - BOF/EOF 不单设无 anchor op；空文件使用 write；
-- 缺失时抛 `E_UNSEEN_LINE`，合并为最小 read 建议，例如 `read path offset=39 limit=5`；错误不回显/授权这些行。
+- 缺失时抛 `E_UNSEEN_LINE`，以缺失范围作为 refresh focus 并在两侧附最多 2 行 current context；只有这些 rows 已成功 journal 后才随 refreshed token 回显并授权直接重试，refresh 失败则返回 ranged read 指令。
 
 要求 gap 两侧可见，可防止模型在函数结尾、import group 或 Markdown section 边缘盲插。
 
-### 9.3 冲突模型
+### 9.3 Verified stale rebase
+
+Live digest 不同不再直接写入，也不直接按旧行号 plan。只有 `RecoveryStore` 中存在同 canonical path + token 的旧 bytes 时，才运行以下证明；缺少 cache、超出界限或任一步失败都回到 `E_STALE_SNAPSHOT` 的零写入刷新路径。
+
+1. 重新 decode cached bytes，核对 `byteLength`/`lineCount`，并用旧 `record.seen` 对原 operation set 完整执行 `planOperations()`；
+2. 以每个 operation 的 `operationRequiredSeenRange()` 计算一个 source envelope。它包含 replace/delete 的全部 consume lines，也包含 insertion gap 两侧必需行；`record.seen` 必须完整覆盖 envelope，任何多 operation 间的 unseen gap 都拒绝，隐藏 source 不得参与消歧；
+3. envelope 两侧各最多扩展 `EDIT_PREVIEW_CONTEXT = 2` 条连续 seen 行形成 proof window。至少必须有一条额外 displayed context；只有裸 target 而无上下文不具备身份强度；
+4. 用 `diffArrays` 和 `samePhysicalLine(body + eol)` 在旧/current line tables 上计算 unchanged runs，`maxEditLength = 512`。整个 proof window 必须完全落在同一个 unchanged run；
+5. 用线性 KMP-style sequence scan 证明该完整 proof window 在旧文件恰好出现一次、在 current 文件也恰好出现一次，且 current occurrence 正是 diff run 给出的映射；重复代码块或其他歧义一律拒绝；
+6. 从 mapped proof start 计算一个 offset，给所有 operation 的 `start`/`end` 同量平移。只把旧 seen ranges 与 proof window 的交集映射到 current，不能继承窗口外 provenance；
+7. 在 current lines 上用 remapped operations + mapped seen 重新执行完整 plan/conflict/resource/no-op/preview/commit 检查，然后才可写。
+
+因此允许的 drift 只可能位于 proof window 之外，并在最终 current bytes 上原样保留。multi-operation envelope 含 unseen gap、多个 operation 跨不同 unchanged run、目标或 EOL 改变、上下文重复、需要不同 offset、diff 距离超限都不能恢复。offset 为 0 时结果写明 `Revalidated stale snapshot`；非零时写明 source range、target range 和正/负 offset。该 notice 是可审计结果，不是静默修复。
+
+### 9.4 冲突模型
 
 先把 operation 转为 source spans：
 
@@ -645,7 +710,7 @@ type SourceSpan =
 
 consume range 边界外的 insertion 可保留。验证后按 source position 单向扫描 apply；同一位置不存在两个 operation，因此结果不依赖模型数组顺序。
 
-### 9.4 字节保真的 apply
+### 9.5 字节保真的 apply
 
 不把整个文件 normalize 为 LF 后再统一恢复。纯函数操作 `PhysicalLine[]`：
 
@@ -660,16 +725,16 @@ consume range 边界外的 insertion 可保留。验证后按 source position �
 
 若 input bytes 非空而 operation set 生成空 bytes，commit 前抛 `E_WOULD_EMPTY`。这条 guard 防止一个过宽的 `delete` 把文件静默清空；确实要清空文件时使用 `write` 的显式完整内容合同。它不把只含空行或终止符的结果误判为空文件。
 
-### 9.5 No-op
+### 9.6 No-op
 
 apply 后若 output bytes 与 live input bytes 完全相同：
 
-- 抛 `E_NO_CHANGE`；
-- 不 write、不 append snapshot；
-- 指出哪些 op 没有产生变化，并要求核对问题是否已解决；
+- 抛 `E_NO_CHANGE`，不 write；
+- 在同一 queue 临界区内尽力 journal submitted coordinates 附近的 live context；同 token 可合并 seen delta；
+- 指出哪些 op 没有产生变化，并随错误返回可直接重试的当前 token/rows；
 - 不自动删除、扩大或重排 payload，不维护复杂的重复调用计数器。
 
-### 9.6 成功结果与新 snapshot
+### 9.7 成功结果与新 snapshot
 
 所有可能失败的结果构造都在 write 前完成：
 
@@ -681,7 +746,7 @@ apply 后若 output bytes 与 live input bytes 完全相同：
 
 write 成功后只允许：复核 generation、尝试 append `source:"edit"` record、同步更新 projection，并返回已经构造好的成功结果。generation 已变化、`appendEntry` 抛错或 projection 更新异常都必须被捕获，选择“文件已写、follow-up token 未保存，请 re-read”的预构造结果；不能再运行 diff、hash、preview、serialization 或其他可能把已完成写入变成 tool failure 的计算。只有 journal 与 projection 都成功时才返回带 header 的版本；需要编辑 preview 外部时再次 `read`。
 
-不把旧 snapshot 的 seen ranges 自动映射到新版本。即使大部分文本未变，行号可能因 insert/delete 改变；自动继承会把“模型以前看过”误当成“模型知道当前坐标”。
+Verified rebase 只临时映射 proof window 内的旧 seen ranges，用于当前调用的 live plan；成功后仍不把旧 snapshot seen 自动继承到新版本。新 record 只授权成功结果实际展示的 preview 行；编辑窗口外目标前应再次 `read`，误发时则由 `E_UNSEEN_LINE` 的 journaled refresh 在零写入后提供新的 current provenance。
 
 ## 10. 并发、取消与 commit 边界
 
@@ -692,22 +757,32 @@ sequenceDiagram
     participant E as edit call
     participant Q as Pi file mutation queue
     participant FS
-    participant S as SnapshotStore
+    participant M as SnapshotStore
+    participant R as RecoveryStore
 
     E->>E: validate schema + cumulative input budgets
     E->>FS: realpath authored path; pin canonical target
     E->>Q: withFileMutationQueue(pinned canonical path)
     Q-->>E: lock acquired
-    E->>FS: re-realpath authored path; reject retarget; stat/open/read live bytes
-    E->>S: lookup pinned canonicalPath + token
-    E->>E: digest/seen/semantic plan/apply/no-op checks
-    E->>E: precompute bounded details/preview/record/result variants
-    alt any precondition or preparation fails
-      E-->>Q: throw; no write
+    E->>FS: re-realpath; stat/open/read live bytes once
+    E->>M: lookup canonicalPath + token
+    alt unknown token
+      E->>M: journal bounded live context
+      E-->>Q: throw E_SNAPSHOT_UNKNOWN + refreshed token; no write
+    else known and digest changed
+      E->>R: lookup cached base bytes
+      E->>E: prove unique unchanged run + remap one offset
+    end
+    E->>E: live seen/semantic plan/apply/no-op checks
+    alt recoverable reject
+      E->>M: journal bounded live context
+      E-->>Q: throw original code + refreshed token; no write
     else valid
+      E->>E: precompute bounded details/preview/record/result variants
       E->>E: final generation + abort check
       E->>FS: write complete output while queue remains held
-      E->>S: append journal + update projection; catch failure
+      E->>M: append journal + update projection; catch failure
+      E->>R: cache committed bytes when bounded
       E-->>Q: return prebuilt success; token only if journaled
     end
 ```
@@ -751,24 +826,41 @@ Hashline 自定义的 validation/state/resource/mutation 失败全部 `throw Err
 | --- | --- | --- | --- |
 | `E_BAD_REQUEST` | schema/unknown key/字段组合错误 | 未写 | 按当前 schema 重发 |
 | `E_SNAPSHOT_REQUIRED` | 缺失/格式错误 token | 未写 | read 同一文件 |
-| `E_SNAPSHOT_UNKNOWN` | token 不在当前 branch/store，可能被淘汰 | 未写 | read 同一文件，勿猜 token |
+| `E_SNAPSHOT_UNKNOWN` | token 不在当前 branch/store，可能被淘汰 | 未写 | 优先使用错误中的 refreshed token/rows；无 header 才 read |
 | `E_BRANCH_CHANGED` | tool 执行期间 runtime generation 变化，且尚未 commit | 未写 | 在当前 branch 重新 read/发起 edit |
 | `E_PATH_MISMATCH` | token 绑定 canonical path 与 edit 目标不同 | 未写 | 核对 path 并 read 正确文件 |
-| `E_STALE_SNAPSHOT` | live raw SHA-256 与 snapshot 不同 | 未写 | re-read；重新计算全部 operation |
-| `E_UNSEEN_LINE` | range/gap 端点未展示 | 未写 | 按建议 offset/limit read |
-| `E_RANGE` | 行号越界、反向 range | 未写 | read 当前范围并修正 |
-| `E_EDIT_CONFLICT` | ranges/gaps 重叠或顺序歧义 | 未写 | 合并为一个 op 或拆分调用 |
-| `E_NO_CHANGE` | output bytes 与 input 相同 | 未写 | 确认改动是否已存在，勿扩大 payload |
+| `E_STALE_SNAPSHOT` | digest 漂移且 verified rebase 缺 cache、失败或有歧义 | 未写 | 用错误中的 current rows/token 重建全部 operation；无 header 才 read |
+| `E_UNSEEN_LINE` | range/gap 必需行未展示 | 未写 | 错误直接展示并授权缺失范围；用附带 token 重试 |
+| `E_RANGE` | current 行号越界、反向 range | 未写 | 依据错误中的 current context 修正坐标 |
+| `E_EDIT_CONFLICT` | ranges/gaps 重叠或顺序歧义 | 未写 | 依据错误上下文合并 op 或拆分调用 |
+| `E_NO_CHANGE` | output bytes 与 input 相同 | 未写 | 核对当前 context；勿扩大 payload |
 | `E_WOULD_EMPTY` | 非空文件将变为空 bytes | 未写 | 需要清空时显式使用 write |
 | `E_NOT_EDITABLE` | binary/invalid UTF-8/non-regular/hardlink | 未写 | 使用合适专用工具或人工处理 |
 | `E_TOO_LARGE` | file/payload/changed bytes/line/output/details 超限 | 未写 | 缩小编辑；必要时使用受控脚本 |
 | `E_ABORTED` | commit 前取消 | 未写 | 仅在仍需要时重新开始 |
 | `E_WRITE_FAILED` | commit I/O 失败 | 可能部分写 | 必须先 read；禁止直接重放 |
 
-示例 stale 错误：
+### 11.1 拒绝时 snapshot 热刷新
+
+`E_SNAPSHOT_UNKNOWN`、无法恢复的 `E_STALE_SNAPSHOT`、`E_UNSEEN_LINE`、`E_RANGE`、`E_EDIT_CONFLICT`、`E_NO_CHANGE`、`E_WOULD_EMPTY` 属于可刷新拒绝。流程仍在 canonical mutation queue 内，且复用本次已 capture 的 live bytes：
+
+1. 根据明确 focus（例如 unseen missing range）或 submitted operation coordinates，clamp 到 live line count，并在两侧各扩展最多 2 行；
+2. normalize/merge ranges，受 `MAX_SEEN_RANGES`、120 preview lines、50 KiB/2000 行总输出约束；
+3. 计算 live `h1_` token，构造 `source:"read"` record 与 `[hashline …]` source rows；
+4. 先 append journal 并更新 metadata/recovery stores，成功后才把 header/rows 附到原错误并 throw；
+5. append、格式化、generation 或 capture 任一失败时，不回显未授权 source；保留原 code，并追加“automatic refresh failed, read explicitly”。
+
+因此错误里的 snapshot header 与 numbered rows 不是诊断旁路，而是与普通 read 相同的 branch provenance。unknown 输入 token 不会被接受；返回的是 live token。若 live bytes 与已知 token 相同，unseen/no-op 等刷新可使用同 token合并 seen ranges。刷新绝不写文件内容，也不把 failed tool call 改成 success。
+
+示例 stale 拒绝：
 
 ```text
-[E_STALE_SNAPSHOT] Edit rejected for src/greet.ts: the file bytes changed after snapshot h1_…. No hashline write was attempted. Re-read the file and rebuild every operation from the new line numbers; stale anchors are never relocated automatically.
+[E_STALE_SNAPSHOT] Edit rejected for src/greet.ts: file bytes changed after snapshot h1_…, and verified rebase was unavailable because the target or its displayed context changed since the snapshot. No hashline write was attempted.
+
+[hashline path="src/greet.ts" snapshot="h1_…"]
+10:export function greet(name: string) {
+11:  return `Hello ${name}`;
+12:}
 ```
 
 ## 12. 安全、兼容与共存
@@ -858,6 +950,12 @@ v1 不引入 settings/env 配置。安全关键行为——完整 SHA-256、know
 - delayed tool call 跨 `session_tree`/shutdown 时的 generation 隔离；旧调用不能 append 或更新新 store；
 - journal 不含源文本。
 
+**`recovery.test.ts`：**
+
+- 正/负/零统一 offset 下，已展示 proof window 的 target/gap 精确重定位；
+- target/body/EOL 改变、multi-operation unseen gap、重复 proof window、跨多个 unchanged run、缺 surrounding seen context 全部拒绝；
+- RecoveryStore 单版本 4 MiB、每路径 4 版、总 128 entries / 64 MiB 与 clear 行为。
+
 ### 13.2 Tool harness 测试
 
 **Read：**
@@ -867,21 +965,25 @@ v1 不引入 settings/env 配置。安全关键行为——完整 SHA-256、know
 - offset/limit、line/byte truncation、continuation；
 - header/notice 加入后仍不越 50 KiB/2000 行；
 - 超长首行不输出半 anchor、不授权；
-- image passthrough，magic 匹配但解码失败也不 mint token；invalid UTF-8/binary/large file 无 token；directory/FIFO/device 明确拒绝；
+- image passthrough，magic 匹配但解码失败也不 mint token；invalid UTF-8/binary/large file 无 token，large file 在完整 Buffer allocation 前回退内建 read；directory/FIFO/device 明确拒绝；
 - capture/read loop 可取消且 abort 前无 journal；append 失败返回 read 但无 token。
 
 **Edit：**
 
-- 未 read、错误 path、stale bytes、unseen range 均零 write；
-- read → edit 正常路径，标准 diff/patch/firstChangedLine；
-- 同 snapshot 两个并发 edit：一个成功、一个 stale；
-- 与内建 write 并发使用 shared queue；
+- 错误 path 始终零 write；unknown、unseen、range、conflict、would-empty、无法证明的 stale 与 no-change 拒绝零 write 且携带 journaled current context/token；
+- refresh journal 失败保留原 code，但不返回 header 或任何 live `LINE:TEXT`；
+- refreshed unknown/unseen/stale/semantic token 可直接修正并重试；错误明确指出的 missing span 先精确 read；
+- read → exact-CAS edit 正常路径，标准 diff/patch/firstChangedLine；
+- stale 外部插/删行导致的正/负 offset 与外部远端 body change 导致的 offset=0 revalidation；目标/context 改变仍拒绝；
+- 同 snapshot 相交并发：一个成功、一个 stale；同 snapshot 不相交并发：两者成功且后到者明确 revalidated；
+- 与内建 write 并发使用 shared queue，并分别覆盖可恢复与不可恢复 drift；
 - 多 op 任一无效时整体零 write；
 - abort waiting queue、after read、before commit 均零 write；
 - commit 期间 abort 不提前释放 queue、不把成功写报告为失败；
 - journal append 失败发生在 write 后：结果明确成功但无新 token；
 - 注入 diff/patch/hash/preview/serialization 构造失败：全部发生在 commit 前并证明零 write；write 后 journal/projection 失败只能返回预构造的无 token 成功结果；
 - session_tree 与 delayed read/edit 重叠：commit 前 edit 零写入，commit 后 edit 明确成功但不向新 branch mint token，read 只返回无 token 内容；
+- reload/session_tree replay 后 metadata token 的 exact CAS 仍成功；外部 drift 后不会复活旧 source，零写入 stale refresh 后可直接重试；
 - write I/O failure 的 unknown-state 错误；
 - symlink same target 成功；read 后及 queue 等待期间 retarget 均 path mismatch；hardlink 拒绝；
 - file >16 MiB、累计 payload/changed bytes >128 KiB、single line >64 KiB、serialized details >256 KiB 全部在 commit 前尽早拒绝；
@@ -987,12 +1089,12 @@ pi --no-session -p --extension "$PWD/hashline" "Reply with exactly: SMOKE_OK"
 | --- | --- | --- | --- | --- |
 | R1 | P0 | 2/4 hex 短 hash 可能 silent collision | 完整 SHA-256 token；known branch record；比较完整 digest | 已解决（设计） |
 | R2 | P0 | 只比较 token/live 前缀允许模型自造当前 hash | store lookup 是独立必要条件；未知 token 一律拒绝 | 已解决（设计） |
-| R3 | P0 | 自动 stale relocation/merge 可能把旧意图落到新结构 | v1 无恢复；任何 raw byte drift 都 re-read | 已解决（设计） |
+| R3 | P0 | 自动 stale relocation/merge 可能把旧意图落到新结构 | 仅接受完整 seen proof window 在单 unchanged run 中 old/current 各唯一出现且所有 op 共用 offset；否则零写入 | 已解决（设计 + 实现 + 回归） |
 | R4 | P0 | tag-based path recovery 会把 typo 隐式重定向到另一文件 | exact canonical path binding；不猜路径 | 已解决（设计） |
 | R5 | P0 | write 已成功但 journal append 抛错会诱发模型重试 | commit 后 journal 失败返回“已写成功、无 token”，不 throw edit 未发生 | 已解决（设计） |
 | R6 | P1 | 只校验 range 两端会覆盖未见/变化的内部行 | replace/delete 每一行必须 seen | 已解决（设计） |
 | R7 | P1 | insert 只看 anchor 可能越过函数/section 边界 | gap 两侧存在的行都必须 seen | 已解决（设计） |
-| R8 | P1 | 并行工具从同一旧内容计算导致 lost update | shared canonical mutation queue 覆盖 read-check-apply-write | 已解决（设计） |
+| R8 | P1 | 并行工具从同一旧内容计算导致 lost update | shared canonical mutation queue 包围 live read/check/rebase/write；相交拒绝，不相交仅在严格 proof 后合并 | 已解决（设计 + 实现 + 回归） |
 | R9 | P1 | 全局 LF normalize 改写 mixed EOL/trailing data | raw-byte digest + PhysicalLine records，未触碰 eol 保留 | 已解决（设计） |
 | R10 | P1 | 多文件 preflight 被误称原子，mid-write 可部分完成 | v1 单文件；多 operation 单次 write | 已解决（设计） |
 | R11 | P1 | 覆盖内建 tool 但 details/schema path 漂移会破坏 renderer/LSP | read/edit details exact；顶层 path 保留；inherit renderer | 已解决（设计） |
@@ -1000,9 +1102,9 @@ pi --no-session -p --extension "$PWD/hashline" "Reply with exactly: SMOKE_OK"
 | R13 | P1 | temp+rename 改 inode/ACL/hardlink 语义 | v1 in-place；hardlink 拒绝；不声称 crash atomic | 已解决（设计取舍） |
 | R14 | P1 | abort listener 可能在 write 未 settle 时释放 queue | commit 前取消；commit 后 await settle 并报告真实 side effect | 已解决（设计） |
 | R15 | P2 | 行号前缀增加后可突破内建 output budget | 动态预留 header/notice bytes，再 truncate 完整 rows | 已解决（设计） |
-| R16 | P2 | 错误回显 unseen lines 会绕过 read provenance | 错误只给 range read 指令，不授权/回显 unseen 内容 | 已解决（设计） |
-| R17 | P2 | snapshot full text 持久化放大 session 与隐私面 | journal 只存 digest/path/seen metadata | 已解决（设计） |
-| R18 | P2 | edit 后继承旧 seen 行会在行号移动后误授权 | 新版本仅授权成功结果实际展示的新行 | 已解决（设计） |
+| R16 | P2 | 错误回显 unseen lines 会绕过 read provenance | refresh 先 journal live record，再附 header/rows；失败不回显 source，显示范围受普通 output/seen 上限 | 已解决（设计 + 实现 + 回归） |
+| R17 | P2 | stale recovery 保存 full text 会放大 session 与隐私面 | journal 仍只存 metadata；source cache 单文件/路径/entry/总 bytes 有界且 branch lifecycle 清空、不 replay | 已解决（设计 + 实现 + 回归） |
+| R18 | P2 | edit 后继承旧 seen 行会在行号移动后误授权 | rebase 只临时映射 proof intersection；成功版本仍仅授权实际返回 preview | 已解决（设计 + 实现 + 回归） |
 | R19 | P2 | custom patch DSL 增加 parser 污染、歧义和 prompt 成本 | 结构化扁平 schema + runtime 字段矩阵 | 已解决（设计） |
 | R20 | P2 | 同名 override 之间不能自动组合 | README 明确冲突；coexistence 测试最后加载规则；不抢 active tools | 已解决（运营合同） |
 | R21 | P2 | 图片/invalid UTF-8 因 read override 退化 | 内建 read adapter + image passthrough；不可写文本不 mint token | 已解决（设计） |
@@ -1021,6 +1123,10 @@ pi --no-session -p --extension "$PWD/hashline" "Reply with exactly: SMOKE_OK"
 | R34 | P2 | TypeBox 之外的直接 execute 路径未在 operation decode 前强制 path 长度/NUL/surrogate，runtime 与 schema 边界不一致 | runtime decoder 在 token/edits 前先执行 path 字符与 4,096-char gate | 已解决（实现 + 回归） |
 | R35 | P3 | grep 命中后仍需二次 read | v1 有意限制；未来另做 RG 版本化协议 | 延后 |
 | R36 | P3 | 没有 syntax block 操作，长函数替换仍需范围 | 使用精确 range；语义重构由 LSP；基于实测再评估 | 延后 |
+| R37 | P1 | 多 operation recovery 用未展示的中间 source 行组成唯一性窗口，隐藏正文可能参与 stale 消歧 | `record.seen` 必须连续覆盖首尾 target 的完整 envelope；unseen gap 零写入，错误明确要求读取首尾目标完整 span，自动 refresh 只授权实际返回的有界 current rows | 已解决（实现 + 回归） |
+| R38 | P1 | refresh journal 失败时 fallback 仍回显 live `LINE:TEXT`，形成无 token 的 provenance 旁路 | 无 token fallback 只保留 summary 与显式 read 指令；header/rows 仅在 commitRecord 成功后返回 | 已解决（实现 + 回归） |
+| R39 | P1 | read 在检查 16 MiB 可编辑上限前按 `stat.size` 分配 Buffer，大文件即使不 mint token 也会制造额外峰值内存 | pre-stat/fstat 在 allocation 前触发 package-private fallback，改走未注入的 Pi 内建 read | 已解决（实现 + 回归） |
+| R40 | P1 | branch replay 若在 recovery clear 前异常退出，旧 branch source cache 可残留 | generation 后立即 clear metadata/recovery 并置空 projection，再尝试 replay | 已解决（实现 + lifecycle 回归） |
 
 ### 15.3 残余风险
 
@@ -1038,11 +1144,12 @@ pi --no-session -p --extension "$PWD/hashline" "Reply with exactly: SMOKE_OK"
 
 实现可进入发布候选前必须全部满足：
 
-- [x] R1–R34 的实现 findings 均有回归、既有取消测试、类型检查或真实 Pi smoke 证据；R35–R36 明确延后；
-- [x] stale、unknown、path mismatch、unseen、conflict 的 failure injection 均证明零 write；
+- [x] R1–R34、R37–R40 的实现 findings 均有回归、类型检查或针对性行为证据；R35–R36 明确延后；
+- [x] unknown、path mismatch、unseen、conflict、target/context/EOL changed、ambiguous/multi-hunk stale 的 failure injection 均证明零 write 并验证 refreshed provenance；
+- [x] stale 正/负/零 offset verified rebase 保留非目标外部变化；同-token 相交并发拒绝、不相交并发两者成功；
 - [x] 并发 Hashline/内建 write smoke 无 lost update；
 - [x] abort before commit 与 abort during commit 的结果和磁盘一致；
-- [x] reload/fork/tree 的 token 可用性与 branch 一致；
+- [x] reload/fork/tree 的 metadata token 可用性与 branch 一致，RecoveryStore 不跨 lifecycle replay；
 - [x] delayed read/edit 与 session_tree/shutdown 重叠时，旧 generation 无法污染继任 branch；
 - [x] single/repeated BOM、EOL、trailing whitespace byte fixtures 通过；
 - [x] valid/malformed image、invalid UTF-8、large file 不获得可写 token；non-regular input 明确拒绝；
@@ -1051,6 +1158,7 @@ pi --no-session -p --extension "$PWD/hashline" "Reply with exactly: SMOKE_OK"
 - [x] journal failure after commit 不诱发“未写”错误；
 - [x] diff/patch/hash/preview/serialization failure injection 均在 commit 前零写入；commit 后 journal/projection failure 返回无 token 成功结果；
 - [x] non-empty → empty guard 与 changed-bytes/details commit 前上限均有 failure injection；
+- [x] RecoveryStore 单版本、每路径、总 entry、总 byte 淘汰与 lifecycle clear 有边界回归；journal 不含 source bytes；
 - [x] README、package、CI、global links 和卸载路径一致；
 - [x] 无未解决 P0/P1；残余风险在 README 明示。
 
@@ -1066,7 +1174,7 @@ pi --no-session -p --extension "$PWD/hashline" "Reply with exactly: SMOKE_OK"
 | 随机 snapshot ID + 持久化全文 | 无碰撞但 session 膨胀、隐私与恢复成本过高；SHA-256 + metadata 足够 |
 | edit input 使用一段 DSL string | parser、grammar contamination、partial streaming 与错误恢复面大于四种 op 的价值 |
 | 沿用 oldText/newText 并额外加 snapshot | 可防 stale，但没有行级 seen provenance，仍需复制大文本；产品增益不足 |
-| stale 时平移 unchanged anchor | “看起来没变”不等于周围语义没变；隐藏重定位与 fail-closed 目标冲突 |
+| stale 时仅凭 target line/短窗口平移 | “目标看起来没变”不足以证明身份；已采纳方案要求全部 operation envelope、额外 seen context、old/current 唯一出现、单 unchanged run、统一 offset 与 live full re-plan |
 | 自动三方 merge | 冲突算法正确也不能证明模型意图在新结构仍成立；成功路径需要人工复核 |
 | tag 唯一时自动恢复路径 | typo 变成写另一个文件，破坏路径作为显式副作用边界 |
 | Tree-sitter `replace_block` v1 | parser/native 依赖、decorator/comment/Markdown 等边界复杂；LSP 已承担语义能力 |
@@ -1089,23 +1197,25 @@ pi --no-session -p --extension "$PWD/hashline" "Reply with exactly: SMOKE_OK"
 ### 正确性
 
 - [x] canonical raw-bytes digest token、known branch token、pinned canonical path、seen coverage 四门全部强制；
+- [x] digest 相同走 exact CAS；digest 漂移只有唯一 byte-identical proof window、单 unchanged run、统一 offset 与 live full re-plan 全部成立才写；
 - [x] all-original coordinates、冲突检测、一次 pure apply/一次 write；
-- [x] no-op、stale、unseen、unknown、wrong path 全部零 write；
-- [x] non-empty → empty、changed-bytes/details 超限全部在 commit 前零写入；
+- [x] no-op、unseen、unknown、wrong path 与不可恢复 stale 全部零 write；可刷新错误只在 journal 成功后回显 source；
+- [x] non-empty → empty、changed-bytes/details/recovery diff 超限全部在 commit 前零写入；
 - [x] token/preview/record/details/成功结果均在 commit 前完整构造；post-commit 没有可传播的结果计算错误；
-- [x] success 后只授权实际返回的新行。
+- [x] rebase 只临时映射 proof provenance，success 后仍只授权实际返回的新行。
 
 ### 状态与生命周期
 
-- [x] journal version/decoder/limits 完整；
-- [x] session_start/session_tree clear + replay；session_shutdown clear；
-- [x] runtime generation 阻断旧 branch 在飞调用的 journal/store 更新；
-- [x] append/closure 更新顺序不会产生 ghost token；
-- [x] compaction/reload/fork/tree 有行为证据。
+- [x] metadata journal version/decoder/limits 完整，journal 不含 source bytes；
+- [x] RecoveryStore 单文件/路径/entry/byte LRU 完整；session_start/session_tree/shutdown clear 且不 replay；
+- [x] runtime generation 阻断旧 branch 在飞调用的 journal/metadata/recovery 更新；
+- [x] append/closure 更新顺序不会产生 ghost token，也不会在错误里回显未 journal source；
+- [x] compaction/reload/fork/tree 的 exact-token 与 no-source-recovery 行为有证据。
 
 ### 并发与副作用
 
 - [x] shared mutation queue 以 pinned canonical target 为 key 并包围全部 mutable 临界区；
+- [x] 同-token 相交 edits 不覆盖彼此；不相交 edits 仅在 verified rebase 后合并并保留首个结果；
 - [x] abort 与 commit point 明确；
 - [x] symlink/hardlink/regular file policy 与 queue-wait retarget 有测试；
 - [x] external race/OS crash 不被虚假宣传为已解决。
@@ -1131,16 +1241,16 @@ Pi 官方与本仓库基线：
 - [本仓库 RG 的内建 definition 复用模式](../../rg/src/index.ts)
 - [本仓库 LSP 的 edit/write tool_result 同步](../../lsp/src/index.ts)
 
-Oh My Pi（研究 checkout 与 remote HEAD：`ba7db9943d0f58499b24c1f6bd64722580f772a5`；链接使用公开可读取的 `main` 文件，SHA 是精确复现键）：
+Oh My Pi（研究版本 `@oh-my-pi/hashline 17.1.8`，checkout 与 2026-07-29 remote HEAD：`cc00ab161b2721e50d8a96a0dc9552abfd258b8b`；以下链接固定到该提交）：
 
-- [`@oh-my-pi/hashline` README](https://github.com/can1357/oh-my-pi/blob/main/packages/hashline/README.md)
-- [Hashline prompt/grammar-facing contract](https://github.com/can1357/oh-my-pi/blob/main/packages/hashline/src/prompt.md)
-- [4-hex whole-file tag](https://github.com/can1357/oh-my-pi/blob/main/packages/hashline/src/format.ts)
-- [Snapshot store 与 seen lines](https://github.com/can1357/oh-my-pi/blob/main/packages/hashline/src/snapshots.ts)
-- [Patcher preflight/commit](https://github.com/can1357/oh-my-pi/blob/main/packages/hashline/src/patcher.ts)
-- [Stale line remap recovery](https://github.com/can1357/oh-my-pi/blob/main/packages/hashline/src/recovery.ts)
-- [Coding-agent read snapshot adapter](https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/edit/file-snapshot-store.ts)
-- [Coding-agent hashline execute adapter](https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/edit/hashline/execute.ts)
+- [`@oh-my-pi/hashline` README](https://github.com/can1357/oh-my-pi/blob/cc00ab161b2721e50d8a96a0dc9552abfd258b8b/packages/hashline/README.md)
+- [Hashline prompt/grammar-facing contract](https://github.com/can1357/oh-my-pi/blob/cc00ab161b2721e50d8a96a0dc9552abfd258b8b/packages/hashline/src/prompt.md)
+- [4-hex whole-file tag](https://github.com/can1357/oh-my-pi/blob/cc00ab161b2721e50d8a96a0dc9552abfd258b8b/packages/hashline/src/format.ts)
+- [Snapshot store 与 seen lines](https://github.com/can1357/oh-my-pi/blob/cc00ab161b2721e50d8a96a0dc9552abfd258b8b/packages/hashline/src/snapshots.ts)
+- [Patcher preflight/commit 与 path/head-tail recovery](https://github.com/can1357/oh-my-pi/blob/cc00ab161b2721e50d8a96a0dc9552abfd258b8b/packages/hashline/src/patcher.ts)
+- [Stale unchanged-line remap](https://github.com/can1357/oh-my-pi/blob/cc00ab161b2721e50d8a96a0dc9552abfd258b8b/packages/hashline/src/recovery.ts)
+- [Coding-agent read snapshot adapter](https://github.com/can1357/oh-my-pi/blob/cc00ab161b2721e50d8a96a0dc9552abfd258b8b/packages/coding-agent/src/edit/file-snapshot-store.ts)
+- [Coding-agent hashline execute/no-op adapter](https://github.com/can1357/oh-my-pi/blob/cc00ab161b2721e50d8a96a0dc9552abfd258b8b/packages/coding-agent/src/edit/hashline/execute.ts)
 
 社区插件（研究版本 `pi-hashline-edit 0.8.3`，checkout 与 remote HEAD：`667111575ebba136dadfd6989379e7f67e0d40d9`；链接使用公开可读取的 `master` 文件）：
 
@@ -1150,4 +1260,4 @@ Oh My Pi（研究 checkout 与 remote HEAD：`ba7db9943d0f58499b24c1f6bd64722580
 - [Read formatter 与 snapshot capture](https://github.com/RimuruW/pi-hashline-edit/blob/master/src/read.ts)
 - [Symlink/hardlink-aware writer](https://github.com/RimuruW/pi-hashline-edit/blob/master/src/fs-write.ts)
 
-> 最终设计判断：Hashline 的可靠性不来自“行号旁边有一小段 hash”，而来自四个不能绕过的事实同时成立——模型在当前 branch 看过这版文件、看过要动的具体边界、文件仍是完全相同的 bytes、写入在同文件临界区内一次提交。任何一个事实缺失，最安全也最便宜的恢复动作都是 re-read。
+> 最终设计判断：Hashline 的可靠性不来自“行号旁边有一小段 hash”，而来自不可绕过的 provenance 与 commit 事实——模型在当前 branch 看过原版本的目标和上下文；live bytes 要么完整相同，要么这些 physical lines 能在单个 unchanged run 中 old/current 各唯一出现并共享一个 offset；所有 live 语义检查和一次 write 都在同文件 queue 临界区内完成。证明失败时零写入，并只在 current rows 已 journal 后把它们作为 refreshed snapshot 返回。

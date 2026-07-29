@@ -6,10 +6,11 @@ import { join } from "node:path";
 import { createWriteToolDefinition, withFileMutationQueue, type AgentToolResult, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createHashlineEditTool } from "../src/edit-tool.ts";
 import { createHashlineReadTool } from "../src/read-tool.ts";
+import { RecoveryStore } from "../src/recovery.ts";
 import type { HashlineRuntime } from "../src/runtime.ts";
 import { SnapshotStore, type SnapshotRecord } from "../src/snapshots.ts";
 import type { HashlineSnapshotEntryV1 } from "../src/persistence.ts";
-import type { HashlineEditInput } from "../src/schemas.ts";
+import { MAX_EDITABLE_FILE_BYTES, type HashlineEditInput } from "../src/schemas.ts";
 
 interface TestRuntime {
   readonly runtime: HashlineRuntime;
@@ -21,6 +22,7 @@ interface TestRuntime {
 
 function makeRuntime(): TestRuntime {
   const store = new SnapshotStore();
+  const recovery = new RecoveryStore();
   const entries: HashlineSnapshotEntryV1[] = [];
   let generation = 1;
   let nextFailure = false;
@@ -36,13 +38,15 @@ function makeRuntime(): TestRuntime {
     runtime: {
       getGeneration: () => generation,
       getStore: () => store,
-      commitRecord(record: SnapshotRecord, entry: HashlineSnapshotEntryV1): void {
+      getRecoveryBytes: (canonicalPath, token) => recovery.get(canonicalPath, token),
+      commitRecord(record: SnapshotRecord, entry: HashlineSnapshotEntryV1, recoveryBytes?: Buffer): void {
         if (nextFailure) {
           nextFailure = false;
           throw new Error("injected journal failure");
         }
         entries.push(entry);
         store.put(record);
+        if (recoveryBytes) recovery.put(record, recoveryBytes);
       },
     },
   };
@@ -58,10 +62,27 @@ function textOf(result: AgentToolResult<unknown>): string {
   return content.text;
 }
 
-function tokenOf(result: AgentToolResult<unknown>): string {
-  const match = textOf(result).match(/snapshot="(h1_[A-Za-z0-9_-]{43})"/);
-  assert.ok(match, textOf(result));
+function tokenFromText(text: string): string {
+  const match = text.match(/snapshot="(h1_[A-Za-z0-9_-]{43})"/);
+  assert.ok(match, text);
   return match[1];
+}
+
+function tokenOf(result: AgentToolResult<unknown>): string {
+  return tokenFromText(textOf(result));
+}
+
+async function rejectionText(promise: Promise<unknown>): Promise<string> {
+  let rejected = false;
+  let reason: unknown;
+  try {
+    await promise;
+  } catch (error) {
+    rejected = true;
+    reason = error;
+  }
+  assert.equal(rejected, true, "expected tool call to reject");
+  return String(reason);
 }
 
 async function fixture(t: test.TestContext, content = "one\ntwo\nthree\nfour\n"): Promise<{ root: string; path: string }> {
@@ -85,7 +106,7 @@ test("read numbers only returned rows and unions repeated seen ranges", async (t
   assert.deepEqual(state.store.get(canonical, token as `h1_${string}`)?.seen, [{ start: 2, end: 5 }]);
 });
 
-test("read journal failure, invalid text, long lines, and images never mint unsafe tokens", async (t) => {
+test("read journal failure, invalid text, long or large files, and images never mint unsafe tokens", async (t) => {
   const { root } = await fixture(t);
   const state = makeRuntime();
   const tool = createHashlineReadTool(state.runtime);
@@ -101,6 +122,13 @@ test("read journal failure, invalid text, long lines, and images never mint unsa
   await writeFile(join(root, "long.txt"), `${"x".repeat(65_537)}\n`);
   const long = await tool.execute("long", { path: "long.txt" }, undefined, undefined, context(root));
   assert.doesNotMatch(textOf(long), /snapshot="h1_/);
+
+  const largeBytes = Buffer.alloc(MAX_EDITABLE_FILE_BYTES + 1, 0x61);
+  for (let offset = 99; offset < largeBytes.length; offset += 100) largeBytes[offset] = 0x0a;
+  await writeFile(join(root, "large.txt"), largeBytes);
+  const large = await tool.execute("large", { path: "large.txt", limit: 1 }, undefined, undefined, context(root));
+  assert.match(textOf(large), /a/);
+  assert.doesNotMatch(textOf(large), /snapshot="h1_/);
 
   const onePixelBmp = Buffer.alloc(58);
   onePixelBmp.write("BM", 0, "ascii");
@@ -170,14 +198,16 @@ test("unknown, wrong-path, unseen, stale, no-op, and emptying edits are zero-wri
     editTool.execute("wrong-path", { path: "second.txt", snapshot: token, edits: [{ op: "replace", start: 1, lines: ["ONE"] }] }, undefined, undefined, context(root)),
     /\[E_PATH_MISMATCH\]/,
   );
-  await assert.rejects(
+  const unseenMessage = await rejectionText(
     editTool.execute("unseen", { path: "fixture.txt", snapshot: token, edits: [{ op: "replace", start: 2, lines: ["TWO"] }] }, undefined, undefined, context(root)),
-    /\[E_UNSEEN_LINE\]/,
   );
-  await assert.rejects(
+  assert.match(unseenMessage, /\[E_UNSEEN_LINE\].*snapshot=/s);
+  assert.equal(tokenFromText(unseenMessage), token);
+  const noChangeMessage = await rejectionText(
     editTool.execute("noop", { path: "fixture.txt", snapshot: token, edits: [{ op: "replace", start: 1, lines: ["one"] }] }, undefined, undefined, context(root)),
-    /\[E_NO_CHANGE\]/,
   );
+  assert.match(noChangeMessage, /\[E_NO_CHANGE\].*snapshot=/s);
+  assert.equal(tokenFromText(noChangeMessage), token);
   const full = await readTool.execute("full", { path: "fixture.txt" }, undefined, undefined, context(root));
   await assert.rejects(
     editTool.execute("empty", { path: "fixture.txt", snapshot: tokenOf(full), edits: [{ op: "delete", start: 1, end: 4 }] }, undefined, undefined, context(root)),
@@ -192,10 +222,75 @@ test("unknown, wrong-path, unseen, stale, no-op, and emptying edits are zero-wri
 
   const unknownState = makeRuntime();
   const unknownTool = createHashlineEditTool(unknownState.runtime);
-  await assert.rejects(
+  const unknownMessage = await rejectionText(
     unknownTool.execute("unknown", { path: "fixture.txt", snapshot: tokenOf(full), edits: [{ op: "replace", start: 1, lines: ["x"] }] }, undefined, undefined, context(root)),
-    /\[E_SNAPSHOT_UNKNOWN\]/,
   );
+  assert.match(unknownMessage, /\[E_SNAPSHOT_UNKNOWN\].*snapshot=/s);
+  await unknownTool.execute(
+    "unknown-retry",
+    { path: "fixture.txt", snapshot: tokenFromText(unknownMessage), edits: [{ op: "replace", start: 1, lines: ["x"] }] },
+    undefined,
+    undefined,
+    context(root),
+  );
+  assert.equal(await readFile(path, "utf8"), original.replace("one", "x"));
+});
+
+test("semantic failures return reusable snapshots and hide current rows if refresh journaling fails", async (t) => {
+  const { root, path } = await fixture(t);
+  const state = makeRuntime();
+  const readTool = createHashlineReadTool(state.runtime);
+  const editTool = createHashlineEditTool(state.runtime);
+  const token = tokenOf(await readTool.execute("full", { path: "fixture.txt" }, undefined, undefined, context(root)));
+
+  const rangeMessage = await rejectionText(
+    editTool.execute("range", { path: "fixture.txt", snapshot: token, edits: [{ op: "replace", start: 99, lines: ["x"] }] }, undefined, undefined, context(root)),
+  );
+  assert.match(rangeMessage, /\[E_RANGE\].*edits\[0\]\.start.*snapshot=.*2:two.*4:four/s);
+  assert.equal(tokenFromText(rangeMessage), token);
+
+  const conflictMessage = await rejectionText(
+    editTool.execute(
+      "conflict",
+      {
+        path: "fixture.txt",
+        snapshot: token,
+        edits: [
+          { op: "replace", start: 1, end: 2, lines: ["ONE", "TWO"] },
+          { op: "delete", start: 2 },
+        ],
+      },
+      undefined,
+      undefined,
+      context(root),
+    ),
+  );
+  assert.match(conflictMessage, /\[E_EDIT_CONFLICT\].*edits\[0\].*edits\[1\].*snapshot=/s);
+  assert.equal(tokenFromText(conflictMessage), token);
+
+  const emptyMessage = await rejectionText(
+    editTool.execute("empty", { path: "fixture.txt", snapshot: token, edits: [{ op: "delete", start: 1, end: 4 }] }, undefined, undefined, context(root)),
+  );
+  assert.match(emptyMessage, /\[E_WOULD_EMPTY\].*Use write.*snapshot=.*1:one.*4:four/s);
+  assert.equal(tokenFromText(emptyMessage), token);
+  assert.equal(await readFile(path, "utf8"), "one\ntwo\nthree\nfour\n");
+
+  state.failNextCommit();
+  const unjournaledMessage = await rejectionText(
+    editTool.execute("unjournaled-range", { path: "fixture.txt", snapshot: token, edits: [{ op: "replace", start: 99, lines: ["x"] }] }, undefined, undefined, context(root)),
+  );
+  assert.match(unjournaledMessage, /\[E_RANGE\].*could not be safely journaled.*Use read/s);
+  assert.doesNotMatch(unjournaledMessage, /snapshot="h1_/);
+  assert.doesNotMatch(unjournaledMessage, /\n[1-4]:(?:one|two|three|four)/);
+
+  await editTool.execute(
+    "corrected",
+    { path: "fixture.txt", snapshot: tokenFromText(rangeMessage), edits: [{ op: "replace", start: 4, lines: ["FOUR"] }] },
+    undefined,
+    undefined,
+    context(root),
+  );
+  assert.equal(await readFile(path, "utf8"), "one\ntwo\nthree\nFOUR\n");
 });
 
 test("successful edit has built-in details shape and journal failure stays a truthful success", async (t) => {
@@ -261,8 +356,6 @@ test("one hundred disjoint edit regions produce a bounded follow-up preview", as
   assert.equal(written[990], "changed-100");
 });
 
-
-
 test("two concurrent edits from one token serialize to one success and one stale rejection", async (t) => {
   const { root, path } = await fixture(t);
   const state = makeRuntime();
@@ -278,6 +371,42 @@ test("two concurrent edits from one token serialize to one success and one stale
   assert.ok(rejected && rejected.status === "rejected");
   assert.match(String(rejected.reason), /\[E_STALE_SNAPSHOT\]/);
   assert.match(await readFile(path, "utf8"), /^(A|B)\n/);
+});
+
+test("verified recovery rebases an unchanged target after an external insertion", async (t) => {
+  const content = "L1\nL2\nL3\nL4\nTARGET\nL6\nL7\nL8\n";
+  const { root, path } = await fixture(t, content);
+  const state = makeRuntime();
+  const readTool = createHashlineReadTool(state.runtime);
+  const editTool = createHashlineEditTool(state.runtime);
+  const snapshot = tokenOf(await readTool.execute("read", { path: "fixture.txt" }, undefined, undefined, context(root)));
+  await writeFile(path, `EXTERNAL\n${content}`, "utf8");
+
+  const result = await editTool.execute(
+    "rebase",
+    { path: "fixture.txt", snapshot, edits: [{ op: "replace", start: 5, lines: ["MODEL"] }] },
+    undefined,
+    undefined,
+    context(root),
+  );
+  assert.match(textOf(result), /Rebased stale snapshot: line 5 → line 6 \(\+1\)/);
+  assert.equal(await readFile(path, "utf8"), "EXTERNAL\nL1\nL2\nL3\nL4\nMODEL\nL6\nL7\nL8\n");
+});
+
+test("concurrent disjoint edits from one token both commit through verified recovery", async (t) => {
+  const content = Array.from({ length: 10 }, (_, index) => `L${index + 1}`).join("\n") + "\n";
+  const { root, path } = await fixture(t, content);
+  const state = makeRuntime();
+  const readTool = createHashlineReadTool(state.runtime);
+  const editTool = createHashlineEditTool(state.runtime);
+  const snapshot = tokenOf(await readTool.execute("read", { path: "fixture.txt" }, undefined, undefined, context(root)));
+  const results = await Promise.all([
+    editTool.execute("early", { path: "fixture.txt", snapshot, edits: [{ op: "replace", start: 2, lines: ["EARLY"] }] }, undefined, undefined, context(root)),
+    editTool.execute("late", { path: "fixture.txt", snapshot, edits: [{ op: "replace", start: 9, lines: ["LATE"] }] }, undefined, undefined, context(root)),
+  ]);
+
+  assert.equal(results.filter((result) => /Revalidated stale snapshot/.test(textOf(result))).length, 1);
+  assert.equal(await readFile(path, "utf8"), "L1\nEARLY\nL3\nL4\nL5\nL6\nL7\nL8\nLATE\nL10\n");
 });
 
 test("symlink retargeting while queued cannot move an edit to a different target", async (t) => {

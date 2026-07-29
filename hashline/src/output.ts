@@ -18,6 +18,7 @@ import { normalizeSeenRanges, type SeenRange } from "./snapshots.ts";
 const OUTPUT_NOTICE_RESERVE_BYTES = 768;
 const SNAPSHOT_UNAVAILABLE_NOTICE = "[Hashline snapshot unavailable. Re-read this file before editing; do not guess a token.]";
 const FOLLOW_UP_UNAVAILABLE_NOTICE = "[The file was updated, but no follow-up snapshot was saved. Re-read before editing again.]";
+const REFRESH_UNAVAILABLE_NOTICE = "[Current context could not be safely journaled. Use read before retrying; do not reuse the submitted snapshot.]";
 
 export interface FormattedReadSnapshot {
   readonly tokenText: string;
@@ -27,6 +28,12 @@ export interface FormattedReadSnapshot {
 }
 
 export interface FormattedEditResults {
+  readonly withTokenText?: string;
+  readonly withoutTokenText: string;
+  readonly seen: readonly SeenRange[];
+}
+
+export interface FormattedRefreshResults {
   readonly withTokenText?: string;
   readonly withoutTokenText: string;
   readonly seen: readonly SeenRange[];
@@ -167,16 +174,51 @@ function previewBody(
   return Object.freeze({ body: parts.join("\n"), seen, truncated });
 }
 
+export function formatRefreshSnapshot(
+  path: string,
+  token: SnapshotToken,
+  lines: readonly PhysicalLine[],
+  ranges: readonly SeenRange[],
+  summary: string,
+): FormattedRefreshResults {
+  const header = snapshotHeader(path, token);
+  const reserve = Buffer.byteLength(summary, "utf8") + Math.max(
+    Buffer.byteLength(header, "utf8"),
+    Buffer.byteLength(REFRESH_UNAVAILABLE_NOTICE, "utf8"),
+  ) + OUTPUT_NOTICE_RESERVE_BYTES;
+  const preview = previewBody(lines, ranges, Math.max(0, DEFAULT_MAX_BYTES - reserve));
+  const truncationNotice = preview.truncated
+    ? "[Refresh preview truncated. Read the remaining target range before retrying.]"
+    : "";
+  const withoutTokenText = joinSections([
+    summary,
+    REFRESH_UNAVAILABLE_NOTICE,
+  ]);
+  assertOutputBounded(withoutTokenText);
+  let withTokenText: string | undefined;
+  if (preview.seen.length > 0) {
+    withTokenText = joinSections([
+      summary,
+      `${header}\n${preview.body}`,
+      truncationNotice,
+      "[Only the numbered current rows shown above are authorized by this refreshed snapshot.]",
+    ]);
+    assertOutputBounded(withTokenText);
+  }
+  return Object.freeze({ withTokenText, withoutTokenText, seen: preview.seen });
+}
+
 export function formatEditResults(
   path: string,
   token: SnapshotToken,
   lines: readonly PhysicalLine[],
   spans: readonly ChangedSpan[],
   plan: OperationPlan,
+  notice = "",
 ): FormattedEditResults {
   const summary = `Updated ${escapeDisplayPath(path)} with ${plan.operations.length} hashline edit${plan.operations.length === 1 ? "" : "s"} (+${plan.insertedLines}/-${plan.consumedLines} lines).`;
   const header = snapshotHeader(path, token);
-  const reserve = Buffer.byteLength(summary, "utf8") + Math.max(
+  const reserve = Buffer.byteLength(summary, "utf8") + Buffer.byteLength(notice, "utf8") + Math.max(
     Buffer.byteLength(header, "utf8"),
     Buffer.byteLength(FOLLOW_UP_UNAVAILABLE_NOTICE, "utf8"),
   ) + OUTPUT_NOTICE_RESERVE_BYTES;
@@ -185,11 +227,11 @@ export function formatEditResults(
   const truncationNotice = rangeSelection.truncated || preview.truncated
     ? "[Preview truncated. Use read with the follow-up snapshot before another edit.]"
     : "";
-  const withoutTokenText = joinSections([summary, preview.body, truncationNotice, FOLLOW_UP_UNAVAILABLE_NOTICE]);
+  const withoutTokenText = joinSections([summary, notice, preview.body, truncationNotice, FOLLOW_UP_UNAVAILABLE_NOTICE]);
   assertOutputBounded(withoutTokenText);
   let withTokenText: string | undefined;
   if (preview.seen.length > 0) {
-    withTokenText = joinSections([summary, `${header}\n${preview.body}`, truncationNotice]);
+    withTokenText = joinSections([summary, notice, `${header}\n${preview.body}`, truncationNotice]);
     assertOutputBounded(withTokenText);
   }
   return Object.freeze({ withTokenText, withoutTokenText, seen: preview.seen });
