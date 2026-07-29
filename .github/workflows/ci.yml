@@ -44,6 +44,8 @@ jobs:
             testDependencies: "goal plan request"
           - extension: promptline-editor
             testDependencies: ""
+          - extension: diffreport
+            testDependencies: ""
     defaults:
       run:
         working-directory: ${{ matrix.extension }}

@@ -99,11 +99,12 @@ TUI `session_start` 时，Request 在共享 `ExtensionUIContext` 实例上安装
 
 例如 Goal 的 “Replace active goal?” 和 Todo 的 `/todos clear` 都使用 `ctx.ui.confirm()`，因此同时加载 Request 后会自动采用统一 renderer；没有加载 Request 时仍使用 Pi 原生确认框。专用的 Plan Review 等 `ctx.ui.custom()` 组件仍保留自己的领域界面。
 
-### 与 Goal、Plan 和 Todo 的边界
+### 与 Goal、Plan、Todo 和 Diffreport 的边界
 
 - Goal 的 active-objective replacement 与 Todo 的 `/todos clear` 通过标准 `ctx.ui.confirm()` 自动获得 Request renderer；调用方仍拥有确认后的状态转换与 journal 写入。
 - Plan Review 保留自己的领域组件；Plan clarification 由其领域状态机调用 Request service 展示单选问题，Plan 仍独自验证选择并写入 journal。Todo managed Plan progress 不经过 Request coordinator。
-- Request 不调用 Todo service，不创建普通 Todo task，也不读取或更新 managed Plan ledger。它只负责交互结果；Goal、Plan、Todo 分别校验结果并提交自己的状态。
+- Diffreport 通过直接 `RequestService` 选择 branch + description、未提交改动、branch 或 commit history，并确认缺失的 target/base/ref；启动后的 agent 继续通过同一个 `ask` tool 澄清会改变报告结论的业务边界。Diffreport 独自执行 Git 取证、生成探索 brief 和落盘 Markdown，Request 不保存分析状态或报告内容。
+- Request 不调用 Todo service、不执行 Git、不创建报告，也不读取或更新任何 workflow ledger。它只负责交互结果；Goal、Plan、Todo 和 Diffreport 分别校验答案并提交自己的领域状态或动作。
 
 ### 版本化事件协议
 
