@@ -28,7 +28,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 }
 
 test("refreshes the branch after a linked worktree switches", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "promptline-editor-"));
+  const root = mkdtempSync(join(tmpdir(), "jaron-"));
   const repository = join(root, "repository");
   const worktree = join(root, "worktree");
   t.after(() => rmSync(root, { recursive: true, force: true }));

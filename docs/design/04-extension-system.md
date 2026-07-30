@@ -475,7 +475,7 @@ flowchart TB
     Request[request<br/>共享 UI adapter + 串行 dialog + 协议]
     Hashline[hashline<br/>read/edit override + branch snapshot + byte CAS]
     Todo[todo<br/>branch 执行账本 + bounded snapshot + Plan gate]
-    Promptline[promptline-editor<br/>自定义 editor + 状态条 + Git watcher]
+    Jaron[jaron<br/>自定义 editor + 状态条 + Git watcher]
 
     RG --> Tools[工具控制]
     Hashline --> Tools
@@ -548,6 +548,6 @@ Extension API 的本质是一个**进程内 Harness 控制平面**。它强大�
 - [本仓库 Hashline README](../../hashline/README.md)
 - [本仓库 Request README](../../request/README.md)
 - [本仓库 Todo README](../../todo/README.md)
-- [本仓库 Promptline Editor README](../../promptline-editor/README.md)
+- [本仓库 Jaron README](../../jaron/README.md)
 - [跨扩展通用协议](09-cross-extension-protocols.md)
 - [上一篇：上下文、会话与记忆](03-context-and-sessions.md) · [下一篇：社区生态与衍生 Agent](05-ecosystem-and-agents.md)

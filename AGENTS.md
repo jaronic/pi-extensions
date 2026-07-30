@@ -12,7 +12,7 @@ Ten independent, private TypeScript extensions for `@earendil-works/pi-coding-ag
 | `hashline` | `read`/`edit` overrides with branch-local SHA-256 snapshots and CAS writes |
 | `request` | one responsive request UI for `ask`, native dialogs, versioned cross-extension requests |
 | `todo` | bounded branch-local execution ledger; Plan-aware mutation gating |
-| `promptline-editor` | themed custom editor, status line, live Git branch indicator |
+| `jaron` | themed custom editor, status line, live Git branch indicator; host package for pi TUI theme development |
 | `diffreport` | bounded Git evidence + multi-pass exploration into an evidence-backed Markdown report |
 | `themes/` | repository-wide light/dark Pi palettes (`pi-extensions-*`) |
 
@@ -31,7 +31,7 @@ Each extension's internals (state machines, protocols, tool contracts, key files
 Node `>=22.19.0`, npm, native ESM (do not assume Bun-specific APIs). Per package:
 
 ```sh
-cd <extension>        # goal plan lsp ast-grep hashline request rg todo promptline-editor diffreport
+cd <extension>        # goal plan lsp ast-grep hashline request rg todo jaron diffreport
 npm ci
 npm run check         # tsc --noEmit; no build/lint/format/dev scripts exist
 npm test              # node --import tsx --test test/*.test.ts

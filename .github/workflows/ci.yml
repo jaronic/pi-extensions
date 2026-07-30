@@ -42,7 +42,7 @@ jobs:
             testDependencies: ""
           - extension: todo
             testDependencies: "goal plan request"
-          - extension: promptline-editor
+          - extension: jaron
             testDependencies: ""
           - extension: diffreport
             testDependencies: ""

@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = dirname(SCRIPT_DIRECTORY);
 const SCRIPT = join(SCRIPT_DIRECTORY, "pi-global-links.sh");
-const EXTENSIONS = ["goal", "plan", "lsp", "ast-grep", "hashline", "request", "rg", "todo", "promptline-editor", "diffreport"];
+const EXTENSIONS = ["goal", "plan", "lsp", "ast-grep", "hashline", "request", "rg", "todo", "jaron", "diffreport"];
 const THEMES = readdirSync(join(REPOSITORY_ROOT, "themes"))
   .filter((name) => /^pi-extensions-.*\.json$/.test(name))
   .sort();

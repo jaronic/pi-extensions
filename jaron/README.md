@@ -1,4 +1,4 @@
-# Promptline Editor
+# Jaron
 
 参考截图风格的自定义 pi 输入框：深色终端感、细黄色闭合边框、底部独立状态条。
 

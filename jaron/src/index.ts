@@ -138,7 +138,7 @@ class EmptyFooter implements Component {
 	invalidate(): void {}
 }
 
-export default function promptlineEditor(pi: ExtensionAPI): void {
+export default function jaronEditor(pi: ExtensionAPI): void {
 	let activeTui: TUI | undefined;
 	let working = false;
 	let spinnerIndex = 0;
@@ -204,14 +204,14 @@ export default function promptlineEditor(pi: ExtensionAPI): void {
 		});
 		void branchMonitor.start(ctx.cwd);
 
-		class PromptlineEditor extends CustomEditor {
+		class JaronEditor extends CustomEditor {
 			constructor(
 				tui: TUI,
 				theme: EditorTheme,
 				keybindings: KeybindingsManager,
 			) {
 				const thm = ctx.ui.theme;
-				const promptlineTheme: EditorTheme = {
+				const jaronTheme: EditorTheme = {
 					...theme,
 					borderColor: (value: string) => thm.fg("warning", value),
 					selectList: {
@@ -224,8 +224,8 @@ export default function promptlineEditor(pi: ExtensionAPI): void {
 						noMatch: (value: string) => thm.fg("warning", thm.bold(value)),
 					},
 				};
-				super(tui, promptlineTheme, keybindings, { paddingX: 1 });
-				this.borderColor = promptlineTheme.borderColor;
+				super(tui, jaronTheme, keybindings, { paddingX: 1 });
+				this.borderColor = jaronTheme.borderColor;
 				activeTui = tui;
 			}
 
@@ -292,7 +292,7 @@ export default function promptlineEditor(pi: ExtensionAPI): void {
 
 		ctx.ui.setEditorComponent(
 			(tui, theme, keybindings) =>
-				new PromptlineEditor(tui, theme, keybindings),
+				new JaronEditor(tui, theme, keybindings),
 		);
 	});
 }
