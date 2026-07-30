@@ -111,6 +111,64 @@ test("append extends existing and new phases atomically without consuming IDs on
   assert.equal(todoCounts(withPhase).total, 4);
 });
 
+test("append revives a settled board with continuous IDs and preserved history", () => {
+  const initial = initState([{ phase: "A", items: ["One", "Two"] }]);
+  const doneState = transitionTodo(initial, { op: "done", id: 1 }, 101, () => BOARD_A).state;
+  assert.ok(doneState);
+  const settled = transitionTodo(doneState, { op: "drop", id: 2, reason: "out of scope" }, 102, () => BOARD_A).state;
+  assert.ok(settled);
+  assert.equal(todoBoardStatus(settled), "settled");
+
+  const revived = transitionTodo(settled, { op: "append", phase: "B", items: ["Three"] }, 103, () => BOARD_A);
+  assert.ok(revived.state);
+  assert.deepEqual(revived.effect, { kind: "appended", ids: [3] });
+  assert.equal(revived.state.boardId, BOARD_A);
+  assert.equal(revived.state.nextTaskId, 4);
+  assert.equal(todoBoardStatus(revived.state), "active");
+  assert.equal(task(revived.state, 1).status, "completed");
+  assert.equal(task(revived.state, 2).status, "dropped");
+  assert.equal(task(revived.state, 3).status, "inProgress");
+});
+
+test("drop applies id arrays atomically with a shared reason", () => {
+  const initial = initState([{ phase: "A", items: ["One", "Two"] }, { phase: "B", items: ["Three", "Four"] }]);
+  const bulk = transitionTodo(initial, { op: "drop", id: [1, 3], reason: "scope pivoted" }, 101, () => BOARD_A);
+  assert.ok(bulk.state);
+  assert.deepEqual(bulk.effect, { kind: "bulkDropped", ids: [1, 3] });
+  assert.deepEqual(bulk.changedTaskIds, [1, 3, 2]);
+  assert.equal(task(bulk.state, 1).status, "dropped");
+  assert.equal(task(bulk.state, 1).statusDetail, "scope pivoted");
+  assert.equal(task(bulk.state, 3).status, "dropped");
+  assert.equal(task(bulk.state, 3).statusDetail, "scope pivoted");
+  assert.equal(task(bulk.state, 2).status, "inProgress");
+
+  const single = transitionTodo(bulk.state, { op: "drop", id: 4, reason: "not needed" }, 102, () => BOARD_A);
+  assert.deepEqual(single.effect, { kind: "statusChanged", id: 4, from: "pending", to: "dropped" });
+  assert.ok(single.state);
+
+  // One closed, missing, or duplicated target rejects the whole call without
+  // consuming a revision or changing any task.
+  const revisionBefore = single.state.revision;
+  assert.throws(
+    () => transitionTodo(single.state, { op: "drop", id: [2, 1], reason: "mixed" }, 103, () => BOARD_A),
+    /pending, inProgress, or blocked/,
+  );
+  assert.throws(
+    () => transitionTodo(single.state, { op: "drop", id: [2, 99], reason: "missing" }, 103, () => BOARD_A),
+    /#99 does not exist/,
+  );
+  assert.throws(
+    () => transitionTodo(single.state, { op: "drop", id: [2, 2], reason: "dup" }, 103, () => BOARD_A),
+    /must be unique/,
+  );
+  assert.throws(
+    () => transitionTodo(single.state, { op: "drop", id: [], reason: "empty" }, 103, () => BOARD_A),
+    /1 to 100 task IDs/,
+  );
+  assert.equal(single.state.revision, revisionBefore);
+  assert.equal(task(single.state, 2).status, "inProgress");
+});
+
 test("start enforces one active task and supports explicit cross-phase switching", () => {
   const initial = initState([
     { phase: "A", items: ["One", "Two"] },

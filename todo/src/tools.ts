@@ -235,6 +235,7 @@ export function registerTodoTool(pi: ExtensionAPI, runtime: TodoToolRuntime): vo
       const op = typeof args.op === "string" && TODO_OPERATIONS.includes(args.op as TodoOperation) ? args.op : "operation";
       let suffix = "";
       if (Number.isSafeInteger(args.id) && (args.id as number) > 0) suffix = ` #${args.id}`;
+      else if (op === "drop" && Array.isArray(args.id)) suffix = ` ${args.id.length} tasks`;
       else if (op === "init" && Array.isArray(args.list)) {
         const count = args.list.reduce((total, entry) => total + (Array.isArray(entry?.items) ? entry.items.length : 0), 0);
         suffix = ` ${count} item${count === 1 ? "" : "s"}`;

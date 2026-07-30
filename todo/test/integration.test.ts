@@ -98,6 +98,28 @@ test("registered tool executes the complete lifecycle with stable IDs and read-o
   assert.equal(harness.getTool().executionMode, "sequential");
 });
 
+test("tool drop accepts an atomic id array with one shared reason", async () => {
+  const harness = new TodoHarness();
+  install(harness);
+  await harness.startSession();
+  await harness.tool({ op: "init", list: [{ phase: "A", items: ["One", "Two", "Three"] }] });
+
+  const dropped = await harness.tool({ op: "drop", id: [1, 3], reason: "scope pivoted" });
+  assert.equal(dropped.details.counts.dropped, 2);
+  assert.deepEqual(dropped.details.changedTaskIds, [1, 3, 2]);
+  assert.equal(stateFrom(dropped).phases[0].tasks[1].status, "inProgress");
+  assert.match(String(dropped.content[0].text), /Dropped 2 Todo tasks: #1, #3\./);
+
+  const sequenceBefore = sequenceFrom(dropped);
+  await assert.rejects(
+    harness.tool({ op: "drop", id: [2, 1], reason: "mixed" }),
+    /pending, inProgress, or blocked/,
+  );
+  const view = await harness.tool({ op: "view" });
+  assert.equal(sequenceFrom(view), sequenceBefore, "a rejected bulk drop consumes no sequence");
+  assert.equal(view.details.counts.dropped, 2);
+});
+
 test("global Todo service shares the model-visible branch board and survives restart", async () => {
   const harness = new TodoHarness();
   install(harness);

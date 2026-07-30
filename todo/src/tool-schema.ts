@@ -52,8 +52,13 @@ export const TodoParams = Type.Object({
   ], { description: "append only: ordered task texts to add; null for every other operation." })),
   id: Type.Optional(Type.Union([
     Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+    Type.Array(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }), {
+      minItems: 1,
+      maxItems: MAX_TODO_TASKS,
+      description: "drop only: several stable task IDs dropped atomically with one shared reason",
+    }),
     Type.Null(),
-  ], { description: "start, done, block, drop, reopen, edit, or get: stable task ID; null for init, append, or view." })),
+  ], { description: "start, done, block, reopen, edit, or get: stable task ID; drop: one ID or an array of IDs; null for init, append, or view." })),
   content: Type.Optional(Type.Union([
     Type.String({ minLength: 1, maxLength: MAX_TASK_CONTENT_CHARS }),
     Type.Null(),

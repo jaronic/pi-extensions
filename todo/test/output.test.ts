@@ -76,6 +76,18 @@ test("settling mutation appends a bounded recap of completed and dropped tasks",
   assert.ok(Buffer.byteLength(bulkText, "utf8") <= MAX_MODEL_OUTPUT_BYTES);
 });
 
+test("a settling bulk drop names every dropped task and appends the recap", () => {
+  const initial = stateWith(["Inspect", "Implement", "Verify"]);
+  const settled = transitionTodo(initial, { op: "drop", id: [1, 2, 3], reason: "scope pivoted" }, 11, () => BOARD);
+  assert.ok(settled.state);
+  const text = buildTodoMutationText("drop", snapshot(settled.state, 2), settled);
+  assert.match(text, /Dropped 3 Todo tasks: #1, #2, #3\./);
+  assert.match(text, /Todo board settled\./);
+  assert.match(text, /Settled recap:/);
+  assert.match(text, /× #1 Inspect \[dropped: scope pivoted\]/);
+  assert.match(text, /× #3 Verify \[dropped: scope pivoted\]/);
+});
+
 test("view defaults to open tasks and supports phase, closed, offset, and limit", () => {
   let state = stateWith(["One", "Two", "Three", "Four"]);
   state = transitionTodo(state, { op: "done", id: 1 }, 11, () => BOARD).state!;

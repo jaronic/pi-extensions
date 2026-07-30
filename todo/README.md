@@ -24,7 +24,7 @@ Todo 适合以下工作：
 - TUI 使用独立的 `todo` widget，最多 12 行；Plan 候选期隐藏普通 board，批准后 Plan UI 清除，Todo 以相同的 `#1`、`#2` 样式继续显示转交任务；
 - open task 的有界摘要会注入每轮 system prompt，所有文本按不可信数据处理；
 - 成功工具结果、用户命令、service mutation 与 Plan handoff 都写入同一普通 Todo branch journal，切换 branch 时恢复最高有效快照；
-- 看板 settled（全部任务 completed/dropped）时立即清理 widget 与 status；结算的那次 `done`/`drop` 工具结果附带有界的 `Settled recap:`（completed/dropped 任务列表），并有 guideline 要求模型在同一回复中向用户总结完成了哪些任务；历史状态仍可通过 `/todos` 或 `todo view includeClosed:true` 查看。
+- 看板 settled（全部任务 completed/dropped）时立即清理 widget 与 status；结算的那次 `done`/`drop` 工具结果附带有界的 `Settled recap:`（completed/dropped 任务列表），并有 guideline 要求模型在同一回复中向用户总结完成了哪些任务；历史状态仍可通过 `/todos` 或 `todo view includeClosed:true` 查看。settled 不是终态：对 settled 看板 `append` 会在保留历史与连续 `#ID` 的前提下把看板恢复为 active，`init` 仍可在 settled 后整板替换开新局。
 
 ## 安装与启用
 
@@ -67,11 +67,11 @@ pi --no-session --extension ./src/index.ts
 | `op` | 必填字段 | 行为 |
 | --- | --- | --- |
 | `init` | `list: [{ phase, items[] }]` | 创建完整有序看板；自动把第一项设为 `inProgress`。仅在无看板或当前看板已 settled 时允许。 |
-| `append` | `phase`, `items[]` | 向现有或新 phase 原子追加任务；不允许覆盖或替换 open 看板。 |
+| `append` | `phase`, `items[]` | 向现有或新 phase 原子追加任务；settled 看板追加后自动恢复为 active（历史保留、`#ID` 连续）；不允许覆盖或替换 open 看板。 |
 | `start` | `id` | 启动一个 `pending` 项；原活动项退回 `pending`。 |
 | `done` | `id`，可选 `note` | 仅完成当前 `inProgress` 项；`note` 可记录简短验证证据。 |
 | `block` | `id`, `reason` | 阻塞当前活动项并自动推进；只用于具体外部依赖、用户决定或权限缺失。 |
-| `drop` | `id`, `reason` | 把仍在范围中的项标为 `dropped`，保留 tombstone 和原因。 |
+| `drop` | `id`, `reason` | 把仍在范围中的项标为 `dropped`，保留 tombstone 和原因。`id` 也接受 ID 数组：一次调用原子丢弃多个任务并共享同一 `reason`，任一 ID 已关闭/不存在/重复则整体拒绝；计划转向废弃整批任务时使用。 |
 | `reopen` | `id`, `reason` | 重新打开 `blocked`、`completed` 或 `dropped` 项，并按需自动推进。 |
 | `edit` | `id`, `content` | 修改未关闭任务的文本；稳定 ID 不变。 |
 | `get` | `id` | 读取当前 board 中一项任务及 phase、状态和时间戳。 |
@@ -170,6 +170,7 @@ Widget heading 显示当前（或下一可见）phase，任务按“当前项 �
 | phase 数 | 20 |
 | 每个 board 的任务总数 | 100 |
 | 单次 append | 50 |
+| 单次 drop 的 ID 数组 | 100 |
 | phase 名 | 80 字符 |
 | task 文本 | 240 字符 |
 | reason/note | 500 字符 |

@@ -12,7 +12,7 @@ export type TodoServiceOperation =
   | { readonly op: "start"; readonly id: number }
   | { readonly op: "done"; readonly id: number; readonly note?: string | null }
   | { readonly op: "block"; readonly id: number; readonly reason: string }
-  | { readonly op: "drop"; readonly id: number; readonly reason: string }
+  | { readonly op: "drop"; readonly id: number | readonly number[]; readonly reason: string }
   | { readonly op: "reopen"; readonly id: number; readonly reason: string }
   | { readonly op: "edit"; readonly id: number; readonly content: string }
   | { readonly op: "get"; readonly id: number }

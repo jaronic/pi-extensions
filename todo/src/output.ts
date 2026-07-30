@@ -266,7 +266,7 @@ export function buildTodoMutationText(
   const counts = todoCounts(state);
   const primaryId = transition.effect.kind === "statusChanged" || transition.effect.kind === "edited"
     ? transition.effect.id
-    : transition.effect.kind === "appended"
+    : transition.effect.kind === "appended" || transition.effect.kind === "bulkDropped"
       ? transition.effect.ids[0]
       : undefined;
   const primary = state && primaryId !== undefined ? findTodoTask(state, primaryId)?.task : undefined;
@@ -280,6 +280,9 @@ export function buildTodoMutationText(
       break;
     case "statusChanged":
       first = `${op === "done" ? "Completed" : op === "block" ? "Blocked" : op === "drop" ? "Dropped" : op === "reopen" ? "Reopened" : "Started"} #${transition.effect.id}${primary ? `: ${primary.content}` : ""}.`;
+      break;
+    case "bulkDropped":
+      first = `Dropped ${transition.effect.ids.length} Todo tasks: ${transition.effect.ids.map((droppedId) => `#${droppedId}`).join(", ")}.`;
       break;
     case "edited":
       first = `Edited Todo #${transition.effect.id}${primary ? `: ${primary.content}` : ""}.`;
@@ -297,7 +300,7 @@ export function buildTodoMutationText(
   else if (state && todoBoardStatus(state) === "blocked") lines.push(`No runnable task; ${counts.blocked} blocked.`);
   else if (state && todoBoardStatus(state) === "settled") {
     lines.push("Todo board settled.");
-    if (transition.effect.kind === "statusChanged") lines.push(...settledRecapLines(state));
+    if (transition.effect.kind === "statusChanged" || transition.effect.kind === "bulkDropped") lines.push(...settledRecapLines(state));
   }
   return lines.join("\n");
 }

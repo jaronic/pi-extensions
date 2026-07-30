@@ -76,6 +76,7 @@ export type TodoTransitionEffect =
   | { readonly kind: "cleared" }
   | { readonly kind: "appended"; readonly ids: readonly number[] }
   | { readonly kind: "statusChanged"; readonly id: number; readonly from: TodoStatus; readonly to: TodoStatus }
+  | { readonly kind: "bulkDropped"; readonly ids: readonly number[] }
   | { readonly kind: "edited"; readonly id: number }
   | { readonly kind: "noChange" };
 
@@ -157,6 +158,16 @@ export function normalizeStatusDetail(value: unknown, label = "Todo status detai
 
 export function normalizeTaskId(value: unknown, label = "Todo task ID"): number {
   return assertSafeInteger(value, label, 1);
+}
+
+function normalizeDropIds(value: unknown): number[] {
+  if (!Array.isArray(value)) return [normalizeTaskId(value)];
+  if (value.length === 0 || value.length > MAX_TODO_TASKS) {
+    throw new Error(`Todo drop requires 1 to ${MAX_TODO_TASKS} task IDs.`);
+  }
+  const ids = value.map((entry, index) => normalizeTaskId(entry, `Todo drop task ID ${index + 1}`));
+  if (new Set(ids).size !== ids.length) throw new Error("Todo drop task IDs must be unique.");
+  return ids;
 }
 
 function normalizeBoardId(value: unknown): string {
@@ -531,9 +542,6 @@ export function transitionTodo(
   const timestamp = normalizeNow(now, state);
 
   if (input.op === "append") {
-    if (todoBoardStatus(state) === "settled") {
-      throw new Error("Todo append cannot extend a settled board; initialize a new board instead.");
-    }
     const phaseName = normalizePhaseName(input.phase);
     if (!Array.isArray(input.items) || input.items.length === 0 || input.items.length > MAX_ITEMS_PER_APPEND) {
       throw new Error(`Todo append requires 1 to ${MAX_ITEMS_PER_APPEND} tasks.`);
@@ -568,6 +576,35 @@ export function transitionTodo(
     candidate.nextTaskId = nextTaskId;
     const appended = finalizeState(candidate);
     return freezeTransition(appended, promoted === undefined ? ids : [...ids, promoted], { kind: "appended", ids: Object.freeze(ids) });
+  }
+
+  if (input.op === "drop") {
+    // Bulk drops validate every target before cloning so one bad ID rejects
+    // the whole call without consuming a revision or task state.
+    const ids = normalizeDropIds(input.id);
+    const targets = ids.map((dropId) => {
+      const found = findTodoTask(state, dropId);
+      if (!found) throw new Error(`Todo task #${dropId} does not exist on the current board.`);
+      return found.task;
+    });
+    if (targets.some((target) => target.status === "completed" || target.status === "dropped")) {
+      throw new Error("Todo drop only accepts a pending, inProgress, or blocked task.");
+    }
+    const reason = normalizeStatusDetail(input.reason, "Todo drop reason");
+    const phases = clonePhases(state);
+    for (const dropId of ids) {
+      const { task } = findMutableTask(phases, dropId);
+      task.status = "dropped";
+      task.statusDetail = reason;
+      task.updatedAt = timestamp;
+      delete task.completedAt;
+    }
+    const promoted = promoteNextTask(phases, timestamp);
+    const next = finalizeState(candidateFrom(state, phases, timestamp));
+    const effect: TodoTransitionEffect = ids.length === 1
+      ? { kind: "statusChanged", id: ids[0], from: targets[0]?.status ?? "pending", to: "dropped" }
+      : { kind: "bulkDropped", ids: Object.freeze([...ids]) };
+    return freezeTransition(next, promoted === undefined ? ids : [...ids, promoted], effect);
   }
 
   const id = normalizeTaskId(input.id);
@@ -612,17 +649,6 @@ export function transitionTodo(
     task.status = "blocked";
     task.statusDetail = normalizeStatusDetail(input.reason, "Todo blocker reason");
     task.updatedAt = timestamp;
-    changed.push(task.id);
-    const promoted = promoteNextTask(phases, timestamp);
-    if (promoted !== undefined) changed.push(promoted);
-  } else if (input.op === "drop") {
-    if (task.status === "completed" || task.status === "dropped") {
-      throw new Error("Todo drop only accepts a pending, inProgress, or blocked task.");
-    }
-    task.status = "dropped";
-    task.statusDetail = normalizeStatusDetail(input.reason, "Todo drop reason");
-    task.updatedAt = timestamp;
-    delete task.completedAt;
     changed.push(task.id);
     const promoted = promoteNextTask(phases, timestamp);
     if (promoted !== undefined) changed.push(promoted);
