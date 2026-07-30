@@ -74,6 +74,8 @@ agent 也可调用：
 
 ### Action 与参数
 
+推荐工作流：重命名导出符号或改其签名前，必须先跑 `references` 找全 callsite（文本搜索会漏 re-export 和别名用法）；重命名用 `rename_preview` 拿全部受影响位置，再用 edit 落地，比 `rg` 加手动查找更快更全。有意义的改动后跑 `diagnostics` 验证。
+
 | Action | 必填参数 | 可选参数/说明 |
 | --- | --- | --- |
 | `diagnostics` | `file` | `severity` 为 `all|error|warning|info|hint`；可指定 `server`。 |

@@ -113,9 +113,11 @@ export default function lspExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "lsp",
     label: "LSP",
-    description: "Language-server diagnostics and semantic navigation. Rename and code actions are preview-only and never modify files. Output is limited to 2,000 lines or 50KB; truncated output is saved to a temporary artifact.",
+    description: "Language-server diagnostics and semantic navigation. Rename and code actions are preview-only and never modify files. Prefer this over text search for symbol work: renaming a variable or function across files, finding every reference before changing an exported symbol, or checking diagnostics after edits. Output is limited to 2,000 lines or 50KB; truncated output is saved to a temporary artifact.",
     promptSnippet: "LSP diagnostics, hover, definitions, references, symbols, and safe refactor previews",
     promptGuidelines: [
+      "Before renaming or changing the signature of an exported symbol, MUST run lsp action=references to find every callsite; text search misses re-exports and aliased usages.",
+      "For a rename, use lsp action=rename_preview for the complete affected-location preview, then apply the edits; faster and more complete than rg plus manual edits.",
       "Use lsp for semantic definitions, references, type information, diagnostics, and symbol-aware rename previews.",
       "Use lsp action=diagnostics after meaningful edits when a matching language server is installed.",
       "Usually omit server. When selecting one, use its configured ID or a unique language ID such as java for jdtls.",

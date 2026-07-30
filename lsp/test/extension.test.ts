@@ -10,6 +10,8 @@ import { decodeAstGrepApplyPath, syncSuccessfulToolResult } from "../src/tool-sy
 
 interface ToolDefinition {
   name: string;
+  promptSnippet?: string;
+  promptGuidelines?: string[];
   execute: (...args: unknown[]) => unknown;
 }
 
@@ -24,6 +26,24 @@ interface ToolResult {
 type LifecycleHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
 
 
+test("lsp tool ships a prompt snippet and references-before-rename guidance", () => {
+  let tool: ToolDefinition | undefined;
+  const api = {
+    registerTool(definition: ToolDefinition) {
+      if (definition.name === "lsp") tool = definition;
+    },
+    registerCommand() {},
+    on() {},
+  } as unknown as ExtensionAPI;
+
+  lspExtension(api);
+  // Pi lists a tool in the system prompt only when it carries a promptSnippet,
+  // and the rename workflow depends on the model seeing the references-first rule.
+  assert.ok(tool?.promptSnippet && tool.promptSnippet.length > 0, "lsp must define promptSnippet");
+  const guidelines = tool?.promptGuidelines ?? [];
+  assert.ok(guidelines.some((g) => g.includes("action=references") && /MUST/u.test(g)), "guidelines must require references before rename");
+  assert.ok(guidelines.some((g) => g.includes("rename_preview")), "guidelines must mention rename_preview");
+});
 const fakeServer = join(dirname(fileURLToPath(import.meta.url)), "fake-server.mjs");
 
 test("lsp rename_preview reports every document change and preserves its full artifact", async () => {
