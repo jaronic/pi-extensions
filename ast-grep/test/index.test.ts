@@ -6,6 +6,8 @@ import astGrepExtension from "../src/index.ts";
 interface ToolDefinition {
   name: string;
   executionMode?: string;
+  promptSnippet?: string;
+  promptGuidelines?: string[];
   execute: (...args: unknown[]) => unknown;
 }
 
@@ -29,6 +31,13 @@ test("extension factory registers two narrow tools without starting native work"
   assert.deepEqual([...tools.keys()], ["ast_grep_search", "ast_grep_edit"]);
   assert.equal(tools.get("ast_grep_search")?.executionMode, "parallel");
   assert.equal(tools.get("ast_grep_edit")?.executionMode, "sequential");
+  // Discoverability contract: Pi lists a tool in the system prompt only when it
+  // carries a one-line promptSnippet, so both tools must ship one.
+  for (const name of ["ast_grep_search", "ast_grep_edit"]) {
+    const tool = tools.get(name);
+    assert.ok(tool?.promptSnippet && tool.promptSnippet.length > 0, `${name} must define promptSnippet`);
+    assert.ok((tool?.promptGuidelines?.length ?? 0) > 0, `${name} must define promptGuidelines`);
+  }
   assert.equal(handlers.get("session_start"), undefined);
   assert.equal(handlers.get("session_tree"), undefined);
   assert.equal(handlers.get("session_shutdown")?.length, 1);

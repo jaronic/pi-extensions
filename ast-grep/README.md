@@ -7,6 +7,8 @@
 
 它补充而不替代 `rg` 和 `lsp`：文字/正则搜索用 `rg`，symbol、reference、diagnostic 和语言服务器重构用 `lsp`，语法形状和 metavariable rewrite 用本插件。
 
+何时优先本插件：重命名或改签名前，用 `ast_grep_search` 结构搜索而非 `rg`，以覆盖简写、多行和 re-export 形式；单文件内的符号重命名或重复调用形状改写，用 `ast_grep_edit` 一次原子完成，而不是多次手动 edit。
+
 > 维护约束：工具参数、默认值、语言/平台、二进制版本、路径/写入边界、输出、Plan/LSP 集成、安装或发布门发生变化时，必须在同一改动中更新本 README。
 
 ## 运行边界
@@ -114,7 +116,7 @@ ln -sfn "$PWD" "$HOME/.pi/agent/extensions/ast-grep"
 | `strictness` | `smart` | 与 search 相同。 |
 | `maxReplacements` | `20` | 1–50；限制dedupe/no-op归一化后的有效替换，超过即零写入失败；raw CLI records另有固定50条硬上限。 |
 | `timeoutMs` | `20000` | 1000–120000 ms。 |
-| `previewId` | 无 | Preview 默认省略；若工具适配器强制填充该字段，只接受 `null` 或空字符串 placeholder，并在执行前移除。非空值仅供 apply 使用，且必须是 64 位 lower-case hex。 |
+| `previewId` | 无 | action=preview 禁止携带（省略该字段；工具适配器强制填充时只容忍 `null` 或空字符串 placeholder，执行前移除），报错后按原调用去掉该字段重试。action=apply 必填，必须是 preview 返回的 64 位 lower-case hex。 |
 
 正确流程：
 

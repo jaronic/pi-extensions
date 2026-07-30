@@ -45,7 +45,7 @@ export const EditParameters = Type.Object(
       Type.String(),
       Type.Null(),
     ], {
-      description: "Apply requires the returned 64-character ID. Preview should omit this field; use null or an empty string only when a tool adapter requires a placeholder.",
+      description: "REQUIRED for action=apply: the 64-character hex ID returned by preview. FORBIDDEN for action=preview: omit the field entirely; null or an empty string is tolerated only when a tool adapter requires a placeholder.",
     })),
   },
   { additionalProperties: false },
@@ -143,7 +143,7 @@ export function normalizeEditInput(input: EditInput): NormalizedEditInput {
   const { previewId: rawPreviewId, ...withoutPreviewId } = input;
   const previewId = rawPreviewId ?? undefined;
   if (input.action === "preview" && previewId !== undefined && previewId !== "") {
-    throw new Error("preview must omit previewId or use null/empty only as an adapter placeholder; preview returns a new ID when changes exist.");
+    throw new Error("preview must omit previewId (null/empty are tolerated only as adapter placeholders); retry the same call without previewId and pass the fresh ID from that preview to action=apply.");
   }
   if (input.action === "apply" && !/^[a-f0-9]{64}$/u.test(previewId ?? "")) {
     throw new Error("apply requires previewId as exactly 64 lower-case hexadecimal characters.");

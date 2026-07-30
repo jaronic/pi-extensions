@@ -32,10 +32,11 @@ export default function astGrepExtension(pi: ExtensionAPI): void {
     name: "ast_grep_search",
     label: "AST-Grep Search",
     description:
-      "AST-aware structural search for one explicit language and one file or directory scope. Use $NAME for one captured node, $_ for an uncaptured node, $$VAR for an unnamed node, and $$$NAME for zero or more nodes. Repeated captures must be structurally equal. Use selector with enough parseable context for non-standalone fragments. This is not text grep: use rg for literal or regex text search.",
+      "AST-aware structural search for one explicit language and one file or directory scope. Use $NAME for one captured node, $_ for an uncaptured node, $$VAR for an unnamed node, and $$$NAME for zero or more nodes. Repeated captures must be structurally equal. Use selector with enough parseable context for non-standalone fragments. This is not text grep: use rg for literal or regex text search. Prefer this over rg for structural questions — every call of a function, each class extending a base, all occurrences of a symbol before a rename — where text search misses shorthand, multiline, or aliased forms.",
     promptSnippet: "AST-aware structural search for one language",
     promptGuidelines: [
       "Use ast_grep_search for syntax shape; use rg for text. Narrow path first and query one language at a time.",
+      "Before a rename or signature change, search structurally with ast_grep_search instead of rg to catch shorthand, multiline, and re-exported forms.",
       "Pattern and selector must parse in the requested language. Type annotations or wrappers may need explicit context.",
       "Pagination is deterministic only while the workspace is unchanged; restart at offset 0 after writes.",
     ],
@@ -62,8 +63,11 @@ export default function astGrepExtension(pi: ExtensionAPI): void {
     name: "ast_grep_edit",
     label: "AST-Grep Edit",
     description:
-      "Preview or atomically apply one-file ast-grep rewrites. Always call action=preview first. Apply must repeat the same path, language, pattern, rewrite, selector, strictness, and maxReplacements with the returned previewId; timeout may differ. The ID binds the canonical workspace path, semantic query, current source bytes, and actual replacement ranges. It is not approval. After any failure or source change, preview again instead of retrying an old ID.",
+      "Structural rewrite of one file: rename a symbol, reshape call sites, or delete matches atomically instead of many manual edit calls. Workflow: call action=preview WITHOUT previewId, inspect the complete preview, then action=apply repeating the same path, language, pattern, rewrite, selector, strictness, and maxReplacements plus the returned previewId; timeout may differ. The ID binds the canonical workspace path, semantic query, current source bytes, and actual replacement ranges. It is not approval. After any failure or source change, preview again instead of retrying an old ID.",
+    promptSnippet: "Atomic structural rewrite of one file via preview then apply",
     promptGuidelines: [
+      "For renaming a symbol or rewriting a repeated call shape within one file, prefer ast_grep_edit over a sequence of manual edits.",
+      "action=preview must omit previewId entirely; only action=apply sends the ID returned by that preview.",
       "Always inspect a complete ast_grep_edit preview before apply; previewId is a stale-write guard, not user authorization.",
       "An empty rewrite deletes matched non-empty ranges. v1 refuses zero-width, overlapping, hard-linked, non-UTF-8, or syntax-ERROR sources.",
       "After apply, use the committed result hashes or VCS diff to review the file; do not reuse the previewId.",
