@@ -121,7 +121,7 @@ function formatLine(
   context?: Record<string, unknown>,
 ): string {
   const record = {
-    ts: new Date().toISOString(),
+    ts: localTimestamp(),
     level,
     ext: extension,
     event,
@@ -136,6 +136,21 @@ function formatLine(
   }
   // One JSON object per line keeps the log greppable and machine-parseable.
   return `${serialized}\n`;
+}
+
+// Local wall-clock time with the numeric UTC offset (e.g.
+// "2026-07-30T21:38:55.148+08:00") instead of UTC "Z": the log exists for
+// troubleshooting against the operator's own clock, and the explicit offset
+// keeps the line unambiguous and RFC 3339 parseable.
+function localTimestamp(): string {
+  const now = new Date();
+  const pad = (value: number, width = 2): string => String(value).padStart(width, "0");
+  const offsetMinutes = -now.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absolute = Math.abs(offsetMinutes);
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
+    `T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}.${pad(now.getMilliseconds(), 3)}` +
+    `${sign}${pad(Math.floor(absolute / 60))}:${pad(absolute % 60)}`;
 }
 
 function replacer(_key: string, value: unknown): unknown {

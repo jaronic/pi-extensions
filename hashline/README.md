@@ -228,7 +228,7 @@ Hashline 是误编辑约束，不是权限系统：
 - `logLevel`：`error`（默认）、`warn`、`info`、`debug`；缺失或未知取值回退 `error`。
 - `hashline.json` 目前只有这两个键；配置在扩展加载时读取一次，修改后 `/reload` 生效。环境变量优先于配置文件，适合一次性排障：`PI_HASHLINE_LOG=debug pi ...`。
 - 日志写入 `getAgentDir()/logs/hashline.log`（即 `~/.pi/agent/logs/hashline.log`）。文件超过 5 MiB 轮转为 `hashline.log.1`，只保留一份备份。
-- 每行是一条 JSON：`ts`、`level`、`ext`、`event` 与 `context`，事件目录：
+- 每行是一条 JSON：`ts`（本地时间加数字 UTC 偏移，如 `2026-07-30T21:38:55.148+08:00`）、`level`、`ext`、`event` 与 `context`，事件目录：
 
   | event | level | 关键 context |
   | --- | --- | --- |

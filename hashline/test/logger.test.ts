@@ -94,6 +94,13 @@ test("an enabled logger writes a structured JSON line", async () => {
     assert.equal(entry.event, "edit_failed");
     assert.deepEqual(entry.context, { code: "E_WRITE_FAILED", path: "a.ts" });
     assert.equal(typeof entry.ts, "string");
+    // Local wall-clock with explicit numeric offset, e.g. 2026-07-30T21:38:55.148+08:00.
+    const ts = String(entry.ts);
+    const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})([+-])(\d{2}):(\d{2})$/u.exec(ts);
+    assert.ok(match, `ts must be local time with numeric offset, got: ${ts}`);
+    const expectedOffset = -new Date().getTimezoneOffset();
+    const actualOffset = (match[8] === "+" ? 1 : -1) * (Number(match[9]) * 60 + Number(match[10]));
+    assert.equal(actualOffset, expectedOffset);
   });
 });
 
