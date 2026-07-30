@@ -208,6 +208,7 @@ test("default report paths and kickoff require a multi-pass Markdown artifact", 
   assert.match(kickoff, /reports\/diffreport\/payment\.md/);
   assert.match(kickoff, /Mermaid flow\/sequence\/state diagrams/);
   assert.match(kickoff, /problem chain, decision chain/);
+  assert.match(kickoff, /in Simplified Chinese/);
   assert.match(kickoff, /only intended workspace write/);
   assert.doesNotMatch(kickoff, /Risk Assessment|severity ranking/);
 });

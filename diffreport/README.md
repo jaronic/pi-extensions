@@ -147,7 +147,7 @@ branch/commit 的未变更代码必须从对应 target revision 读取；只有�
 
 ## 报告契约
 
-报告围绕业务可理解性组织，而不是逐文件罗列：
+报告默认使用简体中文撰写（用户在描述或 Request 澄清中明确要求其他语言时除外）。报告围绕业务可理解性组织，而不是逐文件罗列：
 
 - Executive thesis 与精确分析边界；
 - before、target、current checkout/dirty state 的 snapshot matrix；

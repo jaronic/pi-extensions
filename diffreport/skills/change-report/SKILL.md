@@ -138,7 +138,7 @@ If evidence cannot support a sequence or state diagram, omit it and state the mi
 
 ## Report structure
 
-Use the reader's language and adapt headings to the domain, while preserving these sections:
+Write the report in Simplified Chinese by default, unless the user explicitly requested another language (for example in the description or during Request clarification). Adapt headings to the domain while preserving these sections:
 
 ~~~markdown
 # [Business capability] — Behavior at [target snapshot] and Decision Analysis
