@@ -847,20 +847,22 @@ Hashline 自定义的 validation/state/resource/mutation 失败全部 `throw Err
 1. 根据明确 focus（例如 unseen missing range）或 submitted operation coordinates，clamp 到 live line count，并在两侧各扩展最多 2 行；
 2. normalize/merge ranges，受 `MAX_SEEN_RANGES`、120 preview lines、50 KiB/2000 行总输出约束；
 3. 计算 live `h1_` token，构造 `source:"read"` record 与 `[hashline …]` source rows；
-4. 先 append journal 并更新 metadata/recovery stores，成功后才把 header/rows 附到原错误并 throw；
-5. append、格式化、generation 或 capture 任一失败时，不回显未授权 source；保留原 code，并追加“automatic refresh failed, read explicitly”。
+4. 先 append journal 并更新 metadata/recovery stores，成功后才把 header/rows 附进拒绝结果；
+5. 拒绝以普通工具结果返回（不抛错、不记失败 tool call），正文以 `[E_CODE]` 前缀开头；append、格式化、generation 或 capture 任一失败时，不回显未授权 source；保留原 code，并明确要求显式 read。
 
-因此错误里的 snapshot header 与 numbered rows 不是诊断旁路，而是与普通 read 相同的 branch provenance。unknown 输入 token 不会被接受；返回的是 live token。若 live bytes 与已知 token 相同，unseen/no-op 等刷新可使用同 token合并 seen ranges。刷新绝不写文件内容，也不把 failed tool call 改成 success。
+因此拒绝结果里的 snapshot header 与 numbered rows 不是诊断旁路，而是与普通 read 相同的 branch provenance。unknown 输入 token 不会被接受；返回的是 live token。若 live bytes 与已知 token 相同，unseen/no-op 等刷新可使用同 token合并 seen ranges。刷新绝不写文件内容，也不把拒绝伪装成成功写入。
 
-示例 stale 拒绝：
+示例 stale 拒绝（摘要句只陈述事实与安全性，重试引导统一收在尾部括号注；rebase 详细拒绝原因记录在 debug 日志的 `rebase_rejected` 事件）：
 
 ```text
-[E_STALE_SNAPSHOT] Edit rejected for src/greet.ts: file bytes changed after snapshot h1_…, and verified rebase was unavailable because the target or its displayed context changed since the snapshot. No hashline write was attempted.
+[E_STALE_SNAPSHOT] src/greet.ts changed on disk after snapshot h1_…, overlapping this edit. Nothing was written.
 
 [hashline path="src/greet.ts" snapshot="h1_…"]
 10:export function greet(name: string) {
 11:  return `Hello ${name}`;
 12:}
+
+[Retry with this snapshot; only the numbered rows above are authorized.]
 ```
 
 ## 12. 安全、兼容与共存

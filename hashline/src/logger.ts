@@ -28,12 +28,31 @@ export interface Logger {
 const NOOP: Logger = { error() {}, warn() {}, info() {}, debug() {} };
 
 // Logging defaults to on at the error threshold so failures are always
-// captured. The extension's own global Pi config file,
-// getAgentDir()/<extension>.json, carries two top-level keys: "logEnabled"
-// (only an explicit false turns logging off) and "logLevel" (one of error,
-// warn, info, debug; missing or unknown values fall back to error). The file
-// is read once when the extension loads; /reload re-reads it.
+// captured. The threshold is resolved from the first matching source:
+//
+//   1. PI_<EXTENSION>_LOG environment (extension uppercased, e.g. PI_LSP_LOG);
+//   2. PI_EXT_LOG environment (shared fallback for every extension);
+//   3. getAgentDir()/<extension>.json: "logEnabled" (only an explicit false
+//      turns logging off) and "logLevel" (error, warn, info, or debug);
+//   4. the default: on at error.
+//
+// Environment values are case-insensitive: a level name sets the threshold,
+// "0"/"false"/"off" disables logging, and any other non-empty value selects
+// the most verbose debug threshold. The config file is read once when the
+// extension loads; /reload re-reads it.
+function envThreshold(extension: string): LogLevel | undefined | null {
+  const specific = process.env[`PI_${extension.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_LOG`];
+  const raw = specific ?? process.env.PI_EXT_LOG;
+  if (raw === undefined || raw.trim() === "") return null;
+  const value = raw.trim().toLowerCase();
+  if (value === "0" || value === "false" || value === "off") return undefined;
+  if (value === "error" || value === "warn" || value === "info" || value === "debug") return value;
+  return "debug";
+}
+
 function resolveThreshold(extension: string): LogLevel | undefined {
+  const fromEnv = envThreshold(extension);
+  if (fromEnv !== null) return fromEnv;
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(join(getAgentDir(), `${extension}.json`), "utf8"));

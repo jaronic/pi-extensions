@@ -12,7 +12,7 @@ export const EDIT_PROMPT_GUIDELINES = [
   "For replace/delete, end is inclusive and defaults to start; insert_before/insert_after use start as the anchor and omit end.",
   "delete sends only op/start/end and must omit the lines key entirely (never null or an empty array); use replace when the range should become new content.",
   "Put final logical line content in lines without read line-number prefixes or newline characters.",
-  "Stale edits rebase only when every target and displayed context line maps uniquely by one offset; multi-operation recovery also requires every line from the first through last target to have been shown. Otherwise use the failed result's refreshed snapshot and current rows to rebuild, reading any explicitly missing span first.",
-  "After no-change errors, stop retrying the same payload; the refreshed snapshot shows the current state.",
+  "Stale edits rebase only when every target and displayed context line maps uniquely by one offset; multi-operation recovery also requires every line from the first through last target to have been shown. Otherwise use the refusal result's refreshed snapshot and current rows to rebuild, reading any explicitly missing span first.",
+  "After a no-change refusal, stop retrying the same payload; the refreshed snapshot shows the current state.",
   "Use write for new files or complete rewrites, and lsp for symbol renames or code actions.",
 ] as const;

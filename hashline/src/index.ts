@@ -35,6 +35,7 @@ export default function hashlineExtension(pi: ExtensionAPI): void {
     store = new SnapshotStore();
     const restored = restoreSnapshotStore(ctx.sessionManager.getBranch());
     store = restored.store;
+    logger.info("snapshots_restored", { snapshots: store.size, malformed: restored.malformed, generation });
     if (restored.malformed > 0 && ctx.hasUI) {
       ctx.ui.notify(
         `Hashline ignored ${restored.malformed} malformed snapshot entr${restored.malformed === 1 ? "y" : "ies"} on this branch.`,
@@ -49,6 +50,7 @@ export default function hashlineExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => restoreFromBranch(ctx));
   pi.on("session_tree", (_event, ctx) => restoreFromBranch(ctx));
   pi.on("session_shutdown", () => {
+    logger.debug("shutdown", { generation: generation + 1, snapshots: store.size });
     generation += 1;
     store.clear();
     recovery.clear();

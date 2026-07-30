@@ -149,23 +149,23 @@ Hashline 只为最多 4 MiB 的已 journal 快照保留 branch-local、纯内存
 
 ## 失败语义
 
-Hashline 自定义的 schema、snapshot、provenance、资源、并发与 mutation 失败会抛带稳定 code 的 `Error`，由 Pi 记录为失败 tool call。内建 `read` 的路径解析、权限和宿主图片处理错误保留 Pi 原语义；它们不会生成 snapshot：
+Hashline 把 outcome 分成两类。可刷新拒绝（`E_SNAPSHOT_UNKNOWN`、`E_STALE_SNAPSHOT`、`E_UNSEEN_LINE`、`E_RANGE`、`E_EDIT_CONFLICT`、`E_NO_CHANGE`、`E_WOULD_EMPTY`）是正常控制流：**作为普通工具结果返回**（不抛错、不记为失败 tool call、不触发红色错误背景），正文携带当前上下文与 refreshed snapshot。真正的失败（schema/provenance/资源/并发/mutation 问题）抛带稳定 code 的 `Error`，由 Pi 记录为失败 tool call。内建 `read` 的路径解析、权限和宿主图片处理错误保留 Pi 原语义；它们不会生成 snapshot：
 
-| Code | 含义与下一步 |
-| --- | --- |
-| `E_BAD_REQUEST` | 字段组合、额外字段、行号、payload 或 `read` offset/limit 非法；按 schema 修正输入。 |
-| `E_SNAPSHOT_REQUIRED` | token 缺失或格式非法；读取同一文件。 |
-| `E_SNAPSHOT_UNKNOWN` | token 不在当前 branch/store 或已被 LRU 淘汰；若错误附带 refreshed header，直接使用该 token 重建操作，否则 read。 |
-| `E_PATH_MISMATCH` | token 属于其他 canonical path，或 symlink/path 已改变 target；读取目标路径。 |
-| `E_STALE_SNAPSHOT` | 文件 bytes 已变化且 verified rebase 无法证明安全映射；零写入，按错误中的当前坐标与 refreshed token 重建操作。 |
-| `E_UNSEEN_LINE` | range 或 insertion gap 未完整展示；错误直接展示并授权缺失的当前范围，使用附带 token 重试。 |
-| `E_RANGE` / `E_EDIT_CONFLICT` | 当前坐标越界、range 重叠或 insertion gap 冲突；错误附带相关当前上下文，修正 operation set 后使用其 token。 |
-| `E_NO_CHANGE` / `E_WOULD_EMPTY` | 结果 bytes 相同，或会把非空文件清空；错误附带当前上下文，核对目标；完整清空使用 write。 |
-| `E_NOT_EDITABLE` / `E_TOO_LARGE` | 文件类型、编码、hardlink 或 byte/line/details 上限不适用；改用明确的其他工具。 |
-| `E_BRANCH_CHANGED` / `E_ABORTED` | commit 前 session branch 改变或调用取消；当前调用零写入，在当前 branch 重新 read。 |
-| `E_WRITE_FAILED` | write 或 close 已进入未知状态，文件可能部分改变；必须 read，不能盲目重试。 |
+| Code | 类别 | 含义与下一步 |
+| --- | --- | --- |
+| `E_BAD_REQUEST` | 抛出 | 字段组合、额外字段、行号、payload 或 `read` offset/limit 非法；按 schema 修正输入。 |
+| `E_SNAPSHOT_REQUIRED` | 抛出 | token 缺失或格式非法；读取同一文件。 |
+| `E_SNAPSHOT_UNKNOWN` | 拒绝结果 | token 不在当前 branch/store 或已被 LRU 淘汰；若结果附带 refreshed header，直接使用该 token 重建操作，否则 read。 |
+| `E_PATH_MISMATCH` | 抛出 | token 属于其他 canonical path，或 symlink/path 已改变 target；读取目标路径。 |
+| `E_STALE_SNAPSHOT` | 拒绝结果 | 文件 bytes 已变化且 verified rebase 无法证明安全映射；零写入，按结果中的当前坐标与 refreshed token 重建操作。 |
+| `E_UNSEEN_LINE` | 拒绝结果 | range 或 insertion gap 未完整展示；结果直接展示并授权缺失的当前范围，使用附带 token 重试。 |
+| `E_RANGE` / `E_EDIT_CONFLICT` | 拒绝结果 | 当前坐标越界、range 重叠或 insertion gap 冲突；结果附带相关当前上下文，修正 operation set 后使用其 token。 |
+| `E_NO_CHANGE` / `E_WOULD_EMPTY` | 拒绝结果 | 结果 bytes 相同，或会把非空文件清空；结果附带当前上下文，核对目标；完整清空使用 write。 |
+| `E_NOT_EDITABLE` / `E_TOO_LARGE` | 抛出 | 文件类型、编码、hardlink 或 byte/line/details 上限不适用；改用明确的其他工具。 |
+| `E_BRANCH_CHANGED` / `E_ABORTED` | 抛出 | commit 前 session branch 改变或调用取消；当前调用零写入，在当前 branch 重新 read。 |
+| `E_WRITE_FAILED` | 抛出 | write 或 close 已进入未知状态，文件可能部分改变；必须 read，不能盲目重试。 |
 
-`E_SNAPSHOT_UNKNOWN`、无法恢复的 `E_STALE_SNAPSHOT`、`E_UNSEEN_LINE`、`E_RANGE`、`E_EDIT_CONFLICT`、`E_NO_CHANGE` 和 `E_WOULD_EMPTY` 会尽力在同一 queue 临界区内捕获一次 live bytes、journal 有界当前范围，再把 `[hashline … snapshot="h1_…"]` 与 `LINE:TEXT` 放进原错误。只要 header 出现，它就已属于当前 branch，显示的行就是该 token 新增的 seen provenance；可直接修正参数重试，无需额外 `read`。刷新本身失败时保留原错误并明确要求 read，绝不把未 journal 的行伪装成授权上下文。
+可刷新拒绝会尽力在同一 queue 临界区内捕获一次 live bytes、journal 有界当前范围，再把 `[hashline … snapshot="h1_…"]` 与 `LINE:TEXT` 放进拒绝结果。只要 header 出现，它就已属于当前 branch，显示的行就是该 token 新增的 seen provenance；可直接修正参数重试，无需额外 `read`。刷新本身失败时保留原 code 并明确要求 read，绝不把未 journal 的行伪装成授权上下文。
 
 写入成功后 journal append 失败不会伪装成 edit 失败；结果会明确说明“文件已更新，但没有 follow-up snapshot”，要求重新 read。commit 开始后的取消也不会把已完成副作用报告成取消失败。
 
@@ -213,18 +213,36 @@ Hashline 是误编辑约束，不是权限系统：
 
 ## 排查日志
 
-默认开启 `error` 级别：只在 edit/read 失败时写日志，且日志目录在首次写入时才创建，无事件的 session 仍然零磁盘副作用。开关与级别都在全局配置 `~/.pi/agent/hashline.json`（遵循 `PI_CODING_AGENT_DIR`）的顶层键：
+默认开启 `error` 级别：只在 edit/read 失败时写日志，且日志目录在首次写入时才创建，无事件的 session 仍然零磁盘副作用。开关与级别按以下顺序取第一个命中：
+
+1. 环境变量 `PI_HASHLINE_LOG`；
+2. 环境变量 `PI_EXT_LOG`（所有使用同一 logger 的扩展共享的 fallback）；
+3. 全局配置 `~/.pi/agent/hashline.json`（遵循 `PI_CODING_AGENT_DIR`）的顶层键：
 
 ```json
 { "logEnabled": true, "logLevel": "debug" }
 ```
 
+- 环境变量大小写不敏感：取值为 `error`/`warn`/`info`/`debug` 直接设级别；`0`/`false`/`off` 完全关闭；其他任何非空值（如 `1`）选择最详细的 `debug`。
 - `logEnabled`：只有显式 `false` 完全关闭；省略或其他取值视为开启。
 - `logLevel`：`error`（默认）、`warn`、`info`、`debug`；缺失或未知取值回退 `error`。
-- `hashline.json` 目前只有这两个键；配置在扩展加载时读取一次，修改后 `/reload` 生效。
+- `hashline.json` 目前只有这两个键；配置在扩展加载时读取一次，修改后 `/reload` 生效。环境变量优先于配置文件，适合一次性排障：`PI_HASHLINE_LOG=debug pi ...`。
 - 日志写入 `getAgentDir()/logs/hashline.log`（即 `~/.pi/agent/logs/hashline.log`）。文件超过 5 MiB 轮转为 `hashline.log.1`，只保留一份备份。
-- 每行是一条 JSON：`ts`、`level`、`ext`、`event` 与 `context`。edit 失败记录 `path`、错误码、`snapshot` token、操作数与 runtime `generation`。为避免噪音，属于正常控制流的 CAS 拒绝（stale/unseen/no-change/path-mismatch/branch-changed 等）记为 `debug`，只有 `E_WRITE_FAILED` 与非 Hashline 的意外错误记为 `error`；read 失败记为 `debug`。C1 控制字符会被中和，避免在终端或编辑器中打开日志时执行转义序列。
-- 日志是尽力而为的旁路：写入或轮转失败会被静默吞掉，绝不影响工具执行、CAS 语义或改变任何返回结果。排障时把 `logLevel` 调成 `debug` 即可完整记录 CAS 拒绝链路。
+- 每行是一条 JSON：`ts`、`level`、`ext`、`event` 与 `context`，事件目录：
+
+  | event | level | 关键 context |
+  | --- | --- | --- |
+  | `snapshots_restored` | info | branch 恢复后的 `snapshots` 数、`malformed` 数、runtime `generation` |
+  | `snapshot_captured` | debug | `path`、`token`、`bytes`、`lines`、`offset`/`limit`、`seenRanges`、`generation` |
+  | `edit_committed` | info | `path`、输入 `snapshot`、新 `token`、`edits` 数、`rebased`、`bytesBefore`/`bytesAfter`、`generation` |
+  | `edit_failed` | debug/error | 抛出的真实失败：`E_WRITE_FAILED` 与非 Hashline 意外错误记 `error`；path-mismatch/branch-changed 等例行程控抛错记 `debug` |
+  | `edit_refused` | debug | 可刷新拒绝（stale/unknown/unseen/range/conflict/no-change/would-empty）：`path`、错误码、输入 `snapshot` token、操作数与 runtime `generation`；拒绝以普通结果返回，不记失败 tool call |
+  | `rebase_rejected` | debug | verified rebase 证明失败的详细原因（`reason`）；用户面结果只保留简明结论，排障细节在这里 |
+  | `read_failed` | debug | `path`、`offset`、`limit` |
+  | `shutdown` | debug | `generation`、`snapshots` |
+
+  为避免噪音，可刷新拒绝记为 `edit_refused`（debug），例行程控抛错（path-mismatch/branch-changed 等）记为 `edit_failed`（debug），只有 `E_WRITE_FAILED` 与非 Hashline 的意外错误记为 `error`。`PI_HASHLINE_LOG=debug` 即可按时间线还原“read 捕获 → CAS/rebase 判定 → commit 或拒绝”的完整链路。C1 控制字符会被中和，避免在终端或编辑器中打开日志时执行转义序列。
+- 日志是尽力而为的旁路：写入或轮转失败会被静默吞掉，绝不影响工具执行、CAS 语义或改变任何返回结果。排障时把级别调成 `debug` 即可完整记录 CAS 拒绝链路。
 
 ## 实现节点
 

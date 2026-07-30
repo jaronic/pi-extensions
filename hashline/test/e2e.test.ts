@@ -67,14 +67,12 @@ test("user workflow survives reload and keeps snapshots isolated by active branc
 
   reloaded.setBranch([]);
   await reloaded.emit("session_tree", { type: "session_tree" });
-  await assert.rejects(
-    reloaded.tool("edit", {
-      path: "story.txt",
-      snapshot: reloadToken,
-      edits: [{ op: "replace", start: 2, lines: ["sibling must not write"] }],
-    }),
-    /\[E_SNAPSHOT_UNKNOWN\]/,
-  );
+  const unknownEdit = await reloaded.tool("edit", {
+    path: "story.txt",
+    snapshot: reloadToken,
+    edits: [{ op: "replace", start: 2, lines: ["sibling must not write"] }],
+  });
+  assert.match(resultText(unknownEdit), /\[E_SNAPSHOT_UNKNOWN\]/);
   assert.equal(await readFile(file, "utf8"), "TITLE\nnew body\nfooter\nepilogue\n");
 
   reloaded.setBranch(activeBranch as HarnessJournalEntry[]);
@@ -104,18 +102,13 @@ test("reload and session tree replay metadata without reviving stale recovery so
   reloaded.setBranch(persisted);
   hashlineExtension(reloaded.api);
   await reloaded.emit("session_start", { type: "session_start", reason: "reload" });
-  let staleError: unknown;
-  try {
-    await reloaded.tool("edit", {
-      path: "reload.txt",
-      snapshot: oldToken,
-      edits: [{ op: "replace", start: 4, lines: ["changed"] }],
-    });
-  } catch (error) {
-    staleError = error;
-  }
-  const staleMessage = String(staleError);
-  assert.match(staleMessage, /\[E_STALE_SNAPSHOT\].*exact prior bytes.*recovery cache.*snapshot=/s);
+  const staleEdit = await reloaded.tool("edit", {
+    path: "reload.txt",
+    snapshot: oldToken,
+    edits: [{ op: "replace", start: 4, lines: ["changed"] }],
+  });
+  const staleMessage = resultText(staleEdit);
+  assert.match(staleMessage, /\[E_STALE_SNAPSHOT\].*changed on disk after snapshot.*Nothing was written.*snapshot=/s);
   assert.equal(await readFile(file, "utf8"), "outside\nhead\nctx-a\nctx-b\ntarget\nctx-c\ntail\n");
 
   const corrected = await reloaded.tool("edit", {
@@ -129,21 +122,16 @@ test("reload and session tree replay metadata without reviving stale recovery so
   reloaded.setBranch([...reloaded.entries()]);
   await reloaded.emit("session_tree", { type: "session_tree" });
   await writeFile(file, "tree\noutside\nhead\nctx-a\nctx-b\nchanged\nctx-c\ntail\n", "utf8");
-  let treeStaleError: unknown;
-  try {
-    await reloaded.tool("edit", {
-      path: "reload.txt",
-      snapshot: correctedToken,
-      edits: [{ op: "replace", start: 5, lines: ["must-not-rebase"] }],
-    });
-  } catch (error) {
-    treeStaleError = error;
-  }
-  assert.match(String(treeStaleError), /\[E_STALE_SNAPSHOT\].*exact prior bytes.*recovery cache/s);
+  const treeStaleEdit = await reloaded.tool("edit", {
+    path: "reload.txt",
+    snapshot: correctedToken,
+    edits: [{ op: "replace", start: 5, lines: ["must-not-rebase"] }],
+  });
+  assert.match(resultText(treeStaleEdit), /\[E_STALE_SNAPSHOT\].*changed on disk after snapshot.*Nothing was written/s);
   assert.equal(await readFile(file, "utf8"), "tree\noutside\nhead\nctx-a\nctx-b\nchanged\nctx-c\ntail\n");
 });
 
-test("user-facing unseen and stale failures return current context for a direct retry", async (t) => {
+test("user-facing unseen and stale refusals return current context for a direct retry", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hashline-guidance-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const file = join(root, "guide.txt");
@@ -153,18 +141,13 @@ test("user-facing unseen and stale failures return current context for a direct 
   await harness.emit("session_start", { type: "session_start", reason: "startup" });
 
   const partialToken = snapshot(resultText(await harness.tool("read", { path: "guide.txt", offset: 1, limit: 1 })));
-  let unseenError: unknown;
-  try {
-    await harness.tool("edit", {
-      path: "guide.txt",
-      snapshot: partialToken,
-      edits: [{ op: "insert_after", start: 1, lines: ["visible retry"] }],
-    });
-  } catch (error) {
-    unseenError = error;
-  }
-  const unseenMessage = String(unseenError);
-  assert.match(unseenMessage, /\[E_UNSEEN_LINE\].*Required current range is 1-2.*snapshot=.*1:one.*2:two/s);
+  const unseenEdit = await harness.tool("edit", {
+    path: "guide.txt",
+    snapshot: partialToken,
+    edits: [{ op: "insert_after", start: 1, lines: ["visible retry"] }],
+  });
+  const unseenMessage = resultText(unseenEdit);
+  assert.match(unseenMessage, /\[E_UNSEEN_LINE\].*never showed \(need 1-2\).*snapshot=.*1:one.*2:two/s);
   assert.equal(snapshot(unseenMessage), partialToken);
   await harness.tool("edit", {
     path: "guide.txt",
@@ -175,18 +158,14 @@ test("user-facing unseen and stale failures return current context for a direct 
 
   const fullToken = snapshot(resultText(await harness.tool("read", { path: "guide.txt" })));
   await writeFile(file, "external\nvisible retry\ntwo\nthree\n", "utf8");
-  let staleError: unknown;
-  try {
-    await harness.tool("edit", {
-      path: "guide.txt",
-      snapshot: fullToken,
-      edits: [{ op: "replace", start: 3, lines: ["TWO"] }],
-    });
-  } catch (error) {
-    staleError = error;
-  }
-  const staleMessage = String(staleError);
-  assert.match(staleMessage, /\[E_STALE_SNAPSHOT\].*target or its displayed context changed.*No hashline write was attempted.*snapshot=.*1:external/s);
+  const staleEdit = await harness.tool("edit", {
+    path: "guide.txt",
+    snapshot: fullToken,
+    edits: [{ op: "replace", start: 3, lines: ["TWO"] }],
+  });
+  const staleMessage = resultText(staleEdit);
+  assert.match(staleMessage, /\[E_STALE_SNAPSHOT\].*changed on disk after snapshot.*Nothing was written.*snapshot=.*1:external/s);
+  assert.match(staleMessage, /\[Retry with this snapshot; only the numbered rows above are authorized\.\]/);
   assert.equal(await readFile(file, "utf8"), "external\nvisible retry\ntwo\nthree\n");
 
   await harness.tool("edit", {

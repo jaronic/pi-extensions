@@ -76,13 +76,24 @@ async function readStableHandle(handle: FileHandle, signal: AbortSignal | undefi
   const after = await handle.stat();
   abortIfNeeded(signal);
   if (offset !== before.size || !sameFileState(before, after)) {
-    fail("E_STALE_SNAPSHOT", "The file changed during validation. No hashline write was attempted; re-read it.");
+    fail("E_STALE_SNAPSHOT", "The file changed during validation. Nothing was written; re-read it.");
   }
   return Object.freeze({ bytes, stats: after });
 }
 
 function textEditResult(text: string, details: EditToolDetails): AgentToolResult<EditToolDetails> {
   return Object.freeze({ content: [{ type: "text" as const, text }], details });
+}
+
+// Refreshable refusals (stale/unknown/unseen/range/conflict/no-change/would-empty)
+// are normal control flow, not failures: they return a plain result carrying the
+// journaled refreshed snapshot so the TUI stays calm and the model can retry
+// immediately. Genuine defects (write/open/path/branch/abort/too-large) still throw.
+function refusalEditResult(text: string): AgentToolResult<EditToolDetails> {
+  return Object.freeze({
+    content: [{ type: "text" as const, text }],
+    details: Object.freeze({ diff: "", patch: "" }),
+  });
 }
 
 function buildDefaultDetails(path: string, oldText: string, newText: string): EditToolDetails {
@@ -308,6 +319,7 @@ export function createHashlineEditTool(
           let result: AgentToolResult<EditToolDetails> | undefined;
           let primaryError: unknown;
           let refresh: PendingRefresh | undefined;
+          let refusal: { readonly code: RefreshErrorCode; readonly text: string } | undefined;
           let followUpRecord: SnapshotRecord | undefined;
           let followUpEntry: HashlineSnapshotEntryV1 | undefined;
           let withTokenResult: AgentToolResult<EditToolDetails> | undefined;
@@ -329,7 +341,7 @@ export function createHashlineEditTool(
             if (!record) {
               refresh = pendingRefresh(
                 "E_SNAPSHOT_UNKNOWN",
-                `Snapshot ${token} is unavailable on the current branch or was evicted. No hashline write was attempted.`,
+                `Snapshot ${token} is not available on this branch. Nothing was written.`,
                 canonicalPath,
                 displayFilePath,
                 live.bytes,
@@ -344,7 +356,7 @@ export function createHashlineEditTool(
               if (snapshotCurrent && editable.lines.length !== record.lineCount) {
                 refresh = pendingRefresh(
                   "E_STALE_SNAPSHOT",
-                  `Snapshot ${token} metadata no longer matches the current physical line count. No hashline write was attempted.`,
+                  `Snapshot ${token} no longer matches the file's current lines. Nothing was written.`,
                   canonicalPath,
                   displayFilePath,
                   live.bytes,
@@ -361,9 +373,12 @@ export function createHashlineEditTool(
                   activeSeen = attempt.seen;
                   notice = rebaseNotice(attempt);
                 } else {
+                  // The detailed proof failure stays in the debug log; the
+                  // model-facing message only states the safe outcome.
+                  logger.debug("rebase_rejected", { path: displayFilePath, snapshot: token, reason: attempt.reason });
                   refresh = pendingRefresh(
                     "E_STALE_SNAPSHOT",
-                    `Edit rejected for ${shownPath}: file bytes changed after snapshot ${token}, and verified rebase was unavailable because ${attempt.reason}. No hashline write was attempted.`,
+                    `${shownPath} changed on disk after snapshot ${token}, overlapping this edit. Nothing was written.`,
                     canonicalPath,
                     displayFilePath,
                     live.bytes,
@@ -379,7 +394,7 @@ export function createHashlineEditTool(
                 if (unseen) {
                   refresh = pendingRefresh(
                     "E_UNSEEN_LINE",
-                    `Line ${unseen.missingLine} required by this edit was not shown by snapshot ${token}. Required current range is ${unseen.start}-${unseen.end}. No hashline write was attempted.`,
+                    `This edit touches line ${unseen.missingLine}, which snapshot ${token} never showed (need ${unseen.start}-${unseen.end}). Nothing was written.`,
                     canonicalPath,
                     displayFilePath,
                     live.bytes,
@@ -403,7 +418,7 @@ export function createHashlineEditTool(
                 if (outputBytes.equals(live.bytes)) {
                   refresh = pendingRefresh(
                     "E_NO_CHANGE",
-                    `The operation set produces identical current file bytes. No hashline write was attempted; do not retry the same payload.`,
+                    `This edit would not change the file. Nothing was written; do not retry the same payload.`,
                     canonicalPath,
                     displayFilePath,
                     live.bytes,
@@ -456,13 +471,13 @@ export function createHashlineEditTool(
                   const changedAgain = await verifyFinalTarget(absolutePath, canonicalPath, handle, live.bytes, signal);
                   abortIfNeeded(signal);
                   if (runtime.getGeneration() !== generation) {
-                    fail("E_BRANCH_CHANGED", "The active session branch changed before commit. No hashline write was attempted; re-read on the current branch.");
+                    fail("E_BRANCH_CHANGED", "The active session branch changed before commit. Nothing was written; re-read on the current branch.");
                   }
                   if (changedAgain) {
                     const changedEditable = decodeEditableBytes(changedAgain);
                     refresh = pendingRefresh(
                       "E_STALE_SNAPSHOT",
-                      `Edit rejected for ${shownPath}: file bytes changed again during final validation. No hashline write was attempted.`,
+                      `${shownPath} changed again while this edit was being checked. Nothing was written.`,
                       canonicalPath,
                       displayFilePath,
                       changedAgain,
@@ -473,6 +488,16 @@ export function createHashlineEditTool(
                     try {
                       await commitWrite(handle, outputBytes);
                       committed = true;
+                      logger.info("edit_committed", {
+                        path: displayFilePath,
+                        snapshot: input.snapshot,
+                        token: outputToken,
+                        edits: input.edits.length,
+                        rebased: notice.length > 0,
+                        bytesBefore: live.bytes.length,
+                        bytesAfter: outputBytes.length,
+                        generation,
+                      });
                     } catch {
                       throw hashlineError(
                         "E_WRITE_FAILED",
@@ -489,7 +514,7 @@ export function createHashlineEditTool(
               try {
                 refresh = pendingRefresh(
                   issue.code,
-                  `${issue.summary} No hashline write was attempted.`,
+                  `${issue.summary} Nothing was written.`,
                   canonicalPath,
                   displayFilePath,
                   refreshContext.bytes,
@@ -528,7 +553,14 @@ export function createHashlineEditTool(
                   // The refresh performed no write; a missing token truthfully falls back to explicit read.
                 }
               }
-              primaryError = hashlineError(refresh.code, text);
+              refusal = { code: refresh.code, text: `[${refresh.code}] ${text}` };
+              logger.debug("edit_refused", {
+                path: displayFilePath,
+                code: refresh.code,
+                snapshot: input.snapshot,
+                edits: input.edits.length,
+                generation,
+              });
             }
           }
           if (
@@ -548,6 +580,7 @@ export function createHashlineEditTool(
             }
           }
           if (primaryError !== undefined) throw primaryError;
+          if (refusal !== undefined) return refusalEditResult(refusal.text);
           if (!result) throw hashlineError("E_WRITE_FAILED", `Writing ${shownPath} ended without a verifiable result. Read the file before retrying.`);
           return result;
         });

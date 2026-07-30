@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createWriteToolDefinition, withFileMutationQueue, type AgentToolResult, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createHashlineEditTool } from "../src/edit-tool.ts";
 import { createHashlineReadTool } from "../src/read-tool.ts";
+import type { Logger } from "../src/logger.ts";
 import { RecoveryStore } from "../src/recovery.ts";
 import type { HashlineRuntime } from "../src/runtime.ts";
 import { SnapshotStore, type SnapshotRecord } from "../src/snapshots.ts";
@@ -55,6 +56,73 @@ function makeRuntime(): TestRuntime {
 function context(cwd: string): ExtensionContext {
   return { cwd, model: { input: ["text"] } } as unknown as ExtensionContext;
 }
+
+interface RecordedLog {
+  readonly level: string;
+  readonly event: string;
+  readonly context?: Record<string, unknown>;
+}
+
+function recordingLogger(): { readonly events: RecordedLog[]; readonly logger: Logger } {
+  const events: RecordedLog[] = [];
+  const record = (level: string) => (event: string, context?: Record<string, unknown>) => {
+    events.push({ level, event, context });
+  };
+  return { events, logger: { error: record("error"), warn: record("warn"), info: record("info"), debug: record("debug") } };
+}
+
+test("read and edit emit reconstructable lifecycle logs", async (t) => {
+  const { root, path } = await fixture(t);
+  const state = makeRuntime();
+  const { events, logger } = recordingLogger();
+  const readTool = createHashlineReadTool(state.runtime, logger);
+  const editTool = createHashlineEditTool(state.runtime, {}, logger);
+
+  const read = await readTool.execute("read", { path: "fixture.txt" }, undefined, undefined, context(root));
+  const token = tokenOf(read);
+  const captured = events.find((entry) => entry.event === "snapshot_captured");
+  assert.equal(captured?.level, "debug");
+  assert.equal(captured?.context?.token, token);
+  assert.equal(captured?.context?.path, "fixture.txt");
+  assert.equal(captured?.context?.lines, 4);
+
+  await editTool.execute(
+    "edit",
+    { path: "fixture.txt", snapshot: token, edits: [{ op: "replace", start: 1, lines: ["ONE"] }] },
+    undefined,
+    undefined,
+    context(root),
+  );
+  const committed = events.find((entry) => entry.event === "edit_committed");
+  assert.equal(committed?.level, "info");
+  assert.equal(committed?.context?.snapshot, token);
+  assert.equal(committed?.context?.rebased, false);
+  assert.equal(committed?.context?.edits, 1);
+  const outputToken = committed?.context?.token as string;
+  assert.equal(typeof outputToken, "string");
+
+  // Rewrite every line externally so the verified rebase proof must fail and
+  // the edit is refused as stale instead of silently relocated. Refreshable
+  // refusals are plain results, not thrown errors.
+  await writeFile(path, "completely\ndifferent\ncontent\n", "utf8");
+  const stale = textOf(await editTool.execute(
+    "stale",
+    { path: "fixture.txt", snapshot: outputToken, edits: [{ op: "replace", start: 2, lines: ["TWO"] }] },
+    undefined,
+    undefined,
+    context(root),
+  ));
+  assert.match(stale, /\[E_STALE_SNAPSHOT\]/);
+  const refused = events.find((entry) => entry.event === "edit_refused");
+  assert.equal(refused?.level, "debug", "routine CAS refusals stay below the error threshold");
+  assert.equal(refused?.context?.code, "E_STALE_SNAPSHOT");
+  assert.equal(refused?.context?.snapshot, outputToken);
+  const rebaseRejected = events.find((entry) => entry.event === "rebase_rejected");
+  assert.equal(rebaseRejected?.level, "debug", "the detailed proof failure stays in the debug log");
+  assert.equal(rebaseRejected?.context?.snapshot, outputToken);
+  assert.match(String(rebaseRejected?.context?.reason), /changed since the snapshot/);
+  assert.doesNotMatch(stale, /changed since the snapshot/, "the model-facing message drops the jargon");
+});
 
 function textOf(result: AgentToolResult<unknown>): string {
   const content = result.content.find((item) => item.type === "text");
@@ -183,7 +251,7 @@ test("control characters in authored paths stay escaped in read and edit output"
   assert.equal(await readFile(path, "utf8"), "LINE\n");
 });
 
-test("unknown, wrong-path, unseen, stale, no-op, and emptying edits are zero-write failures", async (t) => {
+test("unknown, wrong-path, unseen, stale, no-op, and emptying edits are zero-write refusals", async (t) => {
   const { root, path } = await fixture(t);
   const secondPath = join(root, "second.txt");
   await writeFile(secondPath, await readFile(path));
@@ -198,33 +266,23 @@ test("unknown, wrong-path, unseen, stale, no-op, and emptying edits are zero-wri
     editTool.execute("wrong-path", { path: "second.txt", snapshot: token, edits: [{ op: "replace", start: 1, lines: ["ONE"] }] }, undefined, undefined, context(root)),
     /\[E_PATH_MISMATCH\]/,
   );
-  const unseenMessage = await rejectionText(
-    editTool.execute("unseen", { path: "fixture.txt", snapshot: token, edits: [{ op: "replace", start: 2, lines: ["TWO"] }] }, undefined, undefined, context(root)),
-  );
+  const unseenMessage = textOf(await editTool.execute("unseen", { path: "fixture.txt", snapshot: token, edits: [{ op: "replace", start: 2, lines: ["TWO"] }] }, undefined, undefined, context(root)));
   assert.match(unseenMessage, /\[E_UNSEEN_LINE\].*snapshot=/s);
   assert.equal(tokenFromText(unseenMessage), token);
-  const noChangeMessage = await rejectionText(
-    editTool.execute("noop", { path: "fixture.txt", snapshot: token, edits: [{ op: "replace", start: 1, lines: ["one"] }] }, undefined, undefined, context(root)),
-  );
+  const noChangeMessage = textOf(await editTool.execute("noop", { path: "fixture.txt", snapshot: token, edits: [{ op: "replace", start: 1, lines: ["one"] }] }, undefined, undefined, context(root)));
   assert.match(noChangeMessage, /\[E_NO_CHANGE\].*snapshot=/s);
   assert.equal(tokenFromText(noChangeMessage), token);
   const full = await readTool.execute("full", { path: "fixture.txt" }, undefined, undefined, context(root));
-  await assert.rejects(
-    editTool.execute("empty", { path: "fixture.txt", snapshot: tokenOf(full), edits: [{ op: "delete", start: 1, end: 4 }] }, undefined, undefined, context(root)),
-    /\[E_WOULD_EMPTY\]/,
-  );
+  const emptyMessage = textOf(await editTool.execute("empty", { path: "fixture.txt", snapshot: tokenOf(full), edits: [{ op: "delete", start: 1, end: 4 }] }, undefined, undefined, context(root)));
+  assert.match(emptyMessage, /\[E_WOULD_EMPTY\]/);
   await writeFile(path, original.replace("one", "external"), "utf8");
-  await assert.rejects(
-    editTool.execute("stale", { path: "fixture.txt", snapshot: tokenOf(full), edits: [{ op: "replace", start: 2, lines: ["TWO"] }] }, undefined, undefined, context(root)),
-    /\[E_STALE_SNAPSHOT\]/,
-  );
+  const staleMessage = textOf(await editTool.execute("stale", { path: "fixture.txt", snapshot: tokenOf(full), edits: [{ op: "replace", start: 2, lines: ["TWO"] }] }, undefined, undefined, context(root)));
+  assert.match(staleMessage, /\[E_STALE_SNAPSHOT\]/);
   assert.equal(await readFile(path, "utf8"), original.replace("one", "external"));
 
   const unknownState = makeRuntime();
   const unknownTool = createHashlineEditTool(unknownState.runtime);
-  const unknownMessage = await rejectionText(
-    unknownTool.execute("unknown", { path: "fixture.txt", snapshot: tokenOf(full), edits: [{ op: "replace", start: 1, lines: ["x"] }] }, undefined, undefined, context(root)),
-  );
+  const unknownMessage = textOf(await unknownTool.execute("unknown", { path: "fixture.txt", snapshot: tokenOf(full), edits: [{ op: "replace", start: 1, lines: ["x"] }] }, undefined, undefined, context(root)));
   assert.match(unknownMessage, /\[E_SNAPSHOT_UNKNOWN\].*snapshot=/s);
   await unknownTool.execute(
     "unknown-retry",
@@ -236,50 +294,42 @@ test("unknown, wrong-path, unseen, stale, no-op, and emptying edits are zero-wri
   assert.equal(await readFile(path, "utf8"), original.replace("one", "x"));
 });
 
-test("semantic failures return reusable snapshots and hide current rows if refresh journaling fails", async (t) => {
+test("semantic refusals return reusable snapshots and hide current rows if refresh journaling fails", async (t) => {
   const { root, path } = await fixture(t);
   const state = makeRuntime();
   const readTool = createHashlineReadTool(state.runtime);
   const editTool = createHashlineEditTool(state.runtime);
   const token = tokenOf(await readTool.execute("full", { path: "fixture.txt" }, undefined, undefined, context(root)));
 
-  const rangeMessage = await rejectionText(
-    editTool.execute("range", { path: "fixture.txt", snapshot: token, edits: [{ op: "replace", start: 99, lines: ["x"] }] }, undefined, undefined, context(root)),
-  );
+  const rangeMessage = textOf(await editTool.execute("range", { path: "fixture.txt", snapshot: token, edits: [{ op: "replace", start: 99, lines: ["x"] }] }, undefined, undefined, context(root)));
   assert.match(rangeMessage, /\[E_RANGE\].*edits\[0\]\.start.*snapshot=.*2:two.*4:four/s);
   assert.equal(tokenFromText(rangeMessage), token);
 
-  const conflictMessage = await rejectionText(
-    editTool.execute(
-      "conflict",
-      {
-        path: "fixture.txt",
-        snapshot: token,
-        edits: [
-          { op: "replace", start: 1, end: 2, lines: ["ONE", "TWO"] },
-          { op: "delete", start: 2 },
-        ],
-      },
-      undefined,
-      undefined,
-      context(root),
-    ),
-  );
+  const conflictMessage = textOf(await editTool.execute(
+    "conflict",
+    {
+      path: "fixture.txt",
+      snapshot: token,
+      edits: [
+        { op: "replace", start: 1, end: 2, lines: ["ONE", "TWO"] },
+        { op: "delete", start: 2 },
+      ],
+    },
+    undefined,
+    undefined,
+    context(root),
+  ));
   assert.match(conflictMessage, /\[E_EDIT_CONFLICT\].*edits\[0\].*edits\[1\].*snapshot=/s);
   assert.equal(tokenFromText(conflictMessage), token);
 
-  const emptyMessage = await rejectionText(
-    editTool.execute("empty", { path: "fixture.txt", snapshot: token, edits: [{ op: "delete", start: 1, end: 4 }] }, undefined, undefined, context(root)),
-  );
+  const emptyMessage = textOf(await editTool.execute("empty", { path: "fixture.txt", snapshot: token, edits: [{ op: "delete", start: 1, end: 4 }] }, undefined, undefined, context(root)));
   assert.match(emptyMessage, /\[E_WOULD_EMPTY\].*Use write.*snapshot=.*1:one.*4:four/s);
   assert.equal(tokenFromText(emptyMessage), token);
   assert.equal(await readFile(path, "utf8"), "one\ntwo\nthree\nfour\n");
 
   state.failNextCommit();
-  const unjournaledMessage = await rejectionText(
-    editTool.execute("unjournaled-range", { path: "fixture.txt", snapshot: token, edits: [{ op: "replace", start: 99, lines: ["x"] }] }, undefined, undefined, context(root)),
-  );
-  assert.match(unjournaledMessage, /\[E_RANGE\].*could not be safely journaled.*Use read/s);
+  const unjournaledMessage = textOf(await editTool.execute("unjournaled-range", { path: "fixture.txt", snapshot: token, edits: [{ op: "replace", start: 99, lines: ["x"] }] }, undefined, undefined, context(root)));
+  assert.match(unjournaledMessage, /\[E_RANGE\].*Could not journal the current context safely.*Read the file before retrying/s);
   assert.doesNotMatch(unjournaledMessage, /snapshot="h1_/);
   assert.doesNotMatch(unjournaledMessage, /\n[1-4]:(?:one|two|three|four)/);
 
@@ -356,20 +406,19 @@ test("one hundred disjoint edit regions produce a bounded follow-up preview", as
   assert.equal(written[990], "changed-100");
 });
 
-test("two concurrent edits from one token serialize to one success and one stale rejection", async (t) => {
+test("two concurrent edits from one token serialize to one success and one stale refusal", async (t) => {
   const { root, path } = await fixture(t);
   const state = makeRuntime();
   const readTool = createHashlineReadTool(state.runtime);
   const editTool = createHashlineEditTool(state.runtime);
   const snapshot = tokenOf(await readTool.execute("read", { path: "fixture.txt" }, undefined, undefined, context(root)));
-  const settled = await Promise.allSettled([
+  const [first, second] = await Promise.all([
     editTool.execute("a", { path: "fixture.txt", snapshot, edits: [{ op: "replace", start: 1, lines: ["A"] }] }, undefined, undefined, context(root)),
     editTool.execute("b", { path: "fixture.txt", snapshot, edits: [{ op: "replace", start: 1, lines: ["B"] }] }, undefined, undefined, context(root)),
   ]);
-  assert.equal(settled.filter((entry) => entry.status === "fulfilled").length, 1);
-  const rejected = settled.find((entry) => entry.status === "rejected");
-  assert.ok(rejected && rejected.status === "rejected");
-  assert.match(String(rejected.reason), /\[E_STALE_SNAPSHOT\]/);
+  const texts = [textOf(first), textOf(second)];
+  assert.equal(texts.filter((text) => text.startsWith("Updated ")).length, 1);
+  assert.equal(texts.filter((text) => text.includes("[E_STALE_SNAPSHOT]")).length, 1);
   assert.match(await readFile(path, "utf8"), /^(A|B)\n/);
 });
 
@@ -475,12 +524,10 @@ test("built-in write serialization makes waiting edits stale or cancellable befo
   const staleToken = tokenOf(await readTool.execute("stale-read", { path: "fixture.txt" }, undefined, undefined, context(root)));
   const firstWrite = startGatedWrite("external-one\n");
   await firstWrite.entered;
-  const staleEdit = assert.rejects(
-    editTool.execute("stale-after-write", { path: "fixture.txt", snapshot: staleToken, edits: [{ op: "replace", start: 1, lines: ["HASHLINE"] }] }, undefined, undefined, context(root)),
-    /\[E_STALE_SNAPSHOT\]/,
-  );
+  const staleEdit = editTool.execute("stale-after-write", { path: "fixture.txt", snapshot: staleToken, edits: [{ op: "replace", start: 1, lines: ["HASHLINE"] }] }, undefined, undefined, context(root));
   firstWrite.release();
-  await Promise.all([firstWrite.result, staleEdit]);
+  const [, staleResult] = await Promise.all([firstWrite.result, staleEdit]);
+  assert.match(textOf(staleResult), /\[E_STALE_SNAPSHOT\]/);
   assert.equal(await readFile(path, "utf8"), "external-one\n");
 
   const abortToken = tokenOf(await readTool.execute("abort-read", { path: "fixture.txt" }, undefined, undefined, context(root)));

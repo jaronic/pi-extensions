@@ -18,7 +18,7 @@ import { normalizeSeenRanges, type SeenRange } from "./snapshots.ts";
 const OUTPUT_NOTICE_RESERVE_BYTES = 768;
 const SNAPSHOT_UNAVAILABLE_NOTICE = "[Hashline snapshot unavailable. Re-read this file before editing; do not guess a token.]";
 const FOLLOW_UP_UNAVAILABLE_NOTICE = "[The file was updated, but no follow-up snapshot was saved. Re-read before editing again.]";
-const REFRESH_UNAVAILABLE_NOTICE = "[Current context could not be safely journaled. Use read before retrying; do not reuse the submitted snapshot.]";
+const REFRESH_UNAVAILABLE_NOTICE = "[Could not journal the current context safely. Read the file before retrying.]";
 
 export interface FormattedReadSnapshot {
   readonly tokenText: string;
@@ -201,7 +201,7 @@ export function formatRefreshSnapshot(
       summary,
       `${header}\n${preview.body}`,
       truncationNotice,
-      "[Only the numbered current rows shown above are authorized by this refreshed snapshot.]",
+      "[Retry with this snapshot; only the numbered rows above are authorized.]",
     ]);
     assertOutputBounded(withTokenText);
   }

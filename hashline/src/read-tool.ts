@@ -211,11 +211,12 @@ export function createHashlineReadTool(runtime: HashlineRuntime, logger: Logger 
       }
       const requestedCount = params.limit ?? editable.lines.length - startLine + 1;
       const token = snapshotTokenForBytes(captured.bytes);
+      const displayFilePath = displayPath(captured.absolutePath, ctx.cwd);
       const formatted = formatReadSnapshot(
         editable.lines,
         startLine,
         requestedCount,
-        displayPath(captured.absolutePath, ctx.cwd),
+        displayFilePath,
         token,
       );
       if (!formatted) return builtinResult;
@@ -238,6 +239,16 @@ export function createHashlineReadTool(runtime: HashlineRuntime, logger: Logger 
       } catch {
         return noTokenResult;
       }
+      logger.debug("snapshot_captured", {
+        path: displayFilePath,
+        token,
+        bytes: captured.bytes.length,
+        lines: editable.lines.length,
+        offset: startLine,
+        limit: requestedCount,
+        seenRanges: formatted.seen.length,
+        generation,
+      });
       return tokenResult;
     },
   };
