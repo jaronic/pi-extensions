@@ -189,6 +189,9 @@ test("Plan approval exits Plan and creates an ordinary Todo board", async () => 
   const execution = harness.sentMessages[0]?.message;
   assert.ok(execution && typeof execution === "object" && "customType" in execution);
   assert.equal(execution.customType, "plan-execution-v1");
+  assert.ok("content" in execution && typeof execution.content === "string");
+  assert.match(execution.content, /already initialized on the Todo board/);
+  assert.match(execution.content, /never call todo init or append/);
 
   const viewed = await harness.tool("todo", { op: "view" });
   assert.ok(viewed && typeof viewed === "object" && "content" in viewed && Array.isArray(viewed.content));

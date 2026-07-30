@@ -40,6 +40,10 @@ Plan mode was explicitly activated by the user. Even for a small task, produce a
 - End the planning turn after submit_plan or report_plan_blocked. Do not begin executing the plan in the same turn.
 ${choiceContext}${blockerContext}
 
+## Language
+
+Write every user-facing Plan artifact — the summary, plan body, steps, choice questions and options, and blocker reports — in Simplified Chinese by default, unless the user explicitly requests another language. Keep code symbols, file paths, commands, and configuration keys in their original form.
+
 ## Relationship to Goal mode
 
 - Plan and Goal are mutually exclusive active workflow modes.
@@ -282,7 +286,8 @@ The submit_plan call must provide:
 
 ### summary
 
-- One concise sentence describing the intended outcome and implementation scope.
+- One short title naming the intended outcome and implementation scope, no more than 80 characters.
+- After approval this exact text becomes the Todo board phase title shown during execution; write a compact label, not a full sentence with clauses.
 - Do not repeat the complete plan.
 - Do not include unresolved questions.
 

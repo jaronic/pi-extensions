@@ -291,7 +291,7 @@ export function installTodo(
       state: transition.state,
     });
     const details = buildTodoToolDetails(next, operation, transition.changedTaskIds);
-    const content = buildTodoMutationText(operation, next, transition);
+    const content = `${buildTodoMutationText(operation, next, transition)}\nApproved Plan steps are already on this board; continue with their numeric #IDs instead of initializing a new board.`;
     request.signal?.throwIfAborted();
     assertAvailable();
     const entry = buildTodoStateEntry("service", operation, next);

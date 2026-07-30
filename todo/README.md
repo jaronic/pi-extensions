@@ -15,7 +15,7 @@ Todo 适合以下工作：
 - 执行中需要跨 turn、compaction、reload 或 branch navigation 保留精确进度；
 - 用户希望在 TUI 中持续看到当前项、剩余项和 blocker。
 
-是否创建看板由模型自主判断：对只含需求、示例、问题、选项或假设的列表，提示词引导模型先判断各项是否真正属于执行范围，而非机械镜像；单步修改和纯问答通常不需要看板。Plan 批准的步骤则一定转交到这张看板并继续执行，模型不可跳过或另建替代。Todo 也不替代团队 backlog、长期项目管理或跨 session 同步。
+是否创建看板由模型自主判断：对只含需求、示例、问题、选项或假设的列表，提示词引导模型先判断各项是否真正属于执行范围，而非机械镜像；单步修改和纯问答通常不需要看板。Plan 批准的步骤则一定转交到这张看板并继续执行，模型不可跳过或另建替代；转交后看板已初始化，模型不得重新 `init` 或重复 `append` 同一批步骤，只能沿既有 `#ID` 继续。Todo 也不替代团队 backlog、长期项目管理或跨 session 同步。
 
 启用后：
 
@@ -62,11 +62,11 @@ pi --no-session --extension ./src/index.ts
 
 `pi.registerTool()` 使当前 active tool schema、description、`promptSnippet` 和 `promptGuidelines` 进入模型边界；Todo 不额外调用 `setActiveTools()`，因此不会覆盖其他扩展的工具集合。Plan 的只读 planning/clarification/approval/blocked 阶段会通过自己的 lease 隐藏 mutation-capable Todo，并用 direct phase sync 冻结其他入口；批准 handoff 后 Plan 关闭并恢复普通 `todo` 工具。
 
-普通 Todo 的创建时机由模型自主判断：多步骤执行或用户要求追踪时收益最大，列表本身不构成建板义务，模型会先判断各项是否为真实执行范围。Plan 批准的步骤一定通过 handoff 进入这张看板并强制沿转交任务继续。初始化必须发生在第一个被追踪执行步骤之前。
+普通 Todo 的创建时机由模型自主判断：多步骤执行或用户要求追踪时收益最大，列表本身不构成建板义务，模型会先判断各项是否为真实执行范围。Plan 批准的步骤一定通过 handoff 进入这张看板并强制沿转交任务继续（guideline 明确禁止批准后重新 `init` 或重复 `append`）。初始化必须发生在第一个被追踪执行步骤之前。
 
 | `op` | 必填字段 | 行为 |
 | --- | --- | --- |
-| `init` | `list: [{ phase, items[] }]` | 创建完整有序看板；自动把第一项设为 `inProgress`。仅在无看板或当前看板已 settled 时允许。 |
+| `init` | `list: [{ phase, items[] }]` | 创建完整有序看板；自动把第一项设为 `inProgress`。仅在无看板或当前看板已 settled 时允许；对 active/blocked 看板调用会被拒绝，错误信息引导沿既有 `#ID` 继续或仅 append 真正新增的工作。 |
 | `append` | `phase`, `items[]` | 向现有或新 phase 原子追加任务；settled 看板追加后自动恢复为 active（历史保留、`#ID` 连续）；不允许覆盖或替换 open 看板。 |
 | `start` | `id` | 启动一个 `pending` 项；原活动项退回 `pending`。 |
 | `done` | `id`，可选 `note` | 仅完成当前 `inProgress` 项；`note` 可记录简短验证证据。 |
@@ -215,7 +215,7 @@ Plan 是 Todo 的声明依赖：Plan package 先加载 Request、Todo extension 
 - Plan 每次活跃 phase transition 直接调用 `todo.syncPlanPhase({ sessionId, phase })`；Todo 不监听 EventBus Plan state。Phase sync 仅冻结 mutation 并隐藏普通 prompt/widget，`get/view` 仍保持只读可用。
 - `/plan approve` 调用 `todo.handoffPlan({ sessionId, phase, items })`，`phase` 是 Plan 侧由当前 Plan summary 派生的概要（净化为单行、截断到 80 字符 phase 上限，为空时回退 `Plan`）。空或 settled board 走普通 `init`；open board 走普通 `append`，冲突的 phase 名依次追加 ` (2)`、` (3)`。
 - Handoff 使用和 Todo service mutation 相同的验证、sequence、`todo-state-v2` journal、内存 commit 与 UI 刷新。已有 active task 不被 Plan 抢占；新 phase 按普通 board 顺序排队。
-- Handoff 失败时 Todo 不变且 Plan 保持 `awaitingApproval`。成功后 Plan 写 terminal state、同步 `off`、清除自身 UI 并恢复工具；后续 agent 只使用普通 `todo` 数字 `#ID`。
+- Handoff 失败时 Todo 不变且 Plan 保持 `awaitingApproval`。成功后 Plan 写 terminal state、同步 `off`、清除自身 UI 并恢复工具；handoff 返回内容附带一行“步骤已在此看板上、沿既有 `#ID` 继续、不要新建看板”的执行指引，后续 agent 只使用普通 `todo` 数字 `#ID`。
 - Reload/branch navigation 只恢复普通 Todo snapshot；没有 Plan owner、第二套进度账本、执行 ID 或单独步骤协议。取消未批准 Plan 不创建 Todo task。
 
 ### Goal

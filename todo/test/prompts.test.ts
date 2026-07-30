@@ -27,6 +27,7 @@ test("static guidance leaves board creation to model judgment while keeping Plan
   const guidance = TODO_PROMPT_GUIDELINES.join("\n");
   assert.match(guidance, /Decide for yourself when a Todo board is worth creating/);
   assert.match(guidance, /Plan approval always hands its approved steps onto this board/);
+  assert.match(guidance, /never re-run init or re-append the transferred steps/);
   assert.match(guidance, /judge whether the items are actual execution scope/);
   assert.match(guidance, /Initialize only before the first tracked execution step/);
   assert.doesNotMatch(guidance, /only once work has entered execution/);

@@ -285,7 +285,7 @@ todo.handoffPlan({
 
 - handoff 失败：Todo 不变，Plan 保持 `awaitingApproval`，不排队执行；
 - handoff 成功：Plan 写 terminal journal、同步 Todo phase `off`、清除 Plan UI、恢复原工具并排队执行；
-- agent 只通过普通 Todo `#ID` 更新任务；
+- handoff 返回内容与 Plan 排队的执行消息都明确 board 已初始化、禁止重新 `init` 或重复 `append` 转交步骤；agent 只通过普通 Todo `#ID` 更新任务；
 - Todo settled 不向 Plan发送完成事件；
 - reload/branch replay只恢复普通 Todo snapshot；
 - 取消未批准 Plan 不创建或修改 Todo task。

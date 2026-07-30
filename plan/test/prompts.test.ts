@@ -28,6 +28,9 @@ test("planning prompt defines evidence, clarification, and submission contracts"
   assert.match(prompt, /Never ask for information that can be obtained from these sources/);
   assert.match(prompt, /call submit_plan exactly once/);
   assert.match(prompt, /map one-to-one to the top-level implementation phases/);
+  assert.match(prompt, /Simplified Chinese by default, unless the user explicitly requests another language/);
+  assert.match(prompt, /no more than 80 characters/);
+  assert.match(prompt, /becomes the Todo board phase title/);
   assert.match(prompt, /report_plan_blocked exactly once/);
   assert.match(prompt, /concrete value of the intended outcome/);
   assert.match(prompt, /available execution capabilities/);

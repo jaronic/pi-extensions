@@ -21,7 +21,7 @@ import {
 } from "./state.ts";
 
 export const SubmitPlanParams = Type.Object({
-  summary: Type.String({ minLength: 1, maxLength: MAX_PLAN_SUMMARY_CHARS, description: "Concise outcome and scope summary" }),
+  summary: Type.String({ minLength: 1, maxLength: MAX_PLAN_SUMMARY_CHARS, description: "Short outcome title of at most 80 characters, written in Simplified Chinese unless the user requested another language; becomes the Todo board phase name after approval" }),
   plan: Type.String({ minLength: 1, maxLength: MAX_PLAN_TEXT_CHARS, description: "Complete Markdown implementation plan" }),
   steps: Type.Array(Type.String({ minLength: 1, maxLength: MAX_PLAN_STEP_CHARS }), {
     minItems: 1,

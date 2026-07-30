@@ -296,7 +296,10 @@ test("invalid, aborted, and sequence-overflow tool calls are atomic", async () =
     /unique within the call/,
   );
   await assert.rejects(harness.tool({ op: "done", id: 2 }), /current inProgress/);
-  await assert.rejects(harness.tool({ op: "init", list: [{ phase: "B", items: ["Replacement"] }] }), /cannot replace/);
+  await assert.rejects(
+    harness.tool({ op: "init", list: [{ phase: "B", items: ["Replacement"] }] }),
+    /cannot replace an active or blocked board; continue with the existing #IDs/,
+  );
   await assert.rejects(harness.tool({ op: "get", id: 99 }), /does not exist/);
   await assert.rejects(harness.tool({ op: "append", phase: "A" }), /missing a required field/);
   await assert.rejects(
@@ -598,5 +601,33 @@ test("direct Todo service shares the compatibility board and fails closed after 
   assert.throws(
     () => service.execute({ sessionId: "todo-session", operation: { op: "view" } }),
     /shut down/,
+  );
+});
+
+test("Plan handoff commits the transferred board and points execution at its #IDs", async () => {
+  const harness = new TodoHarness();
+  const service = install(harness);
+  await harness.startSession();
+
+  service.syncPlanPhase({ sessionId: "todo-session", phase: "awaitingApproval" });
+  const handoff = service.handoffPlan({
+    sessionId: "todo-session",
+    phase: "Ship safely",
+    items: ["Inspect", "Verify"],
+  });
+  assert.match(handoff.content, /Initialized Todo board with 2 tasks/);
+  assert.match(handoff.content, /Approved Plan steps are already on this board/);
+  assert.match(handoff.content, /instead of initializing a new board/);
+  assert.equal(handoff.details.sequence, 1);
+  service.syncPlanPhase({ sessionId: "todo-session", phase: "off" });
+
+  const view = await requestTodoService(harness.api, {
+    sessionId: "todo-session",
+    operation: { op: "view", includeClosed: true },
+  });
+  assert.equal(view.details.sequence, 1);
+  assert.deepEqual(
+    stateFrom(view).phases.map((phase: { name: string }) => phase.name),
+    ["Ship safely"],
   );
 });

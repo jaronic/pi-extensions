@@ -506,7 +506,7 @@ export function transitionTodo(
 
   if (input.op === "init") {
     if (state !== null && todoBoardStatus(state) !== "settled") {
-      throw new Error("Todo init cannot replace an active or blocked board; append the new work instead.");
+      throw new Error("Todo init cannot replace an active or blocked board; continue with the existing #IDs or append only genuinely new work.");
     }
     const timestamp = normalizeNow(now);
     const list = normalizeInitList(input);

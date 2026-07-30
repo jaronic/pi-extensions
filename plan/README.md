@@ -68,7 +68,8 @@ stateDiagram-v2
 - agent 先通过仓库代码、配置、测试、历史和既有模式消除不确定性，不得询问能够自行查到的信息；具体路径、符号、命令和行为判断必须有证据。
 - 只有缺少正确规划所需事实、存在实质性取舍、假设可能破坏数据或契约，或业务语义无法从代码和测试确定时，才使用 `request_plan_choice` 或外部 Request `ask`；提供 2–5 个有区别的选项与取舍描述，不得询问工具可查的信息。
 - 每个顶层实施阶段都写明 Target、Change 和 Check，并按照真实依赖排序；计划层面还必须说明有证据支持的问题、为用户/调用方/系统带来的具体价值及方案理由，不得编造业务收益或影响指标。验证方式必须对应 bug、API、UI、数据库或内部重构的可观察行为；只能承诺当前已确认可执行的验证，真实 UI、外部服务或迁移环境不可用时应写明所需环境、手工路径和不可替代的成功信号。
-- `summary` 是一句结果与范围摘要；`plan` 保存完整技术细节；`steps` 与顶层阶段一一对应，通常为 2–8 项且提示词要求每项不超过 120 字符。工具 schema 保留 1–50 项、每项最多 240 字符的硬上限。
+- 所有面向用户的 Plan 文本——`summary`、`plan`、`steps`、choice 问题与选项、阻塞报告——默认使用简体中文撰写，除非用户明确要求其他语言；代码符号、文件路径、命令和配置键保持原文。
+- `summary` 是最多 80 字符的短标题，批准后将原样成为 Todo board phase 名，提示词要求写成紧凑标签而非带从句的完整句子；`plan` 保存完整技术细节；`steps` 与顶层阶段一一对应，通常为 2–8 项且提示词要求每项不超过 120 字符。工具 schema 保留 1–50 项、每项最多 240 字符的硬上限。
 - 存在旧计划时，它会经过 XML 转义后放入 `<untrusted_plan>`；refinement 必须重新核对证据并提交完整替代计划，而不是 diff 或局部补丁。
 - refinement 时，用户最新明确需求定义目标状态；仓库证据定义当前行为和技术约束。两者无法安全协调时，agent 必须澄清，而不是静默偏向任一方。
 - 所有实质问题解决后，agent 恰好调用一次 `submit_plan` 并结束规划轮，不在同一轮执行计划。
@@ -105,7 +106,7 @@ stateDiagram-v2
 
 ```json
 {
-  "summary": "简洁的结果与范围摘要",
+  "summary": "新增语音资产训练接口",
   "plan": "完整 Markdown 实施计划",
   "steps": [
     "调查并确认现有契约",
@@ -115,7 +116,7 @@ stateDiagram-v2
 }
 ```
 
-约束：summary 最多 500 字符，plan 最多 20,000 字符，1–50 个步骤，每步最多 240 字符；完整 payload 还受 40 KiB UTF-8 上限约束。插件规范化步骤文本，写入不可变 body-only artifact，并以 `terminate: true` 结束当前规划轮。model-visible 调用结果只返回摘要与 Review 提示；绝对路径只在 machine-readable `details.planPath` 和 journal state 中公开，完整 body 与步骤文本不复制到调用结果。
+约束：summary 硬上限 500 字符（提示词契约要求不超过 80 字符的标题），plan 最多 20,000 字符，1–50 个步骤，每步最多 240 字符；完整 payload 还受 40 KiB UTF-8 上限约束。插件规范化步骤文本，写入不可变 body-only artifact，并以 `terminate: true` 结束当前规划轮。model-visible 调用结果只返回摘要与 Review 提示；绝对路径只在 machine-readable `details.planPath` 和 journal state 中公开，完整 body 与步骤文本不复制到调用结果。
 
 #### `report_plan_blocked`
 
@@ -141,7 +142,7 @@ stateDiagram-v2
 
 #### 批准后的 Todo handoff
 
-Plan 没有 `executing` phase，也不注册步骤更新工具。`/plan approve` 把 `submit_plan.steps` 作为普通 Todo 任务提交，phase 名由 `planHandoffPhaseName(summary)` 从当前 Plan summary 派生（净化为单行、截断到 80 字符，为空时回退 `Plan`）：若当前 board 为空或已 settled，则以该名创建 board；若已有 open board，则追加该名（冲突时追加 ` (2)` 等唯一后缀）的 phase，并保留原活动任务。handoff 成功后 Plan journal 写入 terminal state、清除 Plan UI、恢复工具并排队一轮带完整已批准计划的执行消息。后续更新全部使用普通 `todo` 工具与数字 `#ID`。
+Plan 没有 `executing` phase，也不注册步骤更新工具。`/plan approve` 把 `submit_plan.steps` 作为普通 Todo 任务提交，phase 名由 `planHandoffPhaseName(summary)` 从当前 Plan summary 派生（净化为单行、截断到 80 字符，为空时回退 `Plan`）：若当前 board 为空或已 settled，则以该名创建 board；若已有 open board，则追加该名（冲突时追加 ` (2)` 等唯一后缀）的 phase，并保留原活动任务。handoff 成功后 Plan journal 写入 terminal state、清除 Plan UI、恢复工具并排队一轮带完整已批准计划的执行消息。handoff 结果与执行消息都明确说明步骤已初始化在 Todo 看板上、禁止再次 `init` 或重复 `append` 同一批步骤；后续更新全部使用普通 `todo` 工具与既有数字 `#ID`。
 
 ## 阶段与工具策略
 

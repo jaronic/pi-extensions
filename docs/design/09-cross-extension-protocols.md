@@ -433,7 +433,7 @@ Plan clarification 将领域 choice 转成 Request 单选问题；Request 只返
 - Todo 严格校验当前 session、`awaitingApproval` gate、phase、全部 step 文本、总数与 abort signal；
 - 空或 settled board 使用普通 `init` transition；open board 使用普通 `append` transition，并在派生名冲突时追加 ` (2)`、` (3)` 等唯一后缀；
 - Todo 先写普通 `todo-state-v2` service journal，再 commit 相同 snapshot 到内存/UI；
-- 成功后 Plan 写为 off、恢复工具并排队 execution turn；agent 从此只用普通 `todo` 数字 `#ID`；
+- 成功后 Plan 写为 off、恢复工具并排队 execution turn；handoff 结果与 execution turn 都明确 board 已初始化、禁止重复 `init`/`append` 转交步骤，agent 从此只用普通 `todo` 数字 `#ID`；
 - 失败时 Todo 不变，Plan 追加恢复 entry 并继续停在 `awaitingApproval`。
 
 不存在 Plan execution owner、execution ID、managed progress journal、`update_plan_step` 或 local/provider fallback。Plan 的责任边界结束于 handoff，Todo 是批准后的唯一进度账本。

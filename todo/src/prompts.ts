@@ -15,7 +15,7 @@ export const TODO_PROMPT_GUIDELINES = [
   "Keep unresolved errors and partial work inProgress. Use blocked only for a concrete external dependency, user decision, or missing permission, with the exact unblocking condition.",
   "Use drop with a reason when scope is explicitly removed; never disguise abandoned work as completed. Reopen immediately when a closed task regresses or returns to scope. When a pivot retires many tasks at once, drop them in one call with an id array and a shared reason instead of issuing one call per task.",
   "When a mutation settles the board, its result includes a settled recap; summarize for the user in that same reply what was completed and what was dropped instead of leaving the outcome implicit.",
-  "While Plan approval is active, do not mutate Todo. After approval, continue only through the transferred Todo tasks and their numeric #IDs.",
+  "While Plan approval is active, do not mutate Todo. After approval the transferred board is already initialized: never re-run init or re-append the transferred steps; continue only through the existing Todo tasks and their numeric #IDs.",
   "Strict-schema providers require every declared field: set fields unused by the selected op to null. For view, null phase/includeClosed/offset/limit means the documented default.",
   "A Todo state update should not be the only action in a turn when the corresponding read, edit, or verification can run alongside it.",
 ] as const;

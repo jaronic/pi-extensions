@@ -334,7 +334,7 @@ ${escapeXmlText(approved.plan ?? "")}
 Todo handoff:
 ${handoff.content}
 
-Use the todo tool with its numeric #IDs. Mark the active Todo done only after its observable check passes; block it only for a genuine external dependency. Todo is the sole progress ledger after approval.`,
+The approved steps are already initialized on the Todo board with stable numeric #IDs; never call todo init or append to recreate them. Start the first pending #ID, mark the active Todo done only after its observable check passes, and block it only for a genuine external dependency. Todo is the sole progress ledger after approval.`,
       display: false,
       details: { kind: "execute", planUpdatedAt: approved.updatedAt, todoSequence: handoff.details.sequence },
     };

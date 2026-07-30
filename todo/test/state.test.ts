@@ -74,7 +74,7 @@ test("init rejects open boards and creates a new generation after settlement", (
   const first = initState([{ phase: "One", items: ["Ship"] }]);
   assert.throws(
     () => transitionTodo(first, { op: "init", list: [{ phase: "Replacement", items: ["Wrong"] }] }, 101, () => BOARD_B),
-    /cannot replace an active or blocked board/,
+    /cannot replace an active or blocked board; continue with the existing #IDs/,
   );
   const completed = transitionTodo(first, { op: "done", id: 1, note: "verified" }, 102, () => BOARD_B).state;
   assert.ok(completed);
