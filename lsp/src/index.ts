@@ -97,6 +97,12 @@ export default function lspExtension(pi: ExtensionAPI): void {
       if (previous) await previous.shutdown();
       const config = await loadConfig(ctx.cwd, ctx.isProjectTrusted());
       manager = new ServerManager(ctx.cwd, config, logger);
+      logger.info("manager_ready", {
+        cwd: ctx.cwd,
+        trusted: ctx.isProjectTrusted(),
+        servers: config.servers.map((server) => server.id),
+        loadedFrom: config.loadedFrom,
+      });
       return manager;
     })().finally(() => {
       managerPromise = undefined;
@@ -118,6 +124,7 @@ export default function lspExtension(pi: ExtensionAPI): void {
     parameters: Parameters,
     async execute(_toolCallId, params: Parameters, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
+      const startedAt = Date.now();
       const activeManager = await getManager(ctx);
       const limit = Math.min(params.limit ?? activeManager.config.maxResults, 500);
       ctx.ui.setStatus("lsp", `LSP: ${params.action}`);
@@ -125,6 +132,19 @@ export default function lspExtension(pi: ExtensionAPI): void {
         const result = await executeAction(activeManager, params, limit, signal);
         signal?.throwIfAborted();
         const bounded = await outputStore.bound(result.text);
+        logger.info("tool_succeeded", {
+          action: params.action,
+          file: params.file,
+          server: params.server,
+          line: params.line,
+          column: params.column,
+          symbol: params.symbol,
+          query: params.query,
+          resultCount: result.details.resultCount,
+          errorCount: result.details.errorCount,
+          truncated: bounded.truncation !== undefined,
+          durationMs: Date.now() - startedAt,
+        });
         return {
           content: [{ type: "text", text: bounded.text }],
           details: {
@@ -147,6 +167,7 @@ export default function lspExtension(pi: ExtensionAPI): void {
           query: params.query,
           newName: params.newName,
           cwd: ctx.cwd,
+          durationMs: Date.now() - startedAt,
           error,
         });
         throw error;

@@ -222,17 +222,39 @@ Server patch 除 `initOptions` 外是浅合并。修改嵌套对象时应提供�
 
 ## 排查日志
 
-默认开启 `error` 级别：只在工具或 server 失败时写日志，且日志目录在首次写入时才创建，无事件的 session 仍然零磁盘副作用。开关与级别都在全局配置 `~/.pi/agent/lsp.json`（遵循 `PI_CODING_AGENT_DIR`）的顶层键：
+默认开启 `error` 级别：只在工具或 server 失败时写日志，且日志目录在首次写入时才创建，无事件的 session 仍然零磁盘副作用。开关与级别按以下顺序取第一个命中：
+
+1. 环境变量 `PI_LSP_LOG`；
+2. 环境变量 `PI_EXT_LOG`（所有使用同一 logger 的扩展共享的 fallback）；
+3. 全局配置 `~/.pi/agent/lsp.json`（遵循 `PI_CODING_AGENT_DIR`）的顶层键：
 
 ```json
 { "logEnabled": true, "logLevel": "debug" }
 ```
 
+- 环境变量大小写不敏感：取值为 `error`/`warn`/`info`/`debug` 直接设级别；`0`/`false`/`off` 完全关闭；其他任何非空值（如 `1`）选择最详细的 `debug`。
 - `logEnabled`：只有显式 `false` 完全关闭；省略或其他取值视为开启。
 - `logLevel`：`error`（默认）、`warn`、`info`、`debug`；缺失或未知取值回退 `error`。
-- 只有全局文件生效：logger 在扩展加载时只读取全局配置一次，项目级 `.pi/lsp.json` 设置 `logEnabled`/`logLevel` 会被严格 decoder 拒绝；修改后 `/reload` 生效。
+- 只有全局文件生效：logger 在扩展加载时只读取全局配置一次，项目级 `.pi/lsp.json` 设置 `logEnabled`/`logLevel` 会被严格 decoder 拒绝；修改后 `/reload` 生效。环境变量优先于配置文件，适合一次性排障：`PI_LSP_LOG=debug pi ...`。
 - 日志写入 `getAgentDir()/logs/lsp.log`（即 `~/.pi/agent/logs/lsp.log`）。文件超过 5 MiB 轮转为 `lsp.log.1`，只保留一份备份。
-- 每行是一条 JSON：`ts`、`level`、`ext`、`event` 与 `context`。工具失败记录完整请求形状（action、file、server、行列、symbol/query/newName），server 启动与诊断失败额外记录解析后的命令与捕获的 server stderr（包含在 error 消息中），便于脱离现场复现。C1 控制字符会被中和，避免在终端或编辑器中打开日志时执行转义序列。
+- 每行是一条 JSON：`ts`、`level`、`ext`、`event` 与 `context`，事件目录：
+
+  | event | level | 关键 context |
+  | --- | --- | --- |
+  | `manager_ready` | info | `cwd`、`trusted`、`servers`、`loadedFrom` |
+  | `server_started` | info | `server`、`root`、`command` |
+  | `server_exited` | warn | 非预期退出（crash）；`server`、`root`、`command`。idle/主动 shutdown 不记 |
+  | `server_idle_shutdown` | debug | `server`、`root` |
+  | `tool_succeeded` | info | 完整请求形状 + `resultCount`/`errorCount`/`truncated`/`durationMs` |
+  | `tool_failed` | error | 完整请求形状（action、file、server、行列、symbol/query/newName）+ `cwd`/`durationMs` |
+  | `command_failed` | error | `command`、`cwd` |
+  | `client_start_failed` | warn | `server`、`action`、`file`、`command`；error 消息含捕获的 server stderr |
+  | `diagnostics_failed` | warn | `server`、`file`、`root` |
+  | `file_synced` | debug | `file`、`servers`、`failed`（edit/write/ast_grep_edit 后的文档同步） |
+  | `sync_failed` | warn | `server`、`file` |
+  | `shutdown` | info | `cwd`、`clients`、`pending` |
+
+  `PI_LSP_LOG=debug` 即可按时间线还原“配置加载 → server 启动 → 每次工具调用与耗时 → 文档同步 → 关闭”的完整场景。C1 控制字符会被中和，避免在终端或编辑器中打开日志时执行转义序列。
 - 日志是尽力而为的旁路：写入或轮转失败会被静默吞掉，绝不影响工具执行或改变任何返回结果。
 
 ## 与 Plan、Goal 和 Todo 的关系
@@ -246,7 +268,7 @@ Server patch 除 `initOptions` 外是浅合并。修改嵌套对象时应提供�
 - `src/index.ts`：`lsp` 工具 schema、action dispatch、`/lsp`、状态 UI、tool-result 同步 wiring 和 shutdown。
 - `src/config.ts`：内置服务器、配置路径、严格 decoder、分层 patch、schema normalization、后缀/role 路由。
 - `src/server-manager.ts`：client 缓存、候选 fallback、并行 diagnostics、idle timer 和有界 shutdown。
-- `src/logger.ts`：默认开启 `error` 级、由全局 `lsp.json` 的 `logEnabled`/`logLevel` 控制、首次写入才创建日志目录、写入 `getAgentDir()/logs/lsp.log` 并有界轮转、C1 中和、吞掉自身失败的排查日志。与 hashline 的同名文件逐字节相同，避免跨包生产导入。
+- `src/logger.ts`：默认开启 `error` 级、由 `PI_LSP_LOG`/`PI_EXT_LOG` 环境变量或全局 `lsp.json` 的 `logEnabled`/`logLevel` 控制、首次写入才创建日志目录、写入 `getAgentDir()/logs/lsp.log` 并有界轮转、C1 中和、吞掉自身失败的排查日志。与 hashline 的同名文件逐字节相同，避免跨包生产导入。
 - `src/lsp-client.ts`：子进程组、JSON-RPC、initialize/capability、文档同步、position encoding、timeout/cancel、ready notification 和升级式进程树回收。
 - `src/roots.ts`：区分用户 `@` mention 与 literal machine path 的 realpath workspace confinement，以及 root marker 选择。
 - `src/positions.ts`：1-based Unicode 输入到 LSP position 的转换及唯一 symbol 解析。

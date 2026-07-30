@@ -131,16 +131,27 @@ export class ServerManager {
   }
 
   async syncActiveFile(file: string): Promise<void> {
-    const work: Promise<unknown>[] = [];
+    const work: Array<{ server: string; promise: Promise<unknown> }> = [];
     for (const [key, client] of this.clients) {
       if (client.state !== "ready" || !isWithin(file, client.root)) continue;
       const languageId = languageIdForFile(client.server, file);
       if (languageId) {
         this.scheduleIdle(key, client);
-        work.push(client.syncFile(file, languageId));
+        work.push({ server: client.server.id, promise: client.syncFile(file, languageId) });
       }
     }
-    if (work.length > 0) await Promise.allSettled(work);
+    if (work.length === 0) return;
+    const settled = await Promise.allSettled(work.map((entry) => entry.promise));
+    settled.forEach((outcome, index) => {
+      if (outcome.status === "rejected") {
+        this.logger.warn("sync_failed", { server: work[index]?.server, file: relative(this.cwd, file) || file, error: outcome.reason });
+      }
+    });
+    this.logger.debug("file_synced", {
+      file: relative(this.cwd, file) || file,
+      servers: work.map((entry) => entry.server),
+      failed: settled.filter((outcome) => outcome.status === "rejected").length,
+    });
   }
 
   async shutdown(): Promise<void> {
@@ -152,6 +163,7 @@ export class ServerManager {
     if (pending.length > 0) await Promise.allSettled(pending);
     const clients = [...this.clients.values()];
     this.clients.clear();
+    this.logger.info("shutdown", { cwd: this.cwd, clients: clients.length, pending: pending.length });
     await Promise.allSettled(clients.map((client) => client.shutdown()));
     this.starting.clear();
   }
@@ -174,7 +186,13 @@ export class ServerManager {
     let instance: LspClient | undefined;
     const startup = LspClient.start(server, root, this.config.requestTimeoutMs, () => {
       this.clearIdle(key);
+      // A close while the client is still registered is a crash, not a
+      // deliberate idle/manager shutdown; those remove the client first.
+      const unexpected = instance !== undefined && this.clients.get(key) === instance;
       if (!instance || this.clients.get(key) === instance) this.clients.delete(key);
+      if (unexpected) {
+        this.logger.warn("server_exited", { server: server.id, root, command: server.command.join(" ") });
+      }
     }).then(async (client) => {
       instance = client;
       if (this.shuttingDown) {
@@ -183,6 +201,7 @@ export class ServerManager {
       }
       this.clients.set(key, client);
       this.scheduleIdle(key, client);
+      this.logger.info("server_started", { server: server.id, root, command: server.command.join(" ") });
       return client;
     }).finally(() => {
       this.starting.delete(key);
@@ -197,6 +216,7 @@ export class ServerManager {
       this.idleTimers.delete(key);
       if (this.clients.get(key) !== client) return;
       this.clients.delete(key);
+      this.logger.debug("server_idle_shutdown", { server: client.server.id, root: client.root });
       void client.shutdown();
     }, this.config.idleTimeoutMs);
     timer.unref();

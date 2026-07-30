@@ -7,7 +7,22 @@ import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
 import { HoverRequest } from "vscode-languageserver-protocol";
 import { ServerManager } from "../src/server-manager.ts";
+import type { Logger } from "../src/logger.ts";
 import type { LspConfig, ServerConfig } from "../src/types.ts";
+
+interface RecordedLog {
+  readonly level: string;
+  readonly event: string;
+  readonly context?: Record<string, unknown>;
+}
+
+function recordingLogger(): { readonly events: RecordedLog[]; readonly logger: Logger } {
+  const events: RecordedLog[] = [];
+  const record = (level: string) => (event: string, context?: Record<string, unknown>) => {
+    events.push({ level, event, context });
+  };
+  return { events, logger: { error: record("error"), warn: record("warn"), info: record("info"), debug: record("debug") } };
+}
 
 const fakeServer = join(dirname(fileURLToPath(import.meta.url)), "fake-server.mjs");
 
@@ -48,6 +63,53 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
   }
   assert.fail("Condition did not become true.");
 }
+
+test("ServerManager logs the server lifecycle and unexpected exits", async (context) => {
+  const { root, file } = await workspace(context);
+  const { events, logger } = recordingLogger();
+  const manager = new ServerManager(root, config([server("normal", "normal")]), logger);
+  context.after(async () => await manager.shutdown());
+  await manager.clientForAction(file, "hover");
+  const started = events.find((entry) => entry.event === "server_started");
+  assert.equal(started?.level, "info");
+  assert.equal(started?.context?.server, "normal");
+  assert.match(String(started?.context?.command), /fake-server\.mjs/);
+
+  await manager.syncActiveFile(file);
+  const synced = events.find((entry) => entry.event === "file_synced");
+  assert.equal(synced?.level, "debug");
+  assert.deepEqual(synced?.context?.servers, ["normal"]);
+
+  await manager.shutdown();
+  assert.ok(events.some((entry) => entry.level === "info" && entry.event === "shutdown"));
+  assert.ok(!events.some((entry) => entry.event === "server_exited"), "deliberate shutdown is not a crash");
+
+  const crashLog = recordingLogger();
+  const crashManager = new ServerManager(root, config([server("crash", "crash-hover")]), crashLog.logger);
+  context.after(async () => await crashManager.shutdown());
+  const crashing = await crashManager.clientForAction(file, "hover");
+  const document = await crashing.client.syncFile(file, crashing.languageId);
+  await assert.rejects(crashing.client.request(HoverRequest.method, {
+    textDocument: { uri: document.uri },
+    position: { line: 0, character: 0 },
+  }));
+  await waitUntil(() => crashLog.events.some((entry) => entry.event === "server_exited"));
+  const exited = crashLog.events.find((entry) => entry.event === "server_exited");
+  assert.equal(exited?.level, "warn");
+  assert.equal(exited?.context?.server, "crash");
+});
+
+test("ServerManager logs idle shutdown at debug", async (context) => {
+  const { root, file } = await workspace(context);
+  const { events, logger } = recordingLogger();
+  const manager = new ServerManager(root, config([server("idle", "normal")], 20), logger);
+  context.after(async () => await manager.shutdown());
+  await manager.clientForAction(file, "hover");
+  await waitUntil(() => events.some((entry) => entry.event === "server_idle_shutdown"));
+  const idle = events.find((entry) => entry.event === "server_idle_shutdown");
+  assert.equal(idle?.level, "debug");
+  assert.equal(idle?.context?.server, "idle");
+});
 
 test("ServerManager coalesces concurrent startup for one server and root", async (context) => {
   const { root, file } = await workspace(context);

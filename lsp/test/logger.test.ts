@@ -7,6 +7,7 @@ import { createLogger } from "../src/logger.ts";
 
 // getAgentDir() resolves the lsp.json config and logs/ under this directory.
 const AGENT_DIR_ENV = "PI_CODING_AGENT_DIR";
+const LOG_ENV_VARS = ["PI_LSP_LOG", "PI_EXT_LOG"] as const;
 
 async function withAgentDir(
   config: string | undefined,
@@ -14,13 +15,19 @@ async function withAgentDir(
 ): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "pi-lsp-log-"));
   const saved = process.env[AGENT_DIR_ENV];
+  const savedLogEnv = LOG_ENV_VARS.map((name) => [name, process.env[name]] as const);
   process.env[AGENT_DIR_ENV] = dir;
+  for (const name of LOG_ENV_VARS) delete process.env[name];
   try {
     if (config !== undefined) await writeFile(join(dir, "lsp.json"), config);
     await fn(join(dir, "logs", "lsp.log"));
   } finally {
     if (saved === undefined) delete process.env[AGENT_DIR_ENV];
     else process.env[AGENT_DIR_ENV] = saved;
+    for (const [name, value] of savedLogEnv) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
     await rm(dir, { recursive: true, force: true });
   }
 }
@@ -87,6 +94,72 @@ test("an enabled logger writes a structured JSON line", async () => {
     assert.equal(entry.event, "tool_failed");
     assert.deepEqual(entry.context, { action: "hover", file: "a.ts" });
     assert.equal(typeof entry.ts, "string");
+  });
+});
+
+test("PI_LSP_LOG sets the threshold without any config file", async () => {
+  await withAgentDir(undefined, async (logFile) => {
+    process.env.PI_LSP_LOG = "info";
+    const logger = createLogger("lsp");
+    logger.debug("skipped");
+    logger.info("kept");
+    const lines = await readLines(logFile);
+    assert.deepEqual(lines.map((line) => line.event), ["kept"]);
+    assert.equal(lines[0]?.level, "info");
+  });
+});
+
+test("PI_LSP_LOG=debug admits the lowest-severity events", async () => {
+  await withAgentDir(undefined, async (logFile) => {
+    process.env.PI_LSP_LOG = "debug";
+    const logger = createLogger("lsp");
+    logger.debug("d");
+    logger.error("e");
+    const lines = await readLines(logFile);
+    assert.deepEqual(lines.map((line) => line.event), ["d", "e"]);
+  });
+});
+
+test("a truthy non-level PI_LSP_LOG value selects the debug threshold", async () => {
+  await withAgentDir(undefined, async (logFile) => {
+    process.env.PI_LSP_LOG = "1";
+    const logger = createLogger("lsp");
+    logger.debug("kept");
+    const lines = await readLines(logFile);
+    assert.deepEqual(lines.map((line) => line.event), ["kept"]);
+  });
+});
+
+test("PI_LSP_LOG=off disables logging even when the config enables it", async () => {
+  await withAgentDir(JSON.stringify({ logLevel: "debug" }), async (logFile) => {
+    process.env.PI_LSP_LOG = "off";
+    const logger = createLogger("lsp");
+    logger.error("boom");
+    await assert.rejects(stat(logFile), "env off must win over the config file");
+  });
+});
+
+test("PI_LSP_LOG=debug wins over logEnabled:false in the config", async () => {
+  await withAgentDir(JSON.stringify({ logEnabled: false }), async (logFile) => {
+    process.env.PI_LSP_LOG = "debug";
+    const logger = createLogger("lsp");
+    logger.debug("kept");
+    const lines = await readLines(logFile);
+    assert.deepEqual(lines.map((line) => line.event), ["kept"]);
+  });
+});
+
+test("PI_EXT_LOG is the shared fallback and the specific variable wins", async () => {
+  await withAgentDir(undefined, async (logFile) => {
+    process.env.PI_EXT_LOG = "debug";
+    const fallback = createLogger("lsp");
+    fallback.debug("via_shared");
+    process.env.PI_LSP_LOG = "error";
+    const specific = createLogger("lsp");
+    specific.debug("skipped");
+    specific.error("via_specific");
+    const lines = await readLines(logFile);
+    assert.deepEqual(lines.map((line) => line.event), ["via_shared", "via_specific"]);
   });
 });
 
