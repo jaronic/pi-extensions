@@ -227,6 +227,8 @@ Only unresolved facts that affect understanding or decisions.
 | --- | --- | --- | --- | --- | --- |
 ~~~
 
+When user context is present, place a **Direct answer** section immediately after the executive thesis that answers the user's ask with inline evidence IDs. Compress sections that do not serve the ask, stating each compression in one sentence; never drop the snapshot matrix, evidence labels, or the evidence index.
+
 ## Completion gate
 
 Before finishing, verify:
@@ -238,6 +240,6 @@ Before finishing, verify:
 - the problem and decision chains are explicit and evidence-linked;
 - documented alternatives are evidenced, analyst-generated counterfactuals are labeled as inference, and absent alternatives remain Unknown;
 - every material rule, diagram edge, and decision claim has an inline evidence ID;
-- diagrams agree with prose, their edge-evidence tables, and the evidence index;
+- when user context exists, the direct-answer section answers the ask with evidence IDs, and any compressed sections are explicitly stated;
 - the Markdown file exists at the requested path and is complete;
 - the final chat response links the file and names only material unknowns.

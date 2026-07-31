@@ -2,6 +2,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { parseDiff } from "./diff-parser.ts";
+import type { DiffReportCallLedger } from "./call-ledger.ts";
 import {
   getCommitHistory,
   listUntrackedFiles,
@@ -74,7 +75,7 @@ export interface DiffReportToolDetails {
   fullOutputPath?: string;
 }
 
-export function registerDiffReportTool(pi: ExtensionAPI, outputStore: DiffReportOutputStore): void {
+export function registerDiffReportTool(pi: ExtensionAPI, outputStore: DiffReportOutputStore, callLedger?: DiffReportCallLedger): void {
   pi.registerTool({
     name: "diff_report",
     label: "Diff Report Evidence",
@@ -172,6 +173,7 @@ export function registerDiffReportTool(pi: ExtensionAPI, outputStore: DiffReport
         truncated: bounded.truncation !== undefined,
         ...(bounded.fullOutputPath ? { fullOutputPath: bounded.fullOutputPath } : {}),
       };
+      callLedger?.record(scope.source, view);
       return {
         content: [{ type: "text" as const, text: bounded.text }],
         details,

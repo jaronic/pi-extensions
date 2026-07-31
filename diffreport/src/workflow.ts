@@ -222,8 +222,22 @@ function singleAnswerValue(answer: RequestAnswer): string | undefined {
   return value?.trim() || undefined;
 }
 
-function branchOptions(branches: readonly BranchInfo[]): RequestOption[] {
-  return branches.slice(0, 10).map((branch) => ({
+const MAX_BRANCH_OPTIONS = 15;
+const RECENT_COMMIT_OPTIONS = 15;
+
+function branchOptions(branches: readonly BranchInfo[], preferred?: string): RequestOption[] {
+  const ordered = [...branches];
+  // The recommendation must stay selectable: when the preferred branch falls
+  // outside the most-recently-active slice, pull it to the front instead of
+  // silently degrading the recommendation to the first listed option.
+  if (preferred) {
+    const index = ordered.findIndex((branch) => branch.name === preferred);
+    if (index >= MAX_BRANCH_OPTIONS) {
+      ordered.splice(index, 1);
+      ordered.unshift(branches[index]!);
+    }
+  }
+  return ordered.slice(0, MAX_BRANCH_OPTIONS).map((branch) => ({
     label: branch.name,
     description: [branch.current ? "current branch" : undefined, branch.date].filter(Boolean).join(" · ") || undefined,
   }));
@@ -279,13 +293,16 @@ async function collectBranchBrief(
   if ((!target || !base || (requireDescription && !description)) && !interactive) {
     target ??= suggestedTarget;
     base ??= suggestedBase;
-    if (!target || !base || (requireDescription && !description)) {
+    if (!target || (requireDescription && !description)) {
       throw new Error(`Interactive branch selection requires Request UI. ${COMMAND_USAGE}`);
+    }
+    if (!base) {
+      throw new Error(`Could not infer an unambiguous comparison base for '${target}'. Pass --base <ref> explicitly.`);
     }
   }
 
   if (interactive && (!target || !base || (requireDescription && !description))) {
-    const options = branchOptions(branches);
+    const options = branchOptions(branches, suggestedTarget);
     const questions: RequestQuestion[] = [];
     if (!target) {
       if (options.length > 0) {
@@ -309,7 +326,7 @@ async function collectBranchBrief(
       }
     }
     if (!base) {
-      const baseOptions = target ? options.filter((option) => option.label !== target) : options;
+      const baseOptions = branchOptions(target ? branches.filter((branch) => branch.name !== target) : branches, suggestedBase);
       if (baseOptions.length > 0) {
         const recommended = Math.max(0, baseOptions.findIndex((option) => option.label === suggestedBase));
         questions.push({
@@ -357,7 +374,7 @@ async function collectBranchBrief(
 
   if (target === base) {
     if (!interactive) throw new Error("Branch target and base must be different revisions.");
-    const alternatives = branchOptions(branches.filter((branch) => branch.name !== target));
+    const alternatives = branchOptions(branches.filter((branch) => branch.name !== target), suggestedBase);
     const question: RequestQuestion = alternatives.length > 0
       ? {
           id: "alternate-base",
@@ -403,7 +420,7 @@ async function collectCommitBrief(
   let targets = [...new Set(parsed.commitTargets.map((target) => target.trim()).filter(Boolean))];
   if (targets.length === 0) {
     if (!interactive) throw new Error(`Commit analysis needs a revision selection. ${COMMAND_USAGE}`);
-    const recent = await listRecentCommits(pi, cwd, "HEAD", 8, signal);
+    const recent = await listRecentCommits(pi, cwd, "HEAD", RECENT_COMMIT_OPTIONS, signal);
     if (recent.length > 0) {
       const refByLabel = new Map<string, string>();
       const options = recent.map((commit) => {
@@ -570,6 +587,12 @@ export function buildExplorationKickoff(brief: AnalysisBrief): string {
     }, null, 2),
     "```",
     "",
+    ...(brief.description ? [
+      "## Focus",
+      "",
+      `The user asked: ${JSON.stringify(brief.description)}. Verify it as a hypothesis; never narrow evidence collection because of it. It is also the report's center of gravity: the report MUST place a dedicated direct-answer section immediately after the executive thesis, answering this ask with inline evidence IDs. Sections that do not serve the ask may be compressed, with each compression stated in one sentence; never drop the snapshot matrix, evidence labels, or the evidence index.`,
+      "",
+    ] : []),
     "## Required process",
     "",
     `1. Start with these \`diff_report\` overview call(s): ${JSON.stringify(overviewCalls)}.`,

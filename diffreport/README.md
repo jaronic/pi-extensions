@@ -26,6 +26,7 @@ flowchart LR
 - **起点可选**：branch + 业务描述、当前未提交改动、完整 branch、一个或多个提交/版本范围。
 - **边界可确认**：分支 target/base、提交集合和关键业务解释不确定时，通过 Request 提问；仓库证据足够时继续自主探索。
 - **描述不做过滤**：branch + description 中的描述是待验证的上下文，不会自动转成 commit-message、文件或符号过滤条件。
+- **描述聚焦报告**：存在用户描述时，报告必须在 executive thesis 之后设 Direct answer 节，带证据 ID 直接回应；与主线无关的章节可从略但须逐一声明，snapshot matrix、证据标注与证据索引不可省略。
 - **必须多轮取证**：overview 只是目录；至少继续一次定向 patch/history，并追踪未改动的 caller、状态、持久化与外部副作用。
 - **报告不是 review**：不输出缺陷清单、严重度、审批结论或通用风险评分；核心是业务当前态、问题演进、决策依据和替代方案权衡。
 - **产物可阅读**：Markdown 包含 Mermaid 流程图、时序图或状态图（以证据适用性为准），以及业务规则、状态转换、决策和 tradeoff 表。
@@ -82,7 +83,7 @@ target 与 base 相同、用户输入的 ref 无法解析、或后续 LLM 发现
 | `uncommitted [description]` | 未提交的 tracked delta + untracked inventory |
 | `branch <target> [description]` | branch；存在描述时自动采用 branch + description 语义 |
 | `commits [<ref-or-range> ...]` | 一个或多个 commit/ref/range；无值时通过 Request 选择最近提交 |
-| `--base <ref>` | branch 的 before-state；省略时 TUI 通过 Request 确认，非交互模式只采用可唯一推断的默认分支 |
+| `--base <ref>` | branch 的 before-state；省略时 TUI 通过 Request 确认，非交互模式只采用可唯一推断的默认分支；推断不出时非交互模式报错并要求显式传入 |
 | `--description <text>` | 用户上下文；带空格时可加引号，也可一直写到下一个 `--flag` |
 | `--output <file.md>` | workspace 内的 Markdown 路径 |
 
@@ -92,7 +93,7 @@ target 与 base 相同、用户输入的 ref 无法解析、或后续 LLM 发现
 reports/diffreport/YYYYMMDD-HHmmss-<source>.md
 ```
 
-命令本身不先生成静态摘要。它发送一个真正的 user message 启动 agent turn，要求加载 `change-report` skill、按多轮证据流程工作，并在结束前写完指定文件。agent 忙碌时该消息作为 `followUp` 排队；command handler 会等待该 turn 完全结束，避免 `print/json` 在报告落盘前退出。
+命令本身不先生成静态摘要。它发送一个真正的 user message 启动 agent turn，要求加载 `change-report` skill、按多轮证据流程工作，并在结束前写完指定文件。agent 忙碌时该消息作为 `followUp` 排队；command handler 会先等待当前 turn，再等待排队触发的探索 turn 完全结束，避免 `print/json` 在报告落盘前退出。turn 结束后 handler 先校验报告文件确实存在且非空（未产出时明确报错，不会把空跑当成成功），再做机械合同检查：报告内是否出现证据 ID、证据索引章节与平衡的代码围栏，以及探索期间是否真正发生过 overview 与定向 patch/history 证据 pass。违规则以 warning 通知并列出问题，报告文件仍然保留。
 
 TUI 中所有来源、边界和后续澄清均使用 Request。`print/json` 等无 Request UI 模式必须给出足够的显式来源；否则命令安全失败，不猜测用户选择。
 
@@ -149,8 +150,7 @@ branch/commit 的未变更代码必须从对应 target revision 读取；只有�
 
 报告默认使用简体中文撰写（用户在描述或 Request 澄清中明确要求其他语言时除外）。报告围绕业务可理解性组织，而不是逐文件罗列：
 
-- Executive thesis 与精确分析边界；
-- before、target、current checkout/dirty state 的 snapshot matrix；
+- Executive thesis 与精确分析边界；存在用户描述时紧随其后是 Direct answer 节；
 - target state 的业务角色、触发条件、前置条件、结果；
 - 主流程、替代/失败流程；
 - 业务规则和状态/数据转换表；
@@ -180,7 +180,9 @@ branch/commit 的未变更代码必须从对应 target revision 读取；只有�
 - `src/index.ts`：composition root；安装共享 Request service，装配 command/tool，通过 `resources_discover` 发布 bundled skill，并清理临时输出。
 - `src/command.ts`：`/diff_report` 注册、busy/followUp 与错误边界。
 - `src/workflow.ts`：参数解析、Request 来源/边界选择、ref 修正、默认报告路径和 agent kickoff。
-- `src/tool.ts`：`diff_report` schema 与 overview/patch/history 调度。
+- `src/tool.ts`：`diff_report` schema 与 overview/patch/history 调度，并向台账记录成功调用。
+- `src/call-ledger.ts`：探索期间的 `diff_report` 调用台账，供命令层核验最少证据 pass。
+- `src/report-quality.ts`：报告产物的机械合同检查（证据 ID、证据索引、代码围栏）。
 - `src/git-diff.ts`：Git ref/path 安全、branch/commit discovery、diff/history/untracked 捕获。
 - `src/diff-parser.ts`：解析 patch 为文件/hunk 证据。
 - `src/formatter.ts`：有界 evidence inventory、patch 和 history文本。

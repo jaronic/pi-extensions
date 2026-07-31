@@ -212,3 +212,82 @@ test("default report paths and kickoff require a multi-pass Markdown artifact", 
   assert.match(kickoff, /only intended workspace write/);
   assert.doesNotMatch(kickoff, /Risk Assessment|severity ranking/);
 });
+
+test("branch options keep the recommended branch selectable beyond the recent slice", async () => {
+  const branchRows = [
+    ...Array.from({ length: 16 }, (_, index) =>
+      `feature/b${String(index + 1).padStart(2, "0")}\t \t2026-07-${String(28 - index).padStart(2, "0")}T12:00:00Z`),
+    "main\t \t2026-07-10T12:00:00Z",
+    "feature/old\t*\t2026-07-01T12:00:00Z",
+  ].join("\n");
+  const pi = {
+    async exec(command: string, args: string[]) {
+      assert.equal(command, "git");
+      let stdout = "";
+      if (args[0] === "rev-parse" && args[1] === "--is-inside-work-tree") stdout = "true\n";
+      else if (args[0] === "for-each-ref") stdout = branchRows;
+      else if (args[0] === "symbolic-ref") stdout = "origin/main\n";
+      else if (args[0] === "branch") stdout = "feature/old\n";
+      else if (args[0] === "rev-parse" && args.includes("--verify")) stdout = "0123456789abcdef\n";
+      return { stdout, stderr: "", code: 0, killed: false };
+    },
+  } as unknown as ExtensionAPI;
+  const { service, questions } = makeRequestService((_nextQuestions, call) => {
+    if (call === 1) {
+      return { cancelled: false, results: [makeAnswer("analysis-source", ["Branch"])] };
+    }
+    return {
+      cancelled: false,
+      results: [
+        makeAnswer("branch-target", ["feature/old"]),
+        makeAnswer("branch-base", ["main"]),
+      ],
+    };
+  });
+
+  const brief = await collectAnalysisBrief(
+    pi,
+    service,
+    "/tmp",
+    { commitTargets: [] },
+    true,
+    new Date("2026-07-29T12:34:56.000Z"),
+  );
+  assert.equal(brief?.target, "feature/old");
+  assert.equal(brief?.base, "main");
+
+  // feature/old is the current branch but ranks 18th by recency; it must
+  // still appear in the target options and be the recommended choice.
+  const selectionQuestions = questions[1] ?? [];
+  const targetQuestion = selectionQuestions.find((question) => question.id === "branch-target");
+  const baseQuestion = selectionQuestions.find((question) => question.id === "branch-base");
+  if (!targetQuestion || targetQuestion.kind === "text") assert.fail("target question must be a choice question");
+  if (!baseQuestion || baseQuestion.kind === "text") assert.fail("base question must be a choice question");
+  const targetOptions = targetQuestion.options ?? [];
+  assert.ok(targetOptions.some((option) => option.label === "feature/old"));
+  assert.equal(targetOptions[targetQuestion.recommended ?? 0]?.label, "feature/old");
+  const baseOptions = baseQuestion.options ?? [];
+  assert.equal(baseOptions[baseQuestion.recommended ?? 0]?.label, "main");
+});
+
+test("kickoff adds a direct-answer focus section only when user context exists", () => {
+  const withContext = buildExplorationKickoff({
+    source: "branch",
+    target: "feature/payment",
+    base: "main",
+    commitTargets: [],
+    description: "支付失败后的重试",
+    outputPath: "reports/diffreport/payment.md",
+  });
+  assert.match(withContext, /## Focus/);
+  assert.match(withContext, /direct-answer section/);
+  assert.match(withContext, /支付失败后的重试/);
+  assert.match(withContext, /never drop the snapshot matrix, evidence labels, or the evidence index/);
+
+  const withoutContext = buildExplorationKickoff({
+    source: "uncommitted",
+    commitTargets: [],
+    outputPath: "reports/diffreport/uncommitted.md",
+  });
+  assert.doesNotMatch(withoutContext, /## Focus/);
+});

@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { RequestService } from "pi-request-ui-dev";
 import diffreportExtension from "../src/index.ts";
+import { DiffReportCallLedger } from "../src/call-ledger.ts";
 
 interface RegisteredTool {
   execute(
@@ -156,7 +157,193 @@ test("extension explores real Git evidence and launches a Markdown business repo
     assert.match(userMessages[0]?.content ?? "", /must not filter commits, files, or evidence/);
     assert.match(userMessages[0]?.content ?? "", /reports\/diffreport\/payment\.md/);
     assert.match(userMessages[0]?.content ?? "", /Mermaid flow\/sequence\/state diagrams/);
-    assert.match(notifications.at(-1)?.message ?? "", /Business-logic exploration started/);
+    assert.match(notifications[0]?.message ?? "", /Business-logic exploration started/);
+    // No agent actually wrote the report, so the handler must not report success:
+    // the final notification is the artifact-verification failure.
+    assert.match(notifications.at(-1)?.message ?? "", /no report exists at reports\/diffreport\/payment\.md/);
+    assert.equal(notifications.at(-1)?.type, "error");
+  } finally {
+    await Promise.all(shutdownHandlers.map((handler) => handler()));
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("extension queues behind a busy agent and verifies the written report artifact", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "diffreport-busy-"));
+  const commands = new Map<string, RegisteredCommand>();
+  const shutdownHandlers: Array<() => Promise<void>> = [];
+  const userMessages: Array<{ content: string; options?: { deliverAs?: string } }> = [];
+  const notifications: Array<{ message: string; type?: string }> = [];
+  let turnActive = true;
+  let waitForIdleCalls = 0;
+
+  try {
+    await run("git", ["init", "-b", "main"], workspace);
+    await run("git", ["config", "user.email", "diffreport@example.com"], workspace);
+    await run("git", ["config", "user.name", "Diffreport Test"], workspace);
+    await writeFile(join(workspace, "a.ts"), "export const a = 1;\n");
+    await run("git", ["add", "a.ts"], workspace);
+    await run("git", ["commit", "-m", "init"], workspace);
+
+    const pi = {
+      events: {},
+      registerTool() {},
+      registerCommand(name: string, command: RegisteredCommand) {
+        commands.set(name, command);
+      },
+      on(event: string, handler: () => Promise<void>) {
+        if (event === "session_shutdown") shutdownHandlers.push(handler);
+      },
+      async exec(command: string, args: string[], options: { cwd: string; signal?: AbortSignal; timeout?: number }) {
+        const result = await run(command, args, options.cwd, options.signal, options.timeout);
+        return { ...result, code: 0, killed: false };
+      },
+      sendUserMessage(content: string, options?: { deliverAs?: string }) {
+        userMessages.push({ content, ...(options ? { options } : {}) });
+      },
+    } as unknown as ExtensionAPI;
+    const requestService: RequestService = {
+      lifetime: new AbortController().signal,
+      async request() {
+        throw new Error("Explicit command input must not open Request.");
+      },
+    };
+    const callLedger = new DiffReportCallLedger();
+    diffreportExtension(pi, {
+      requestService,
+      callLedger,
+      now: () => new Date("2026-07-29T12:34:56.000Z"),
+    });
+
+    const command = commands.get("diff_report");
+    assert.ok(command);
+    const reportPath = join(workspace, "reports", "diffreport", "queued.md");
+    await command.handler("uncommitted --output reports/diffreport/queued.md", {
+      cwd: workspace,
+      mode: "print",
+      hasUI: false,
+      signal: undefined,
+      isIdle: () => !turnActive,
+      async waitForIdle() {
+        waitForIdleCalls++;
+        if (waitForIdleCalls === 1) {
+          // Current turn drained; the queued followUp exploration turn starts.
+          turnActive = true;
+        } else {
+          // Exploration turn finished: the agent ran the mandated evidence
+          // passes and wrote a contract-compliant report artifact.
+          turnActive = false;
+          callLedger.record("uncommitted", "overview");
+          callLedger.record("uncommitted", "patch");
+          await mkdir(join(workspace, "reports", "diffreport"), { recursive: true });
+          await writeFile(reportPath, [
+            "# Queued report",
+            "",
+            "Direct answer with [E1].",
+            "",
+            "```mermaid",
+            "flowchart TD",
+            "  A --> B",
+            "```",
+            "",
+            "## Evidence index",
+            "",
+            "| ID | Type |",
+          ].join("\n"));
+        }
+      },
+      ui: {
+        notify(message: string, type?: string) {
+          notifications.push({ message, type });
+        },
+      },
+    });
+
+    assert.equal(userMessages.length, 1);
+    assert.equal(userMessages[0]?.options?.deliverAs, "followUp");
+    // The handler waited for both the current turn and the queued exploration turn.
+    assert.equal(waitForIdleCalls, 2);
+    assert.match(notifications[0]?.message ?? "", /queued behind the current turn/);
+    assert.match(notifications.at(-1)?.message ?? "", /Diff report written: reports\/diffreport\/queued\.md$/);
+    assert.equal(notifications.at(-1)?.type, "info");
+  } finally {
+    await Promise.all(shutdownHandlers.map((handler) => handler()));
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("extension reports contract warnings when the artifact skips evidence discipline", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "diffreport-warning-"));
+  const commands = new Map<string, RegisteredCommand>();
+  const shutdownHandlers: Array<() => Promise<void>> = [];
+  const notifications: Array<{ message: string; type?: string }> = [];
+  let turnActive = false;
+
+  try {
+    await run("git", ["init", "-b", "main"], workspace);
+    await run("git", ["config", "user.email", "diffreport@example.com"], workspace);
+    await run("git", ["config", "user.name", "Diffreport Test"], workspace);
+    await writeFile(join(workspace, "a.ts"), "export const a = 1;\n");
+    await run("git", ["add", "a.ts"], workspace);
+    await run("git", ["commit", "-m", "init"], workspace);
+
+    const pi = {
+      events: {},
+      registerTool() {},
+      registerCommand(name: string, command: RegisteredCommand) {
+        commands.set(name, command);
+      },
+      on(event: string, handler: () => Promise<void>) {
+        if (event === "session_shutdown") shutdownHandlers.push(handler);
+      },
+      async exec(command: string, args: string[], options: { cwd: string; signal?: AbortSignal; timeout?: number }) {
+        const result = await run(command, args, options.cwd, options.signal, options.timeout);
+        return { ...result, code: 0, killed: false };
+      },
+      sendUserMessage() {
+        turnActive = true;
+      },
+    } as unknown as ExtensionAPI;
+    const requestService: RequestService = {
+      lifetime: new AbortController().signal,
+      async request() {
+        throw new Error("Explicit command input must not open Request.");
+      },
+    };
+    diffreportExtension(pi, {
+      requestService,
+      now: () => new Date("2026-07-29T12:34:56.000Z"),
+    });
+
+    const command = commands.get("diff_report");
+    assert.ok(command);
+    await command.handler("uncommitted --output reports/diffreport/warning.md", {
+      cwd: workspace,
+      mode: "print",
+      hasUI: false,
+      signal: undefined,
+      isIdle: () => !turnActive,
+      async waitForIdle() {
+        // The agent wrote a report without evidence IDs, without an evidence
+        // index, and without a single diff_report evidence pass.
+        turnActive = false;
+        await mkdir(join(workspace, "reports", "diffreport"), { recursive: true });
+        await writeFile(join(workspace, "reports", "diffreport", "warning.md"), "# Thin report\n\nNo evidence here.\n");
+      },
+      ui: {
+        notify(message: string, type?: string) {
+          notifications.push({ message, type });
+        },
+      },
+    });
+
+    const last = notifications.at(-1);
+    assert.equal(last?.type, "warning");
+    assert.match(last?.message ?? "", /contract warnings/);
+    assert.match(last?.message ?? "", /no inline evidence IDs/);
+    assert.match(last?.message ?? "", /no evidence index section/);
+    assert.match(last?.message ?? "", /no diff_report overview pass/);
+    assert.match(last?.message ?? "", /no targeted diff_report patch\/history pass/);
   } finally {
     await Promise.all(shutdownHandlers.map((handler) => handler()));
     await rm(workspace, { recursive: true, force: true });

@@ -3,8 +3,10 @@ import test from "node:test";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   buildGitDiffArgs,
+  discoverDefaultBase,
   parseCommitLog,
   validateWorkspacePath,
   validateWorkspacePaths,
@@ -121,4 +123,42 @@ test("parseCommitLog preserves body text and separators in ordinary prose", () =
       date: "2026-07-29T11:00:00Z",
     },
   ]);
+});
+
+test("discoverDefaultBase returns undefined when no unambiguous default exists", async () => {
+  const pi = {
+    async exec(_command: string, args: string[]) {
+      if (args[0] === "symbolic-ref") throw new Error("no origin/HEAD");
+      throw new Error(`unexpected git call: ${args.join(" ")}`);
+    },
+  } as unknown as ExtensionAPI;
+  const branches = [
+    { name: "feature/payment", current: true },
+    { name: "hotfix/unrelated", current: false },
+  ];
+
+  // Previously this silently picked hotfix/unrelated as the comparison base.
+  assert.equal(
+    await discoverDefaultBase(pi, "/tmp", "feature/payment", undefined, branches),
+    undefined,
+  );
+});
+
+test("discoverDefaultBase still prefers a conventional default branch", async () => {
+  const pi = {
+    async exec(_command: string, args: string[]) {
+      if (args[0] === "symbolic-ref") throw new Error("no origin/HEAD");
+      throw new Error(`unexpected git call: ${args.join(" ")}`);
+    },
+  } as unknown as ExtensionAPI;
+  const branches = [
+    { name: "feature/payment", current: true },
+    { name: "hotfix/unrelated", current: false },
+    { name: "main", current: false },
+  ];
+
+  assert.equal(
+    await discoverDefaultBase(pi, "/tmp", "feature/payment", undefined, branches),
+    "main",
+  );
 });

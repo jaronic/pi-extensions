@@ -340,7 +340,8 @@ export async function discoverDefaultBase(
   for (const candidate of candidates) {
     if (candidate !== target && names.has(candidate)) return candidate;
   }
-  return branches.find((branch) => branch.name !== target)?.name;
+  // No arbitrary fallback: an unrelated branch is never an unambiguous default.
+  return undefined;
 }
 
 export async function listRecentCommits(
