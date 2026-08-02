@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = dirname(SCRIPT_DIRECTORY);
 const SCRIPT = join(SCRIPT_DIRECTORY, "pi-global-links.sh");
-const EXTENSIONS = ["goal", "plan", "lsp", "ast-grep", "hashline", "request", "rg", "todo", "jaron", "diffreport"];
+const EXTENSIONS = ["goal", "plan", "lsp", "ast-grep", "hashline", "request", "rg", "todo", "jaron", "diffreport", "telemetry", "enforce", "notify", "doclint"];
 const THEMES = readdirSync(join(REPOSITORY_ROOT, "themes"))
   .filter((name) => /^pi-extensions-.*\.json$/.test(name))
   .sort();
@@ -62,10 +62,10 @@ test("status is read-only when the Pi agent directory is absent", (t) => {
   assert.equal(existsSync(agentDirectory), false);
 });
 
-test("help lists all ten managed extensions", (t) => {
+test("help lists all fourteen managed extensions", (t) => {
   const result = run(createAgentDirectory(t), "--help");
   assertSucceeded(result);
-  assert.match(result.stdout, /Ten extensions/u);
+  assert.match(result.stdout, /Fourteen extensions/u);
   for (const name of EXTENSIONS) assert.match(result.stdout, new RegExp(`\\b${name}\\b`, "u"));
 });
 

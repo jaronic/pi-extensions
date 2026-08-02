@@ -46,6 +46,14 @@ jobs:
             testDependencies: ""
           - extension: diffreport
             testDependencies: ""
+          - extension: telemetry
+            testDependencies: ""
+          - extension: enforce
+            testDependencies: "plan"
+          - extension: notify
+            testDependencies: ""
+          - extension: doclint
+            testDependencies: ""
     defaults:
       run:
         working-directory: ${{ matrix.extension }}

@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-Ten independent, private TypeScript extensions for `@earendil-works/pi-coding-agent`, plus standalone global themes. There is no root package or workspace: every top-level extension directory is its own npm package (own dependencies, lockfile, tsconfig, tests). `themes/` is a standalone global Pi resource owned by no extension.
+Fourteen independent, private TypeScript extensions for `@earendil-works/pi-coding-agent`, plus standalone global themes. There is no root package or workspace: every top-level extension directory is its own npm package (own dependencies, lockfile, tsconfig, tests). `themes/` is a standalone global Pi resource owned by no extension.
 
 | Package | Purpose |
 | --- | --- |
@@ -14,6 +14,10 @@ Ten independent, private TypeScript extensions for `@earendil-works/pi-coding-ag
 | `todo` | bounded branch-local execution ledger; Plan-aware mutation gating |
 | `jaron` | themed custom editor, status line, live Git branch indicator; host package for pi TUI theme development |
 | `diffreport` | bounded Git evidence + multi-pass exploration into an evidence-backed Markdown report |
+| `telemetry` | passive per-tool call telemetry (counts, failures, latency by provider/model); `/telemetry` export for offline eval |
+| `enforce` | rule-driven tool promotion; nudge/gate `tool_call` layer emitting copyable alternative invocations |
+| `notify` | out-of-band notifications on `agent_settled` (macOS osascript, terminal bell, ntfy.sh) |
+| `doclint` | mechanical AGENTS.md/README contract lint via `doc_lint` tool and `/doclint` |
 | `themes/` | repository-wide light/dark Pi palettes (`pi-extensions-*`) |
 
 Each extension's internals (state machines, protocols, tool contracts, key files) are documented in its own `<extension>/README.md`; this file intentionally does not duplicate them.
@@ -31,13 +35,13 @@ Each extension's internals (state machines, protocols, tool contracts, key files
 Node `>=22.19.0`, npm, native ESM (do not assume Bun-specific APIs). Per package:
 
 ```sh
-cd <extension>        # goal plan lsp ast-grep hashline request rg todo jaron diffreport
+cd <extension>        # goal plan lsp ast-grep hashline request rg todo jaron diffreport telemetry enforce notify doclint
 npm ci
 npm run check         # tsc --noEmit; no build/lint/format/dev scripts exist
 npm test              # node --import tsx --test test/*.test.ts
 ```
 
-Whole repo: run the same loop over all ten directories. Several packages import siblings in tests, so `npm ci` must cover all ten first; the authoritative per-package test-dependency list is the `testDependencies` matrix in `.github/workflows/ci.yml`.
+Whole repo: run the same loop over all fourteen directories. Several packages import siblings in tests, so `npm ci` must cover all fourteen first; the authoritative per-package test-dependency list is the `testDependencies` matrix in `.github/workflows/ci.yml`.
 
 - `ast-grep` additionally: `npm run release-smoke` (packed clean-install Pi smoke) for package/release-boundary changes.
 - Global development links: `make pi-on` / `make pi-status` (`pi-extensions-*` / `pi-themes-*` variants for one class; delegates to `scripts/pi-global-links.sh`, respects `PI_CODING_AGENT_DIR`, refuses foreign or conflicting paths; never `npm link`). Use `/reload` after changing extension code.
