@@ -45,13 +45,24 @@ test("package table coverage is checked in both directions", () => {
   assert.equal(findings[0].severity, "error");
   assert.match(findings[0].message, /"demo" .* missing from the AGENTS.md package table/);
 
-  // Extra entry: ghost listed but has no manifest; themes/ resource row stays exempt.
+  // Extra entry: ghost listed but has no package.json; themes/ resource row stays exempt.
   files["/repo/AGENTS.md"] =
     "| Package | Purpose |\n| --- | --- |\n| `demo` | ok |\n| `ghost` | stale |\n| `themes/` | palettes |\n";
   findings = byCheck(lint(files), "agents-table");
   assert.equal(findings.length, 1);
   assert.equal(findings[0].severity, "warning");
-  assert.match(findings[0].message, /"ghost" has no pi\.extensions manifest/);
+  assert.match(findings[0].message, /"ghost" has no package\.json/);
+});
+
+test("library packages without a pi manifest may appear in the package table", () => {
+  const files = {
+    ...validRepoFiles(),
+    "/repo/AGENTS.md":
+      "| Package | Purpose |\n| --- | --- |\n| `demo` | ok |\n| `uikit` | shared render primitives |\n",
+    "/repo/uikit/package.json": JSON.stringify({ name: "pi-uikit-dev", type: "module" }),
+  };
+  const findings = byCheck(lint(files), "agents-table");
+  assert.deepEqual(findings, []);
 });
 
 test("registered tools and commands must appear backticked in the README", () => {

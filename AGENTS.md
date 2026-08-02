@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-Fourteen independent, private TypeScript extensions for `@earendil-works/pi-coding-agent`, plus standalone global themes. There is no root package or workspace: every top-level extension directory is its own npm package (own dependencies, lockfile, tsconfig, tests). `themes/` is a standalone global Pi resource owned by no extension.
+Fourteen independent, private TypeScript extensions for `@earendil-works/pi-coding-agent`, plus the shared `uikit` render-primitive library and standalone global themes. There is no root package or workspace: every top-level extension directory is its own npm package (own dependencies, lockfile, tsconfig, tests). `themes/` is a standalone global Pi resource owned by no extension.
 
 | Package | Purpose |
 | --- | --- |
@@ -18,13 +18,15 @@ Fourteen independent, private TypeScript extensions for `@earendil-works/pi-codi
 | `enforce` | rule-driven tool promotion; nudge/gate `tool_call` layer emitting copyable alternative invocations |
 | `notify` | out-of-band notifications on `agent_settled` (macOS osascript, terminal bell, ntfy.sh) |
 | `doclint` | mechanical AGENTS.md/README contract lint via `doc_lint` tool and `/doclint` |
+| `uikit` | shared TUI render primitives (tones, tool-card titles, status rows, collapse protocol); pure library, no extension entry, consumed via `file:` dependency |
 | `themes/` | repository-wide light/dark Pi palettes (`pi-extensions-*`) |
 
 Each extension's internals (state machines, protocols, tool contracts, key files) are documented in its own `<extension>/README.md`; this file intentionally does not duplicate them.
 
 ## Cross-Package Rules
 
-- Never import another package via `../../other/src` in production. Cross-package reuse requires a formal package dependency, a public package-root export, and (for bundled runtime code) manifest resource ordering.
+- Never import another package via `../../other/src` in production. Cross-package reuse requires a formal package dependency, a public package-root export, and (for bundled runtime code) manifest resource ordering. Shared render primitives live in `uikit` (`pi-uikit-dev`); consume them via a `file:../uikit` dependency plus `bundledDependencies` entry — `uikit` has no extension resource, so no `pi.extensions` ordering is needed.
+- Tool renderers across extensions must style through `uikit` primitives (`tone`, `toolCallTitle`, `statusRow`, `collapseLines`, …) rather than ad-hoc `theme.fg` calls, so the same intent renders identically everywhere.
 - Plan bundles Request + Todo (loads Request → Todo → Plan); Diffreport bundles Request. Request/Todo use EventBus-scoped registries so standalone and bundled copies share one runtime.
 - `plan/src/workflow-mode.ts` and `goal/src/workflow-mode.ts` are intentionally byte-identical; same for `lsp/src/logger.ts` and `hashline/src/logger.ts`. Keep each pair in sync.
 - Plan/Goal exclusivity (`pi-extensions:exclusive-workflow:v1`), Plan→Todo phase sync, and Plan→Todo handoff are explicit contracts. Changing them requires updating every affected protocol/service definition, every affected README, and both coexistence suites (`plan/test/coexistence.test.ts`).
@@ -35,13 +37,13 @@ Each extension's internals (state machines, protocols, tool contracts, key files
 Node `>=22.19.0`, npm, native ESM (do not assume Bun-specific APIs). Per package:
 
 ```sh
-cd <extension>        # goal plan lsp ast-grep hashline request rg todo jaron diffreport telemetry enforce notify doclint
+cd <extension>        # goal plan lsp ast-grep hashline request rg todo jaron diffreport telemetry enforce notify doclint uikit
 npm ci
 npm run check         # tsc --noEmit; no build/lint/format/dev scripts exist
 npm test              # node --import tsx --test test/*.test.ts
 ```
 
-Whole repo: run the same loop over all fourteen directories. Several packages import siblings in tests, so `npm ci` must cover all fourteen first; the authoritative per-package test-dependency list is the `testDependencies` matrix in `.github/workflows/ci.yml`.
+Whole repo: run the same loop over all fifteen package directories. Several packages import siblings in tests, so `npm ci` must cover all fifteen first; the authoritative per-package test-dependency list is the `testDependencies` matrix in `.github/workflows/ci.yml`.
 
 - `ast-grep` additionally: `npm run release-smoke` (packed clean-install Pi smoke) for package/release-boundary changes.
 - Global development links: `make pi-on` / `make pi-status` (`pi-extensions-*` / `pi-themes-*` variants for one class; delegates to `scripts/pi-global-links.sh`, respects `PI_CODING_AGENT_DIR`, refuses foreign or conflicting paths; never `npm link`). Use `/reload` after changing extension code.

@@ -172,7 +172,7 @@ const result = await request.request(questions, {
 - `src/dialog.ts`：所有调用方共享的串行 coordinator。
 - `src/adapters.ts`：`select`/`confirm`/`input` 的兼容 adapter 与保守 fallback。
 - `src/protocol.ts`：`pi-extensions:request-ui:v1` client/helper 和 listener arbitration。
-- `src/tool.ts`：TypeBox `ask` schema、tool execution、call/result renderer。
+- `src/tool.ts`：TypeBox `ask` schema、tool execution、call/result renderer（标题/答案行经 `pi-uikit-dev` 的 `tone`/`statusRow` 原语渲染）。
 - `test/integration.test.ts`：tool、native API、真实 Goal 共存、外部 fixture、单选/Other 不变量、控制字符、并发、取消、超时、headless 和 terminal fallback 行为。
 
 ## 开发与验证

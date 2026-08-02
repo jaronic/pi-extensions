@@ -9,7 +9,7 @@ import {
   type EditToolDetails,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { reuseTextComponent, toolCallTitle } from "pi-uikit-dev";
 import { digestBytes, snapshotTokenForBytes, type SnapshotToken } from "./digest.ts";
 import { abortIfNeeded, fail, hashlineError } from "./errors.ts";
 import type { Logger } from "./logger.ts";
@@ -243,11 +243,10 @@ export function createHashlineEditTool(
 ): ToolDefinition<typeof hashlineEditSchema, EditToolDetails> {
   const renderer = createEditToolDefinition(process.cwd());
   const renderCall: NonNullable<ToolDefinition<typeof hashlineEditSchema, EditToolDetails>["renderCall"]> = (args, theme, context) => {
-    const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
-    text.setText(
-      `${theme.fg("toolTitle", theme.bold("Hashline"))}${theme.fg("muted", " · edit ")}${theme.fg("accent", args.path)}`,
+    return reuseTextComponent(
+      context.lastComponent,
+      toolCallTitle(theme, { brand: "Hashline", action: "edit", target: args.path }),
     );
-    return text;
   };
   const buildDetails = dependencies.buildDetails ?? buildDefaultDetails;
   const commitWrite = dependencies.commitWrite ?? commitDefaultWrite;

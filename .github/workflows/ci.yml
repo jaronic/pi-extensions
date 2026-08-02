@@ -34,12 +34,14 @@ jobs:
             testDependencies: "goal ast-grep"
           - extension: lsp
             testDependencies: ""
-          - extension: hashline
-            testDependencies: "plan lsp rg"
-          - extension: request
-            testDependencies: goal
-          - extension: rg
+          - extension: uikit
             testDependencies: ""
+          - extension: hashline
+            testDependencies: "plan lsp rg uikit"
+          - extension: request
+            testDependencies: "goal uikit"
+          - extension: rg
+            testDependencies: "uikit"
           - extension: todo
             testDependencies: "goal plan request"
           - extension: jaron

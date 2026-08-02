@@ -21,6 +21,7 @@
 - 成功 result 保持 Pi 内建 `EditToolDetails` 的 `diff`、`patch`、`firstChangedLine` 形状，并返回有界的变更预览和可继续使用的新 snapshot；verified rebase 成功时会明确报告原范围、重定位范围与统一偏移；
 - stale recovery 不猜路径、不改 payload、不做三方 merge。它只接受唯一的、逐物理行 byte-identical 的 unchanged-run 映射；目标、上下文、EOL、映射唯一性或统一偏移任一无法证明，就零写入拒绝并返回当前坐标附近的 refreshed snapshot。
 - `read` 与 `edit` 都携带 description、一行 `promptSnippet` 和 1–3 条 `promptGuidelines`（每条显式点名对应工具名），进入系统提示词的 Available tools 与 Guidelines 段；guidelines 只陈述现有协议规则，不改变内建工具继承的调用习惯。
+- 两个工具的 call 卡片标题（`Hashline · read|edit <path>`）经 `pi-uikit-dev` 的 `toolCallTitle`/`reuseTextComponent` 原语渲染，与其他扩展的工具卡片共享同一标题形状与 token 映射。
 
 Hashline 不新建、重命名、移动或删除文件，也不允许把非空文件清成空 bytes。新文件、完整重写和显式清空继续使用 `write`；symbol rename 和 code action 使用 `lsp`。
 

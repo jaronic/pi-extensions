@@ -109,6 +109,7 @@ flowchart LR
 - 状态机、持久化和跨插件协议：`plan/`、`goal/`、`todo/`
 - 子进程、协议客户端、配置路由和清理：`lsp/`
 - 响应式共享 UI 与 native adapter：`request/`
+- 共享渲染原语库（纯函数、无扩展入口）：`uikit/`
 
 ### 4.2 最小 package manifest
 
@@ -226,7 +227,7 @@ npm test
 
 涉及多个插件协议时，运行所有受影响 package；Plan coordination 协议变更至少运行 `goal`、`plan` 与 `todo`，并覆盖 `plan/test/coexistence.test.ts` 和 `todo/test/coexistence.test.ts`。
 
-`.github/workflows/ci.yml` 在 Node 22.19 上对十四个顶层扩展分别执行 clean install、typecheck 和完整 package 测试（`ast-grep` 另有跨平台原生矩阵）。新增顶层 package 时必须同步扩展 CI matrix 与全局链接管理器。
+`.github/workflows/ci.yml` 在 Node 22.19 上对十五个顶层 package 分别执行 clean install、typecheck 和完整 package 测试（`ast-grep` 另有跨平台原生矩阵；`uikit` 是无扩展入口的纯库，同样跑 check/test）。新增顶层 package 时必须同步扩展 CI matrix 与全局链接管理器。
 
 ## 5. API 速查与选择
 
@@ -355,7 +356,7 @@ npm test
 ### 7.3 当前仓库验证命令
 
 ```sh
-for dir in goal plan lsp ast-grep hashline request rg todo jaron diffreport telemetry enforce notify doclint; do
+for dir in goal plan lsp ast-grep hashline request rg todo jaron diffreport telemetry enforce notify doclint uikit; do
   (cd "$dir" && npm run check && npm test) || exit 1
 done
 ```
@@ -391,7 +392,7 @@ done
 
 ### 合并前
 
-- [ ] 受影响 package 的 `npm run check`、`npm test` 通过，CI 配置仍覆盖全部十四个顶层插件。
+- [ ] 受影响 package 的 `npm run check`、`npm test` 通过，CI 配置仍覆盖全部十五个顶层 package。
 - [ ] 新可观察契约有回归测试，跨插件协议有 coexistence test。
 - [ ] 真实 Pi 完成主路径、失败路径、`/reload` 和退出 smoke test。
 - [ ] package manifest、runtime dependencies、lockfile 和全局软链接说明一致。

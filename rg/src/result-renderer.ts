@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { collapseLines, moreLinesHint, tone } from "pi-uikit-dev";
 
 export type GrepDisplayLine = Readonly<{
   kind: "file" | "match" | "context" | "tail";
@@ -75,12 +76,12 @@ export function formatGrepOutputForDisplay(output: string): readonly GrepDisplay
 function styleLine(line: GrepDisplayLine, theme: Theme): string {
   switch (line.kind) {
     case "file":
-      return theme.fg("accent", line.text);
+      return tone(theme, "accent", line.text);
     case "context":
-      return theme.fg("muted", line.text);
+      return tone(theme, "muted", line.text);
     case "match":
     case "tail":
-      return theme.fg("toolOutput", line.text);
+      return tone(theme, "output", line.text);
   }
 }
 
@@ -90,17 +91,15 @@ export function renderGrepOutput(
   theme: Theme,
 ): Text {
   if (output.length === 0) return new Text("", 0, 0);
-  if (options.isError) return new Text(theme.fg("error", output), 0, 0);
+  if (options.isError) return new Text(tone(theme, "error", output), 0, 0);
 
   const display = formatGrepOutputForDisplay(output);
   const lines = display ?? output.split("\n").map((text) => ({ kind: "tail" as const, text }));
-  const maxLines = options.expanded ? lines.length : COLLAPSED_LINE_LIMIT;
-  const visible = lines.slice(0, maxLines);
-  const remaining = lines.length - visible.length;
+  const { visible, hiddenCount } = collapseLines(lines, { expanded: options.expanded, collapsedLimit: COLLAPSED_LINE_LIMIT });
   let text = visible.map((line) => styleLine(line, theme)).join("\n");
 
-  if (remaining > 0) {
-    text += `${text.length > 0 ? "\n" : ""}${theme.fg("muted", `… (${remaining} more lines; expand to show all)`)}`;
+  if (hiddenCount > 0) {
+    text += `${text.length > 0 ? "\n" : ""}${moreLinesHint(theme, hiddenCount)}`;
   }
 
   return new Text(text, 0, 0);

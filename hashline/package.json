@@ -26,7 +26,8 @@
     "typebox": ">=1.0.0"
   },
   "dependencies": {
-    "diff": "8.0.4"
+    "diff": "8.0.4",
+    "pi-uikit-dev": "file:../uikit"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.82.1",
@@ -39,5 +40,8 @@
   },
   "engines": {
     "node": ">=22.19.0"
-  }
+  },
+  "bundledDependencies": [
+    "pi-uikit-dev"
+  ]
 }

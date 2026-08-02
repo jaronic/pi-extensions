@@ -8,7 +8,7 @@ import {
   type ReadToolDetails,
   type ReadToolInput,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { reuseTextComponent, toolCallTitle } from "pi-uikit-dev";
 import { snapshotTokenForBytes } from "./digest.ts";
 import { abortIfNeeded, fail } from "./errors.ts";
 import type { Logger } from "./logger.ts";
@@ -112,15 +112,14 @@ const NOOP_LOGGER: Logger = { error() {}, warn() {}, info() {}, debug() {} };
 export function createHashlineReadTool(runtime: HashlineRuntime, logger: Logger = NOOP_LOGGER) {
   const renderer = createReadToolDefinition(process.cwd());
   const renderCall: NonNullable<typeof renderer.renderCall> = (args, theme, context) => {
-    const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
     const start = args.offset ?? 1;
     const range = args.offset === undefined && args.limit === undefined
       ? ""
       : args.limit === undefined ? `:${start}` : `:${start}-${start + args.limit - 1}`;
-    text.setText(
-      `${theme.fg("toolTitle", theme.bold("Hashline"))}${theme.fg("muted", " · read ")}${theme.fg("accent", `${args.path}${range}`)}`,
+    return reuseTextComponent(
+      context.lastComponent,
+      toolCallTitle(theme, { brand: "Hashline", action: "read", target: `${args.path}${range}` }),
     );
-    return text;
   };
   return {
     ...renderer,

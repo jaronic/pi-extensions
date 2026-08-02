@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { statusRow, tone } from "pi-uikit-dev";
 import { Type } from "typebox";
 import {
   MAX_REQUEST_DESCRIPTION_CHARS,
@@ -140,16 +141,16 @@ export function registerAskTool(pi: ExtensionAPI, runtime: AskToolRuntime): void
     },
     renderCall(args, theme, context) {
       const count = args.questions.length;
-      const lines = [theme.fg("toolTitle", theme.bold(`Ask ${count} question${count === 1 ? "" : "s"}`))];
+      const lines = [tone(theme, "title", `Ask ${count} question${count === 1 ? "" : "s"}`)];
       if (context.expanded) {
         for (const question of args.questions) {
-          lines.push(theme.fg("accent", `[${sanitizeTerminalText(question.id)}]`) + theme.fg("muted", ` · options:${question.options.length}`));
-          lines.push(theme.fg("text", sanitizeTerminalText(question.question)));
+          lines.push(tone(theme, "accent", `[${sanitizeTerminalText(question.id)}]`) + tone(theme, "muted", ` · options:${question.options.length}`));
+          lines.push(tone(theme, "text", sanitizeTerminalText(question.question)));
           for (let index = 0; index < question.options.length; index++) {
             const option = question.options[index];
-            const recommended = index === (question.recommended ?? 0) ? theme.fg("accent", " (Recommended)") : "";
-            lines.push(`  ${theme.fg("muted", "○")} ${sanitizeTerminalText(option.label)}${recommended}`);
-            if (option.description) lines.push(`    ${theme.fg("dim", sanitizeTerminalText(option.description))}`);
+            const recommended = index === (question.recommended ?? 0) ? tone(theme, "accent", " (Recommended)") : "";
+            lines.push(`  ${tone(theme, "muted", "○")} ${sanitizeTerminalText(option.label)}${recommended}`);
+            if (option.description) lines.push(`    ${tone(theme, "dim", sanitizeTerminalText(option.description))}`);
           }
         }
       }
@@ -164,8 +165,7 @@ export function registerAskTool(pi: ExtensionAPI, runtime: AskToolRuntime): void
       const answers = "results" in details ? details.results : [details];
       const lines = answers.map((answer) => {
         const value = answerText(answer);
-        const glyph = value === "unanswered" ? theme.fg("warning", "○") : theme.fg("success", "✓");
-        return `${glyph} ${theme.fg("accent", sanitizeTerminalText(answer.id))}: ${theme.fg("text", value)}`;
+        return statusRow(theme, value === "unanswered" ? "pending" : "success", sanitizeTerminalText(answer.id), value);
       });
       return new Text(lines.join("\n"), 0, 0);
     },

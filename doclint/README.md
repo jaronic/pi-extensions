@@ -10,7 +10,7 @@
 
 1. **agents-table**（根 AGENTS.md 包表覆盖）
    - 含合法 `pi.extensions` manifest 的顶层目录必须出现在 AGENTS.md 包表中，缺失为 error；找不到表头为 `Package` 的表格、或根 AGENTS.md 缺失，也是 error。
-   - 包表中没有对应 `pi.extensions` manifest 的条目为 warning；以 `/` 结尾的条目（如 `themes/`）视为非包资源行，不参与该方向检查。
+   - 包表中没有对应 package.json 的条目为 warning；有 package.json 但无 `pi` manifest 的目录（如 `uikit` 共享库包）允许出现在包表中，不产生 finding；以 `/` 结尾的条目（如 `themes/`）视为非包资源行，不参与该方向检查。
 2. **surface-names**（README 工具/命令名与 src 注册名一致）
    - 静态扫描包 `src/**/*.ts`（跳过 dotdir 与 `node_modules`）中 `registerTool({ name: "..." })` 与 `registerCommand("...", ...)` 的字符串字面量；容忍换行与 `registerTool<...>(...)` 泛型实参，扫描前先剥离注释，文档注释中引用的注册形状不算注册。
    - 已注册但从未在 README 反引号中出现的工具名/命令名为 error（文档契约要求 README 与实现同步）。

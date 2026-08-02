@@ -72,11 +72,13 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 /**
  * Parse a package.json text. Returns null (with a finding) for malformed
- * input, and null (without a finding) for directories that are not Pi
- * extension packages. pi/extensions shape violations still produce a
- * PackageInfo with an empty extension list so other checks keep running.
+ * input, "library" for directories whose package.json declares no `pi`
+ * manifest (shared library packages such as uikit — not Pi extensions but
+ * legitimate package-table entries), and a PackageInfo otherwise.
+ * pi/extensions shape violations still produce a PackageInfo with an empty
+ * extension list so other checks keep running.
  */
-function parseManifest(dir: string, raw: string, findings: Finding[]): PackageInfo | null {
+function parseManifest(dir: string, raw: string, findings: Finding[]): PackageInfo | "library" | null {
   const file = `${dir}/package.json`;
   let parsed: unknown;
   try {
@@ -89,7 +91,7 @@ function parseManifest(dir: string, raw: string, findings: Finding[]): PackageIn
     findings.push({ file, check: "manifest-paths", severity: "error", message: "package.json must be a JSON object" });
     return null;
   }
-  if (parsed.pi === undefined) return null;
+  if (parsed.pi === undefined) return "library";
   let extensions: string[] = [];
   const pi = parsed.pi;
   const rawExtensions = isPlainObject(pi) ? pi.extensions : undefined;
@@ -126,6 +128,7 @@ function parseManifest(dir: string, raw: string, findings: Finding[]): PackageIn
 function checkAgentsTable(
   table: ReturnType<typeof extractAgentsPackageTable>,
   packages: readonly PackageInfo[],
+  libraryDirs: readonly string[],
   findings: Finding[],
 ): void {
   if (!table.present) {
@@ -148,14 +151,14 @@ function checkAgentsTable(
       });
     }
   }
-  const dirs = new Set(packages.map((pkg) => pkg.dir));
+  const dirs = new Set([...packages.map((pkg) => pkg.dir), ...libraryDirs]);
   for (const entry of table.packages) {
     if (!dirs.has(entry)) {
       findings.push({
         file: "AGENTS.md",
         check: "agents-table",
         severity: "warning",
-        message: `package table entry "${entry}" has no pi.extensions manifest (non-package resources such as themes/ must keep the trailing "/")`,
+        message: `package table entry "${entry}" has no package.json (non-package resources such as themes/ must keep the trailing "/")`,
       });
     }
   }
@@ -291,14 +294,16 @@ export function runDocLint(fs: RepoFileSystem, root: string, options?: LintOptio
   }
 
   const packages: PackageInfo[] = [];
+  const libraryDirs: string[] = [];
   for (const dir of fs.listTopLevelDirectories(root).sort()) {
     const raw = fs.readTextFile(joinPath(root, `${dir}/package.json`));
     if (raw === null) continue;
     const info = parseManifest(dir, raw, findings);
-    if (info !== null) packages.push(info);
+    if (info === "library") libraryDirs.push(dir);
+    else if (info !== null) packages.push(info);
   }
 
-  checkAgentsTable(extractAgentsPackageTable(agentsText), packages, findings);
+  checkAgentsTable(extractAgentsPackageTable(agentsText), packages, libraryDirs, findings);
 
   // Scan every package's sources once; the repo-wide name set exempts
   // cross-package README references (e.g. one extension documenting a

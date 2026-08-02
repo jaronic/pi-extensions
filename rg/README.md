@@ -114,6 +114,7 @@ RG 没有独立配置文件。可调行为全部来自每次 tool call 的参数
 - `replaceGrepWithRg()` 是纯函数：Set 去重、别名折叠、不修改调用方数组，且不重排无关工具。
 - `session_start` 和 `session_tree` 应用替换，`session_shutdown` 只恢复本扩展实际替换过的内建 `grep`。
 - `test/priority.test.ts` 验证折叠、不变性、真实 prompt、call/result renderer 接线和 lifecycle 恢复；`test/result-renderer.test.ts` 验证分组、回退与折叠行数。真实搜索执行继承 Pi 内建 grep definition，升级 Pi host 后仍需执行 live smoke。
+- 结果渲染的行着色（accent/muted/toolOutput）与折叠协议经 `pi-uikit-dev` 的 `tone`/`collapseLines`/`moreLinesHint` 原语实现，与其他扩展共用同一套样式映射。
 
 ## 开发与验证
 
