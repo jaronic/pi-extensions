@@ -383,7 +383,7 @@ export default function jaronEditor(pi: ExtensionAPI): void {
 				const sessionLabel = sessionName
 					? `${dim(`◈ ${sessionName}`)}${statusSeparator}`
 					: "";
-				const contextWindow = `${working ? amber(`${SPINNER[spinnerIndex]} `) : ""}${sessionLabel}${dim(`▣ ctx ${formatContext(ctx)}`)}`;
+				const contextWindow = `${working ? amber(`${SPINNER[spinnerIndex]} `) : ""}${sessionLabel}${dim(`ctx ${formatContext(ctx)}`)}`;
 				const statusLeft = [
 					amber(`⬢ ${formatModel(ctx)}`),
 					amber(pi.getThinkingLevel()),
