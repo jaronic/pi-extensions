@@ -37,11 +37,13 @@
   },
   "bundledDependencies": [
     "pi-request-ui-dev",
-    "pi-todo-dev"
+    "pi-todo-dev",
+    "pi-uikit-dev"
   ],
   "dependencies": {
     "marked": "18.0.5",
     "pi-request-ui-dev": "file:../request",
-    "pi-todo-dev": "file:../todo"
+    "pi-todo-dev": "file:../todo",
+    "pi-uikit-dev": "file:../uikit"
   }
 }

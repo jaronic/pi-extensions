@@ -10,9 +10,9 @@ import {
   truncateToWidth,
   visibleWidth,
   type Component,
-  type MarkdownTheme,
   type TUI,
 } from "@earendil-works/pi-tui";
+import { markdownThemeStyles, tone } from "pi-uikit-dev";
 import { renderPlan } from "./output.ts";
 import type { PlanState } from "./state.ts";
 import { clearPlanOutlineMarkers, createPlanOutline, type PlanOutlineEntry } from "./outline.ts";
@@ -45,25 +45,6 @@ interface ReviewComponentOptions {
   done(action: PlanReviewDecision | undefined): void;
 }
 
-function createMarkdownTheme(theme: Theme): MarkdownTheme {
-  return {
-    heading: (text) => theme.fg("mdHeading", text),
-    link: (text) => theme.fg("mdLink", text),
-    linkUrl: (text) => theme.fg("mdLinkUrl", text),
-    code: (text) => theme.fg("mdCode", text),
-    codeBlock: (text) => theme.fg("mdCodeBlock", text),
-    codeBlockBorder: (text) => theme.fg("mdCodeBlockBorder", text),
-    quote: (text) => theme.fg("mdQuote", text),
-    quoteBorder: (text) => theme.fg("mdQuoteBorder", text),
-    hr: (text) => theme.fg("mdHr", text),
-    listBullet: (text) => theme.fg("mdListBullet", text),
-    bold: (text) => theme.bold(text),
-    italic: (text) => theme.italic(text),
-    strikethrough: (text) => theme.strikethrough(text),
-    underline: (text) => theme.underline(text),
-  };
-}
-
 function padToWidth(text: string, width: number): string {
   const truncated = truncateToWidth(text, width, "");
   return `${truncated}${" ".repeat(Math.max(0, width - visibleWidth(truncated)))}`;
@@ -76,14 +57,14 @@ function scrollbarGlyph(
   scrollOffset: number,
   theme: Theme,
 ): string {
-  if (totalRows <= visibleRows) return theme.fg("accent", "█");
+  if (totalRows <= visibleRows) return tone(theme, "accent", "█");
   const thumbSize = Math.max(1, Math.round(visibleRows * visibleRows / totalRows));
   const maxOffset = totalRows - visibleRows;
   const thumbTravel = visibleRows - thumbSize;
   const thumbStart = maxOffset === 0 ? 0 : Math.round(scrollOffset / maxOffset * thumbTravel);
   return row >= thumbStart && row < thumbStart + thumbSize
-    ? theme.fg("accent", "█")
-    : theme.fg("borderMuted", "░");
+    ? tone(theme, "accent", "█")
+    : tone(theme, "borderMuted", "░");
 }
 
 function createReviewComponent({
@@ -100,8 +81,8 @@ function createReviewComponent({
     renderPlan({ ...plan, plan: outline.decoratedBody }),
     0,
     0,
-    createMarkdownTheme(theme),
-    { color: (text) => theme.fg("text", text) },
+    markdownThemeStyles(theme),
+    { color: (text) => tone(theme, "text", text) },
   );
   let selectedIndex = 0;
   let focus: "preview" | "outline" | "actions" = "preview";
@@ -193,10 +174,10 @@ function createReviewComponent({
     requestRender();
   };
   const outlineRow = (entry: PlanOutlineEntry, current: number | undefined, width: number): string => {
-    const selectedGlyph = entry.index === selectedHeadingIndex ? theme.fg("accent", "▶") : " ";
-    const currentGlyph = entry.index === current ? theme.fg("muted", "•") : " ";
+    const selectedGlyph = entry.index === selectedHeadingIndex ? tone(theme, "accent", "▶") : " ";
+    const currentGlyph = entry.index === current ? tone(theme, "muted", "•") : " ";
     const indent = " ".repeat((entry.depth - 1) * 2);
-    return padToWidth(`${selectedGlyph}${currentGlyph} ${indent}${theme.fg("text", entry.text)}`, width);
+    return padToWidth(`${selectedGlyph}${currentGlyph} ${indent}${tone(theme, "text", entry.text)}`, width);
   };
   const compact = (width: number): string[] => {
     const compactWidth = Math.max(1, width);
@@ -208,13 +189,13 @@ function createReviewComponent({
     const action = PLAN_REVIEW_ACTIONS[selectedIndex];
     const actionStyle = PLAN_REVIEW_ACTION_STYLES[selectedIndex];
     return [
-      theme.fg("mdHeading", truncateToWidth(`PLAN REVIEW · ${focus.toUpperCase()}`, compactWidth)),
+      tone(theme, "mdHeading", truncateToWidth(`PLAN REVIEW · ${focus.toUpperCase()}`, compactWidth)),
       ...body.slice(0, Math.max(1, tui.terminal.rows - 3)).map((line) => truncateToWidth(line, compactWidth)),
       truncateToWidth(
-        `${focus === "actions" ? theme.fg("accent", "▶") : theme.fg("muted", "▷")} ${theme.fg(actionStyle.color, action)}`,
+        `${focus === "actions" ? tone(theme, "accent", "▶") : tone(theme, "muted", "▷")} ${tone(theme, actionStyle.color, action)}`,
         compactWidth,
       ),
-      theme.fg("muted", truncateToWidth("Tab focus · Enter execute · c copy · Esc stay", compactWidth)),
+      tone(theme, "muted", truncateToWidth("Tab focus · Enter execute · c copy · Esc stay", compactWidth)),
     ];
   };
 
@@ -249,17 +230,17 @@ function createReviewComponent({
       const viewportOffset = narrowOutline ? outlineScrollOffset : scrollOffset;
       const firstLine = previewLines.length === 0 ? 0 : scrollOffset + 1;
       const lastLine = scrollOffset + Math.min(pageSize, Math.max(0, previewLines.length - scrollOffset));
-      const divider = theme.fg("borderMuted", "─".repeat(width));
+      const divider = tone(theme, "borderMuted", "─".repeat(width));
       const title = padToWidth(
-        ` ${theme.fg("mdHeading", theme.bold("Plan review"))} ${theme.fg("muted", "·")} ${theme.fg("warning", "Awaiting approval")} ${theme.fg("muted", "·")} ${focus}`,
+        ` ${tone(theme, "mdHeading", "Plan review", { bold: true })} ${tone(theme, "muted", "·")} ${tone(theme, "warning", "Awaiting approval")} ${tone(theme, "muted", "·")} ${focus}`,
         width,
       );
       const subtitle = padToWidth(
-        ` ${theme.fg("muted", `Review the complete plan · Outline ${outline.entries.length} heading${outline.entries.length === 1 ? "" : "s"} · Nothing runs until you confirm Execute.`)}`,
+        ` ${tone(theme, "muted", `Review the complete plan · Outline ${outline.entries.length} heading${outline.entries.length === 1 ? "" : "s"} · Nothing runs until you confirm Execute.`)}`,
         width,
       );
       const lines = [title, subtitle, divider];
-      const splitDivider = theme.fg("borderMuted", focus === "outline" ? "┊" : "│");
+      const splitDivider = tone(theme, "borderMuted", focus === "outline" ? "┊" : "│");
 
       for (let row = 0; row < pageSize; row += 1) {
         const preview = padToWidth(visible[row] ?? "", contentWidth);
@@ -270,7 +251,7 @@ function createReviewComponent({
         }
         const outlineCell = row === 0
           ? padToWidth(
-              `${focus === "outline" ? theme.fg("accent", "›") : " "} ${theme.bold("Outline")}`,
+              `${focus === "outline" ? tone(theme, "accent", "›") : " "} ${tone(theme, "strong", "Outline")}`,
               outlineWidth,
             )
           : (() => {
@@ -288,14 +269,14 @@ function createReviewComponent({
           : ` ${focus[0].toUpperCase()}${focus.slice(1)} · ${breadcrumb}`;
       const status = copyNotice?.text ?? positionStatus;
       const statusColor = copyNotice?.color ?? "accent";
-      lines.push(padToWidth(theme.fg(statusColor, status), width), divider);
-      lines.push(padToWidth(theme.fg("muted", " Actions"), width));
+      lines.push(padToWidth(tone(theme, statusColor, status), width), divider);
+      lines.push(padToWidth(tone(theme, "muted", " Actions"), width));
 
       for (let index = 0; index < PLAN_REVIEW_ACTIONS.length; index += 1) {
         const selected = index === selectedIndex;
         const style = PLAN_REVIEW_ACTION_STYLES[index];
-        const label = `${selected ? theme.fg("accent", "›") : " "} ${theme.fg(style.color, style.marker)} ${index + 1}. ${PLAN_REVIEW_ACTIONS[index]}`;
-        lines.push(padToWidth(selected ? theme.bold(label) : label, width));
+        const label = `${selected ? tone(theme, "accent", "›") : " "} ${tone(theme, style.color, style.marker)} ${index + 1}. ${PLAN_REVIEW_ACTIONS[index]}`;
+        lines.push(padToWidth(selected ? tone(theme, "strong", label) : label, width));
       }
 
       const hint = focus === "preview"
@@ -303,7 +284,7 @@ function createReviewComponent({
         : focus === "outline"
           ? " Outline · ↑↓ select · PgUp/PgDn/Home/End · Enter jump · Tab focus · Esc stay"
           : " Actions · ↑↓ choose · ←→ actions · Tab focus · c copy · Enter confirm · Esc stay";
-      lines.push(padToWidth(theme.fg("muted", hint), width));
+      lines.push(padToWidth(tone(theme, "muted", hint), width));
       return lines;
     },
     handleInput(data: string): void {

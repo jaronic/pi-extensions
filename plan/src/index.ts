@@ -5,6 +5,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { installRequest, type RequestService } from "pi-request-ui-dev";
 import { installTodo, type TodoService, type TodoServiceResult } from "pi-todo-dev";
+import { tone } from "pi-uikit-dev";
 import {
   answerPlanChoice,
   consumePlanChoice,
@@ -117,7 +118,7 @@ export default function planExtension(
       ? "warning"
       : "accent";
     const [heading, ...lines] = renderPlanWidget(current);
-    ctx.ui.setStatus("plan", ctx.ui.theme.fg(color, heading));
+    ctx.ui.setStatus("plan", tone(ctx.ui.theme, color, heading));
     ctx.ui.setWidget("plan", lines.length > 0 ? lines : undefined);
   }
 

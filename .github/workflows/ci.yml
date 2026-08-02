@@ -29,9 +29,9 @@ jobs:
       matrix:
         include:
           - extension: goal
-            testDependencies: ""
+            testDependencies: "uikit"
           - extension: plan
-            testDependencies: "goal ast-grep"
+            testDependencies: "goal ast-grep uikit"
           - extension: lsp
             testDependencies: ""
           - extension: uikit
@@ -43,9 +43,9 @@ jobs:
           - extension: rg
             testDependencies: "uikit"
           - extension: todo
-            testDependencies: "goal plan request"
+            testDependencies: "goal plan request uikit"
           - extension: jaron
-            testDependencies: ""
+            testDependencies: "uikit"
           - extension: diffreport
             testDependencies: ""
           - extension: telemetry
@@ -104,6 +104,8 @@ jobs:
           cache: npm
           cache-dependency-path: ast-grep/package-lock.json
       - run: npm ci
+        working-directory: uikit
+      - run: npm ci
       - run: npm run check
       - run: npm test
         env:
@@ -124,5 +126,7 @@ jobs:
           node-version: 22.19.0
           cache: npm
           cache-dependency-path: ast-grep/package-lock.json
+      - run: npm ci
+        working-directory: uikit
       - run: npm ci
       - run: npm run release-smoke

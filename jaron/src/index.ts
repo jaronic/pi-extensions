@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Component, EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { tone } from "pi-uikit-dev";
 import {
 	buildHeaderLines,
 	buildTerminalTitle,
@@ -222,7 +223,7 @@ export default function jaronEditor(pi: ExtensionAPI): void {
 		ctx.ui.setHeader((tui, theme) =>
 			new JaronHeader(
 				() => ({
-					brand: `${theme.bold(theme.fg("accent", "pi"))}${theme.fg("dim", ` v${VERSION}`)}`,
+					brand: `${tone(theme, "accent", "pi", { bold: "outer" })}${tone(theme, "dim", ` v${VERSION}`)}`,
 					cwd: compactCwd(ctx.cwd),
 					branch,
 					collapsedHints: [
@@ -244,15 +245,16 @@ export default function jaronEditor(pi: ExtensionAPI): void {
 						keyHint("app.message.followUp", "to queue follow-up"),
 						keyHint("app.clipboard.pasteImage", "to paste image"),
 					],
-					expandHint: theme.fg(
+					expandHint: tone(
+						theme,
 						"dim",
 						`press ${keyText("app.tools.expand")} to show full startup help`,
 					),
 					recentSessions,
-					border: (value) => theme.fg("warning", value),
-					dim: (value) => theme.fg("dim", value),
-					muted: (value) => theme.fg("muted", value),
-					accent: (value) => theme.fg("accent", value),
+					border: (value) => tone(theme, "warning", value),
+					dim: (value) => tone(theme, "dim", value),
+					muted: (value) => tone(theme, "muted", value),
+					accent: (value) => tone(theme, "accent", value),
 				}),
 				tui,
 			),
@@ -261,10 +263,10 @@ export default function jaronEditor(pi: ExtensionAPI): void {
 		const thm = ctx.ui.theme;
 		ctx.ui.setWorkingIndicator({
 			frames: [
-				thm.fg("warning", "◐"),
-				thm.fg("warning", "◓"),
-				thm.fg("warning", "◑"),
-				thm.fg("warning", "◒"),
+				tone(thm, "warning", "◐"),
+				tone(thm, "warning", "◓"),
+				tone(thm, "warning", "◑"),
+				tone(thm, "warning", "◒"),
 			],
 			intervalMs: 120,
 		});
@@ -323,15 +325,15 @@ export default function jaronEditor(pi: ExtensionAPI): void {
 				const thm = ctx.ui.theme;
 				const jaronTheme: EditorTheme = {
 					...theme,
-					borderColor: (value: string) => thm.fg("warning", value),
+					borderColor: (value: string) => tone(thm, "warning", value),
 					selectList: {
 						...theme.selectList,
 						selectedPrefix: (value: string) =>
-							thm.fg("warning", thm.bold(value)),
-						selectedText: (value: string) => thm.fg("warning", thm.bold(value)),
-						description: (value: string) => thm.fg("muted", thm.bold(value)),
-						scrollInfo: (value: string) => thm.fg("accent", value),
-						noMatch: (value: string) => thm.fg("warning", thm.bold(value)),
+							tone(thm, "warning", value, { bold: true }),
+						selectedText: (value: string) => tone(thm, "warning", value, { bold: true }),
+						description: (value: string) => tone(thm, "muted", value, { bold: true }),
+						scrollInfo: (value: string) => tone(thm, "accent", value),
+						noMatch: (value: string) => tone(thm, "warning", value, { bold: true }),
 					},
 				};
 				super(tui, jaronTheme, keybindings, { paddingX: 1 });
@@ -348,9 +350,9 @@ export default function jaronEditor(pi: ExtensionAPI): void {
 
 				const thm = ctx.ui.theme;
 				const border = (value: string) => this.borderColor(value);
-				const dim = (value: string) => thm.fg("dim", value);
-				const accent = (value: string) => thm.fg("accent", value);
-				const amber = (value: string) => thm.fg("warning", value);
+				const dim = (value: string) => tone(thm, "dim", value);
+				const accent = (value: string) => tone(thm, "accent", value);
+				const amber = (value: string) => tone(thm, "warning", value);
 
 				const bottomBorderIndex = this.isShowingAutocomplete()
 					? lines.findIndex(

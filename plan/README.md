@@ -205,6 +205,7 @@ Plan 对 Todo 是硬依赖：`plan/package.json` 声明并捆绑 `pi-todo-dev`�
 
 - Plan 对 Request 也是硬依赖：factory 通过 `installRequest(pi)` 取得 typed service。Plan Review 使用领域组件；`request_plan_choice` 将 2–5 个选项映射为 Request 单选结果，Plan 自己校验并写 journal。无界面时要求用户编号回复与 `answer_plan_choice`，绝不隐式选择；`ask` 仍可用于同轮外部问答。
 - `rg` 与 `lsp` 都在活跃 Plan phase 的只读 allowlist 中。RG 继续保持在 `grep` 前；LSP 的 rename/code action 只返回 preview，因此不会绕过 Plan 的工作区写保护。
+- Review 组件、status 与 widget 的着色全部经 `pi-uikit-dev` 的 `tone` 与 `markdownThemeStyles` 原语解析，与其他扩展共享同一 token 映射，渲染输出与直接调用 theme 逐字节一致。
 - 批准后 Plan 不再接管工具；Request、RG、LSP 与其他工具是否可用由批准前保存的工具集及其他扩展决定，执行进度只由 Todo 投影。
 
 ## 配置与持久化

@@ -13,6 +13,7 @@
 - 当前目标及完整状态会注入每次 agent 的 system prompt；目标文本按不可信用户数据处理，不获得更高指令优先级。
 - 一轮正常结束且目标仍为 `active` 时，插件发送隐藏的 continuation message，自动触发下一轮；若某个自动 continuation 整轮未发起任何工具调用，则 Goal 保持 `active` 但停止继续排队，避免空转。
 - TUI footer 使用独立 keyed status；active turn 中 Goal 耗时每秒刷新。Plan 与 active Goal 互斥，但 paused/terminal Goal 状态可与 Plan 状态同时显示。设置预算时同时显示 `耗时 · 已用 / 预算` token，不占用叠层 widget。
+- footer status 的着色经 `pi-uikit-dev` 的 `tone` 原语渲染，与其他扩展共享同一 token 映射。
 - 状态作为 Pi session journal 的 custom entry 保存，切换 session tree 分支时按当前分支恢复。
 - reload 会把仍活跃的目标安全地暂停，需显式 `/goal resume` 后继续。
 

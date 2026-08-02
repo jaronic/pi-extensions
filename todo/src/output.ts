@@ -1,5 +1,6 @@
 import { formatSize, type Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { tone } from "pi-uikit-dev";
 import {
   DEFAULT_VIEW_LIMIT,
   MAX_MODEL_OUTPUT_BYTES,
@@ -337,7 +338,7 @@ function coloredTaskLine(task: TodoTask, theme: Theme): string {
           : "dim";
   const textColor = task.status === "inProgress" ? "text" : task.status === "blocked" ? "warning" : "muted";
   const detail = task.status === "blocked" && task.statusDetail ? ` — ${task.statusDetail}` : "";
-  return `${theme.fg(symbolColor, TASK_SYMBOL[task.status])} ${theme.fg("accent", `#${task.id}`)} ${theme.fg(textColor, `${task.content}${detail}`)}`;
+  return `${tone(theme, symbolColor, TASK_SYMBOL[task.status])} ${tone(theme, "accent", `#${task.id}`)} ${tone(theme, textColor, `${task.content}${detail}`)}`;
 }
 
 export function todoWidget(state: TodoState, theme: Theme, width = 120): string[] {
@@ -354,7 +355,8 @@ export function todoWidget(state: TodoState, theme: Theme, width = 120): string[
   }
   const headingTask = active ?? ordered[0] ?? tasks.at(-1);
   const phaseName = headingTask === undefined ? undefined : findTodoTask(state, headingTask.id)?.phase.name;
-  const heading = theme.fg(
+  const heading = tone(
+    theme,
     todoBoardStatus(state) === "blocked" ? "warning" : todoBoardStatus(state) === "settled" ? "success" : "accent",
     `Todo${phaseName === undefined ? "" : ` · ${phaseName}`} · ${progressText(counts)}`,
   );
@@ -365,7 +367,7 @@ export function todoWidget(state: TodoState, theme: Theme, width = 120): string[
   for (const task of ordered.slice(0, visibleCount)) {
     lines.push(truncateToWidth(coloredTaskLine(task, theme), width, ""));
   }
-  if (needsSummary) lines.push(theme.fg("dim", `… ${ordered.length - visibleCount} more`));
+  if (needsSummary) lines.push(tone(theme, "dim", `… ${ordered.length - visibleCount} more`));
   return lines.slice(0, MAX_WIDGET_ROWS);
 }
 

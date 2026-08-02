@@ -5,6 +5,7 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, type Component, type Keybinding, type KeyId, type TUI } from "@earendil-works/pi-tui";
+import { tone } from "pi-uikit-dev";
 import {
   MAX_VIEW_LIMIT,
   allTodoTasks,
@@ -80,22 +81,22 @@ class TodoBoardComponent implements Component {
     const lines = [
       "",
       truncateToWidth(
-        this.theme.fg("borderMuted", "───") +
-          this.theme.fg("accent", this.theme.bold(" Todos ")) +
-          this.theme.fg("borderMuted", "─".repeat(Math.max(0, safeWidth - 10))),
+        tone(this.theme, "borderMuted", "───") +
+          tone(this.theme, "accent", " Todos ", { bold: true }) +
+          tone(this.theme, "borderMuted", "─".repeat(Math.max(0, safeWidth - 10))),
         safeWidth,
         "",
       ),
     ];
-    if (this.frozenByPlan) lines.push(truncateToWidth(this.theme.fg("warning", "  Frozen while Plan is active"), safeWidth, ""));
+    if (this.frozenByPlan) lines.push(truncateToWidth(tone(this.theme, "warning", "  Frozen while Plan is active"), safeWidth, ""));
     if (!this.state) {
-      lines.push("", truncateToWidth(this.theme.fg("dim", "  No Todo board on this branch."), safeWidth, ""));
+      lines.push("", truncateToWidth(tone(this.theme, "dim", "  No Todo board on this branch."), safeWidth, ""));
     } else {
       const counts = todoCounts(this.state);
       lines.push(
         "",
         truncateToWidth(
-          this.theme.fg("muted", `  ${counts.completed}/${counts.total} completed · ${counts.blocked} blocked · ${counts.dropped} dropped`),
+          tone(this.theme, "muted", `  ${counts.completed}/${counts.total} completed · ${counts.blocked} blocked · ${counts.dropped} dropped`),
           safeWidth,
           "",
         ),
@@ -106,16 +107,16 @@ class TodoBoardComponent implements Component {
       let priorPhase: string | undefined;
       for (const item of page) {
         if (item.phase !== priorPhase) {
-          lines.push(truncateToWidth(this.theme.fg("muted", `  ${item.phase}`), safeWidth, ""));
+          lines.push(truncateToWidth(tone(this.theme, "muted", `  ${item.phase}`), safeWidth, ""));
           priorPhase = item.phase;
         }
         lines.push(`  ${todoDialogTaskLine(item.task, this.theme, Math.max(1, safeWidth - 2))}`);
       }
       if (located.length > page.length) {
-        lines.push(truncateToWidth(this.theme.fg("dim", `  ${this.offset + 1}-${this.offset + page.length} of ${located.length}`), safeWidth, ""));
+        lines.push(truncateToWidth(tone(this.theme, "dim", `  ${this.offset + 1}-${this.offset + page.length} of ${located.length}`), safeWidth, ""));
       }
     }
-    lines.push("", truncateToWidth(this.theme.fg("dim", "  ↑/↓ scroll · Escape close"), safeWidth, ""), "");
+    lines.push("", truncateToWidth(tone(this.theme, "dim", "  ↑/↓ scroll · Escape close"), safeWidth, ""), "");
     this.cachedWidth = width;
     this.cachedLines = lines;
     return lines;

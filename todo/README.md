@@ -161,6 +161,8 @@ Task 文本、phase、reason 和 note 会随本地 Pi session 持久化。不要
 
 UI 只投影已验证状态，并只使用 Pi `Theme` 的 semantic tokens；它不注册或选择私有 palette。Todo 始终只使用自己的 `todo` status/widget key，不覆盖 Plan、Goal 或其他扩展的 key。
 
+工具卡片标题、widget/dialog 行与 compact result 的着色统一经 `pi-uikit-dev` 的 `tone`/`toolCallTitle` 原语渲染，与其他扩展共享同一 token 映射与标题形状。
+
 Widget heading 显示当前（或下一可见）phase，任务按“当前项 → runnable pending → blocked”排列。Plan 未批准时不投影候选步骤；批准时若 board 为空或 settled，则创建 `Plan` board 并启动第一项；若已有 open board，则追加唯一命名的 `Plan` phase 并保留原 active 指针。之后转交任务与手工创建的任务完全使用相同 `#N`、状态、prompt、widget 和分页输出。Widget 通过 host component factory 按实际 `render(width)` 截断；expanded tool result 会列出本次变更涉及的 phase，字节截页会显示请求大小、输出上限和精确续读 offset。
 
 主要硬上限：

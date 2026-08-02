@@ -1,4 +1,5 @@
 import { Text } from "@earendil-works/pi-tui";
+import { tone } from "pi-uikit-dev";
 import type {
   AgentToolResult,
   ToolRenderResultOptions,
@@ -101,14 +102,14 @@ function isPreviewDetails(value: unknown): value is AstEditPreviewDetailsV1 {
 function fallbackText(result: AgentToolResult<unknown>, isError: boolean, theme: Theme): Text {
   const first = result.content.find((item) => item.type === "text");
   const text = first?.type === "text" ? sanitizeAndCap(first.text, 4096, 40).text : "ast-grep returned no displayable text.";
-  return new Text(theme.fg(isError ? "error" : "toolOutput", text), 0, 0);
+  return new Text(tone(theme, isError ? "error" : "output", text), 0, 0);
 }
 
 export function renderSearchCall(args: SearchInput, theme: Theme): Text {
   const scope = formatPathForDisplay(args.path ?? ".", 256).text;
   const pattern = sanitizeAndCap(args.pattern ?? "", 256, 1).text;
   return new Text(
-    `${theme.fg("toolTitle", "ast_grep_search")} ${theme.fg("accent", args.language ?? "?")} ${theme.fg("muted", scope)}\n${theme.fg("toolOutput", pattern)}`,
+    `${tone(theme, "title", "ast_grep_search", { bold: false })} ${tone(theme, "accent", args.language ?? "?")} ${tone(theme, "muted", scope)}\n${tone(theme, "output", pattern)}`,
     0,
     0,
   );
@@ -116,8 +117,8 @@ export function renderSearchCall(args: SearchInput, theme: Theme): Text {
 
 export function renderEditCall(args: EditInput, theme: Theme): Text {
   const path = formatPathForDisplay(args.path ?? "", 256).text;
-  const action = args.action === "apply" ? theme.fg("warning", "apply") : theme.fg("accent", "preview");
-  return new Text(`${theme.fg("toolTitle", "ast_grep_edit")} ${action} ${theme.fg("muted", path)}`, 0, 0);
+  const action = args.action === "apply" ? tone(theme, "warning", "apply") : tone(theme, "accent", "preview");
+  return new Text(`${tone(theme, "title", "ast_grep_edit", { bold: false })} ${action} ${tone(theme, "muted", path)}`, 0, 0);
 }
 
 export function renderSearchResult(
@@ -129,22 +130,22 @@ export function renderSearchResult(
   const details: unknown = result.details;
   if (isProgress(details)) {
     const scope = sanitizeAndCap(details.scope, 512, 1).text;
-    return new Text(theme.fg("muted", `${details.phase}: ${details.processedRecords} records in ${scope}`), 0, 0);
+    return new Text(tone(theme, "muted", `${details.phase}: ${details.processedRecords} records in ${scope}`), 0, 0);
   }
   if (!isSearchDetails(details)) {
     return fallbackText(result, context.isError, theme);
   }
   const title = `${details.totalOverflow ? "≥" : ""}${details.totalMatches} matches; ${details.returnedMatches} shown`;
   if (!options.expanded || details.matches.length === 0) {
-    return new Text(theme.fg(details.resultLimited ? "warning" : "success", title), 0, 0);
+    return new Text(tone(theme, details.resultLimited ? "warning" : "success", title), 0, 0);
   }
   const rows = details.matches.map((match) => {
     const location = `${match.range.start.line + 1}:${match.range.start.column + 1}`;
     const path = formatPathForDisplay(match.path, 512).text;
     const text = sanitizeAndCap(match.text, 4096, 40).text;
-    return `${theme.fg("accent", path)} ${theme.fg("muted", location)}\n${theme.fg("toolOutput", text)}`;
+    return `${tone(theme, "accent", path)} ${tone(theme, "muted", location)}\n${tone(theme, "output", text)}`;
   });
-  return new Text(`${theme.fg("success", title)}\n${rows.join("\n")}`, 0, 0);
+  return new Text(`${tone(theme, "success", title)}\n${rows.join("\n")}`, 0, 0);
 }
 
 export function renderEditResult(
@@ -156,11 +157,11 @@ export function renderEditResult(
   const details: unknown = result.details;
   if (isProgress(details)) {
     const scope = sanitizeAndCap(details.scope, 512, 1).text;
-    return new Text(theme.fg("muted", `${details.phase}: ${details.processedRecords} records in ${scope}`), 0, 0);
+    return new Text(tone(theme, "muted", `${details.phase}: ${details.processedRecords} records in ${scope}`), 0, 0);
   }
   if (isApplyDetails(details)) {
     const path = formatPathForDisplay(details.path, 512).text;
-    return new Text(theme.fg("success", `Applied ${details.replacements} replacements to ${path}`), 0, 0);
+    return new Text(tone(theme, "success", `Applied ${details.replacements} replacements to ${path}`), 0, 0);
   }
   if (!isPreviewDetails(details)) {
     return fallbackText(result, context.isError, theme);
@@ -170,13 +171,13 @@ export function renderEditResult(
     ? `No changes in ${path}`
     : `Preview: ${details.replacements} replacements in ${path}`;
   if (!options.expanded || details.edits.length === 0) {
-    return new Text(theme.fg(details.replacements === 0 ? "muted" : "warning", title), 0, 0);
+    return new Text(tone(theme, details.replacements === 0 ? "muted" : "warning", title), 0, 0);
   }
   const edits = details.edits.map((edit) => {
     const location = `${edit.range.start.line + 1}:${edit.range.start.column + 1}`;
     const before = sanitizeAndCap(edit.before, 4096, 40).text;
     const after = sanitizeAndCap(edit.after, 4096, 40).text;
-    return `${theme.fg("muted", location)}\n${theme.fg("toolDiffRemoved", `- ${before}`)}\n${theme.fg("toolDiffAdded", `+ ${after}`)}`;
+    return `${tone(theme, "muted", location)}\n${tone(theme, "diffRemoved", `- ${before}`)}\n${tone(theme, "diffAdded", `+ ${after}`)}`;
   });
-  return new Text(`${theme.fg("warning", title)}\n${edits.join("\n")}`, 0, 0);
+  return new Text(`${tone(theme, "warning", title)}\n${edits.join("\n")}`, 0, 0);
 }

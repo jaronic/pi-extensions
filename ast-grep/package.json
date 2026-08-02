@@ -19,6 +19,12 @@
     "@earendil-works/pi-tui": ">=0.82.1",
     "typebox": ">=1.0.0"
   },
+  "dependencies": {
+    "pi-uikit-dev": "file:../uikit"
+  },
+  "bundledDependencies": [
+    "pi-uikit-dev"
+  ],
   "optionalDependencies": {
     "@ast-grep/cli-darwin-arm64": "0.45.0",
     "@ast-grep/cli-darwin-x64": "0.45.0",

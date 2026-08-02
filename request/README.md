@@ -168,7 +168,7 @@ const result = await request.request(questions, {
 
 - `src/index.ts`：composition root；导出幂等 `installRequest()` service，注册 tool/channel，管理 session signal，并安装/恢复 native adapter。
 - `src/request.ts`：public types、输入上限、规范化与结果结构。
-- `src/component.ts`：响应式 Question/Review TUI、键盘状态机、滚动和 Editor 集成。
+- `src/component.ts`：响应式 Question/Review TUI、键盘状态机、滚动和 Editor 集成；所有着色经 `pi-uikit-dev` 的 `tone` 原语映射到 host theme token。
 - `src/dialog.ts`：所有调用方共享的串行 coordinator。
 - `src/adapters.ts`：`select`/`confirm`/`input` 的兼容 adapter 与保守 fallback。
 - `src/protocol.ts`：`pi-extensions:request-ui:v1` client/helper 和 listener arbitration。

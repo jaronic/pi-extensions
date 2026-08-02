@@ -15,7 +15,7 @@
 - 输入 `/` 打开 slash 命令下拉框时，输入框仍保持闭合，状态条和候选列表依次显示在下方。
 - slash/autocomplete 选中项使用更醒目的加粗 `warning` 色，描述文字也会加重显示。
 - agent 工作时右侧显示轻量 spinner。
-- 使用当前 pi theme token 着色，主要依赖 `warning`、`accent`、`muted`、`dim`。
+- 使用当前 pi theme token 着色，主要依赖 `warning`、`accent`、`muted`、`dim`；所有取色经 `pi-uikit-dev` 的 `tone` 原语完成，与其他扩展共享同一 token 映射。
 
 ## 使用
 

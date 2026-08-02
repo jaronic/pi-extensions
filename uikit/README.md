@@ -11,9 +11,16 @@
 
 ## 原语目录
 
-### `tone(theme, name, text)`
+### `tone(theme, name, text, options?)`
 
-命名色调。`name` ∈ `title | accent | muted | dim | text | output | success | warning | error`；`title` = `toolTitle` + bold，`output` = `toolOutput`，其余同名 token。
+命名色调。`name` 分四组：
+
+- 文本意图：`title | accent | muted | dim | text | output | success | warning | error`（`title` = `toolTitle` + bold，`output` = `toolOutput`，其余同名 token）。
+- 强调/选中：`strong`（裸 `theme.bold`，不着色）、`selected`（`selectedBg` 背景 + `text` 前景，交互列表的选中行）。
+- 边框/ diff：`borderMuted | borderAccent | diffAdded | diffRemoved`（后两者 = `toolDiffAdded/Removed`）。
+- Markdown 结构：`mdHeading | mdLink | mdLinkUrl | mdCode | mdCodeBlock | mdCodeBlockBorder | mdQuote | mdQuoteBorder | mdHr | mdListBullet`。
+
+`options.bold` 把文本先包 `theme.bold` 再着色（等价于 `theme.fg(token, theme.bold(text))`）。
 
 ### `toolCallTitle(theme, { brand, action?, target? })`
 
@@ -35,6 +42,10 @@ muted 键 + text 值的键值行；`[text]` 形式的短标记。
 
 折叠输出协议：collapsed 保留头部 `collapsedLimit` 行并返回 `hiddenCount`，expanded 全量；`moreLinesHint` 生成统一尾部提示 `… (N more lines; expand to show all)`。rg 的结果渲染即用此协议。
 
+### `markdownThemeStyles(theme)`
+
+返回完整的 pi-tui `MarkdownTheme`：所有 markdown 结构（heading/link/code/quote/hr/listBullet…）经 `tone()` 的 md* 色调解析，粗斜体等直接代理 `theme.bold/italic/…`。嵌套 Markdown 组件在各扩展中渲染一致。
+
 ### `linesToText(lines)`
 
 把着色后的行合成 `Text` 组件。
@@ -50,7 +61,7 @@ muted 键 + text 值的键值行；`[text]` 形式的短标记。
 }
 ```
 
-然后按包名导入：`import { toolCallTitle } from "pi-uikit-dev";`。uikit 无扩展入口，消费方的 `pi.extensions` 无需为其增加资源顺序条目。当前消费方：`hashline`、`rg`、`request`。
+然后按包名导入：`import { toolCallTitle } from "pi-uikit-dev";`。uikit 无扩展入口，消费方的 `pi.extensions` 无需为其增加资源顺序条目。当前消费方：`ast-grep`、`goal`、`hashline`、`jaron`、`plan`、`request`、`rg`、`todo`（全部含 UI 着色的扩展均已接入；`lsp`、`diffreport`、`telemetry`、`enforce`、`notify`、`doclint` 无工具 UI，无需接入）。
 
 ## 测试
 
@@ -58,4 +69,4 @@ muted 键 + text 值的键值行；`[text]` 形式的短标记。
 
 ## 维护约束
 
-新增原语必须是纯函数、只经 `tone()` 取色；改变任何原语的输出形状时，同步检查 hashline/rg/request 的渲染输出与测试断言（它们依赖逐字节一致的输出），并在同一改动中更新本 README。
+新增原语必须是纯函数、只经 `tone()` 取色；改变任何原语的输出形状时，同步检查所有消费方（ast-grep/goal/hashline/jaron/plan/request/rg/todo）的渲染输出与测试断言（它们依赖逐字节一致的输出），并在同一改动中更新本 README。

@@ -95,7 +95,7 @@ ln -sfn "$PWD" "$HOME/.pi/agent/extensions/ast-grep"
 
 结果按 path、byte range 和稳定 payload hash 排序。`nextOffset` 存在时可继续分页；分页不是 snapshot-isolated，任何写入后都应从 offset 0 重启。零匹配表示 pattern 执行成功，不证明 scope 内每个文件都 parse-valid。
 
-最终 `details` 中的 workspace-relative `scope`/`path` 保留真实、well-formed、NUL-free 字符串，供 LSP 等 machine consumer 精确解析；模型最终 `content` 把路径显示为完整 JSON string literal，例如真实换行文件名显示为 `"src/a\nb.ts"`。后续工具调用应使用该 literal 解码后的字符串值；literal 无法完整进入最终输出预算时整次操作失败。TUI 与 transient progress 使用相同 JSON-style escaping 的固定上限 projection，过长时明确以 `...` 截断，不能反向当作 machine path。
+最终 `details` 中的 workspace-relative `scope`/`path` 保留真实、well-formed、NUL-free 字符串，供 LSP 等 machine consumer 精确解析；模型最终 `content` 把路径显示为完整 JSON string literal，例如真实换行文件名显示为 `"src/a\nb.ts"`。后续工具调用应使用该 literal 解码后的字符串值；literal 无法完整进入最终输出预算时整次操作失败。TUI 与 transient progress 使用相同 JSON-style escaping 的固定上限 projection，过长时明确以 `...` 截断，不能反向当作 machine path。两个工具的 call/result 卡片着色经 `pi-uikit-dev` 的 `tone` 原语渲染（preview 的 diff 行映射到 `diffAdded`/`diffRemoved`），与其他扩展共享同一 token 映射。
 
 ## `ast_grep_edit`
 

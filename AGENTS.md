@@ -18,7 +18,7 @@ Fourteen independent, private TypeScript extensions for `@earendil-works/pi-codi
 | `enforce` | rule-driven tool promotion; nudge/gate `tool_call` layer emitting copyable alternative invocations |
 | `notify` | out-of-band notifications on `agent_settled` (macOS osascript, terminal bell, ntfy.sh) |
 | `doclint` | mechanical AGENTS.md/README contract lint via `doc_lint` tool and `/doclint` |
-| `uikit` | shared TUI render primitives (tones, tool-card titles, status rows, collapse protocol); pure library, no extension entry, consumed via `file:` dependency |
+| `uikit` | shared TUI render primitives (tones incl. markdown/border/diff/selection, tool-card titles, status rows, collapse protocol, `MarkdownTheme`); pure library, no extension entry, consumed via `file:` dependency |
 | `themes/` | repository-wide light/dark Pi palettes (`pi-extensions-*`) |
 
 Each extension's internals (state machines, protocols, tool contracts, key files) are documented in its own `<extension>/README.md`; this file intentionally does not duplicate them.
