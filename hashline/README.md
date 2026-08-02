@@ -18,14 +18,16 @@
 - 所有 operation 均引用同一份原文件坐标。数组前后顺序不会使后续行号位移；
 - replace/delete 的每一行必须已被该 snapshot 展示；插入 gap 两侧存在的行都必须已展示；
 - edit 先固定 authored path 的 canonical target，再以该 target 进入 Pi 共享 mutation queue；获得锁后重新核对 path 未 retarget，并比较完整 bytes。并行同-token edit 若目标/上下文相交则后到者拒绝；若互不相交且满足 verified rebase 证明，两者可依次成功。等待期间 retarget 仍以 `E_PATH_MISMATCH` 拒绝；
-- 成功 result 保持 Pi 内建 `EditToolDetails` 的 `diff`、`patch`、`firstChangedLine` 形状，并返回有界的变更预览和可继续使用的新 snapshot；verified rebase 成功时会明确报告原范围、重定位范围与统一偏移；
+- 成功 result 保持 Pi 内建 `EditToolDetails` 的 `diff`、`patch`、`firstChangedLine` 形状（details 基于 LF 归一化的逻辑视图计算，CR-only/CRLF 文件的 hunk 行号与局部性因此正确；CAS、写入与 EOL 保留仍以原始 bytes 为准），并返回有界的变更预览和可继续使用的新 snapshot；verified rebase 成功时会明确报告原范围、重定位范围与统一偏移；
 - stale recovery 不猜路径、不改 payload、不做三方 merge。它只接受唯一的、逐物理行 byte-identical 的 unchanged-run 映射；目标、上下文、EOL、映射唯一性或统一偏移任一无法证明，就零写入拒绝并返回当前坐标附近的 refreshed snapshot。
+- `read` 与 `edit` 都携带 description、一行 `promptSnippet` 和 1–3 条 `promptGuidelines`（每条显式点名对应工具名），进入系统提示词的 Available tools 与 Guidelines 段；guidelines 只陈述现有协议规则，不改变内建工具继承的调用习惯。
+- 两个工具的 call 卡片标题（`Hashline · read|edit <path>`）经 `pi-uikit-dev` 的 `toolCallTitle`/`reuseTextComponent` 原语渲染，与其他扩展的工具卡片共享同一标题形状与 token 映射。
 
 Hashline 不新建、重命名、移动或删除文件，也不允许把非空文件清成空 bytes。新文件、完整重写和显式清空继续使用 `write`；symbol rename 和 code action 使用 `lsp`。
 
 ## 安装与启用
 
-要求：Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.82.1` 的 Pi。
+要求：Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.83.0` 的 Pi。
 
 从仓库根目录启用全部扩展（包含 Hashline）：
 
@@ -63,6 +65,8 @@ Hashline 占有全局工具名 `read` 和 `edit`。不要同时加载另一个�
 | `offset` | 否 | 1-based 起始物理行，必须为正安全整数。 |
 | `limit` | 否 | 最多返回的物理行数，必须为正安全整数。 |
 
+`offset`/`limit` 由 Hashline 对照自身物理行表（LF/CRLF/CR 都计为行尾）校验并应用：宿主预读不携带 range，因此 CR-only 文件也能按行分页读取；起始行超出物理行数时抛 `E_RANGE`。图片与不可编辑文本仍回退宿主按 `split("\n")` 的原 range 语义。
+
 可编辑文本示例：
 
 ```text
@@ -86,7 +90,7 @@ Hashline 占有全局工具名 `read` 和 `edit`。不要同时加载另一个�
 
 目录、FIFO、device 和其他非 regular 输入会在 non-blocking capture 阶段以 `E_NOT_EDITABLE` 明确拒绝，不会被误报为空文件，也不会获得 snapshot。
 
-Symlink 可读取和编辑，但 snapshot 绑定其 canonical target；read 后或 queue 等待期间 retarget 都会使 edit 失败。Hashline 的物理行 scanner 只把第一个 UTF-8 BOM 作为文件标记单独恢复；后续 BOM 属于正文并原样保留。LF/CRLF/CR、混合 EOL、尾随空白和未终止 EOF 都不会被整体规范化，也不会生成虚假尾部空行。
+Symlink 可读取和编辑，但 snapshot 绑定其 canonical target；read 后或 queue 等待期间 retarget 都会使 edit 失败。Hashline 的物理行 scanner 只把第一个 UTF-8 BOM 作为文件标记单独恢复；后续 BOM 属于正文并原样保留。LF/CRLF/CR、混合 EOL、尾随空白和未终止 EOF 都不会被整体规范化，也不会生成虚假尾部空行（仅 `edit` 的 diff/patch details 使用 LF 归一化视图，文件 bytes 与 EOL 永远原样保留）。
 
 ## `edit` 合同
 
@@ -132,7 +136,7 @@ Operation 字段矩阵：
 }
 ```
 
-所有 range 必须互不重叠；同一 insertion gap 只能写一次，`insert_after N` 与 `insert_before N+1` 视为同一 gap；consume range 内部不能再插入。整个 operation set 先验证、在内存中应用并生成完整 details/result，随后只进行一次文件写入。
+所有 range 必须互不重叠；同一 insertion gap 只能写一次，`insert_after N` 与 `insert_before N+1` 视为同一 gap；consume range 内部不能再插入。整个 operation set 先验证、在内存中应用并生成完整 details/result，随后只进行一次文件写入。details 计算先把旧/新正文做 LF 归一化（`\r\n` 与 `\r` 统一为 `\n`，与宿主 edit 的 normalizeToLF 一致）再交给 jsdiff，因此 CR-only 文件的 `firstChangedLine`、hunk 局部性和 256 KiB details 上限都按物理行语义工作；写入与 CAS 仍使用原始 bytes。
 
 成功后只把实际返回的预览行登记为新 snapshot 的 seen ranges，不把旧 snapshot 的行号授权自动映射到新版本。后续目标不在预览中时必须先获得新的 displayed provenance：通常再次 `read`；若误发 edit，则 `E_UNSEEN_LINE` 会零写入拒绝，并且只有在 current rows 已 journal 后才返回可直接重试的 refreshed snapshot。
 
@@ -265,7 +269,7 @@ npm run check
 npm test
 ```
 
-测试覆盖 raw-byte digest、重复 BOM/EOL/Unicode、canonical token、严格且 structure-first 的 journal、metadata/recovery entry/byte LRU、四种 operation、seen coverage、path/payload fail-fast 与输出上限、unknown/unseen/range/conflict/no-op/would-empty 热刷新和直接重试、refresh journal 失败不回显 source、stale 正负/零偏移 rebase、目标/EOL/重复上下文/跨 hunk/unseen multi-op envelope 拒绝、同-token 相交拒绝与不相交并发成功、path mismatch 零写入、并发 queue、queue 等待期间 symlink retarget、取消/branch generation、write/close/journal failure、大文件 allocation 前内建 fallback、损坏图片与 non-regular 输入、hardlink、reload/tree source-cache 隔离和 Plan/LSP/RG load order。
+测试覆盖 raw-byte digest、重复 BOM/EOL/Unicode、canonical token、严格且 structure-first 的 journal、metadata/recovery entry/byte LRU、四种 operation、seen coverage、path/payload fail-fast 与输出上限、unknown/unseen/range/conflict/no-op/would-empty 热刷新和直接重试、refresh journal 失败不回显 source、stale 正负/零偏移 rebase、目标/EOL/重复上下文/跨 hunk/unseen multi-op envelope 拒绝、同-token 相交拒绝与不相交并发成功、path mismatch 零写入、并发 queue、queue 等待期间 symlink retarget、取消/branch generation、write/close/journal failure、大文件 allocation 前内建 fallback、损坏图片与 non-regular 输入、hardlink、CR-only 文件按物理行 offset/limit 分页与 LF 归一化 details 边界、reload/tree source-cache 隔离和 Plan/LSP/RG load order。
 
 隔离加载 smoke：
 

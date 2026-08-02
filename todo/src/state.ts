@@ -12,6 +12,7 @@ export const MAX_MODEL_OUTPUT_LINES = 200;
 export const DEFAULT_VIEW_LIMIT = 20;
 export const MAX_VIEW_LIMIT = 50;
 export const MAX_PROMPT_OPEN_TASKS = 20;
+export const MAX_PROMPT_BYTES = 32 * 1024;
 export const MAX_WIDGET_ROWS = 12;
 
 const FORBIDDEN_DISPLAY_CODE_POINT = /[\u0000-\u001F\u007F-\u009F\u061C\u200E\u200F\u2028-\u202E\u2066-\u206F]/u;
@@ -140,7 +141,7 @@ function normalizeText(value: unknown, label: string, maximum: number): string {
   }
   const normalized = value.trim();
   if (!normalized) throw new Error(`${label} must not be empty.`);
-  if (normalized.length > maximum) throw new Error(`${label} exceeds the ${maximum} character limit.`);
+  if ([...normalized].length > maximum) throw new Error(`${label} exceeds the ${maximum} character limit.`);
   return normalized;
 }
 

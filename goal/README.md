@@ -13,12 +13,13 @@
 - 当前目标及完整状态会注入每次 agent 的 system prompt；目标文本按不可信用户数据处理，不获得更高指令优先级。
 - 一轮正常结束且目标仍为 `active` 时，插件发送隐藏的 continuation message，自动触发下一轮；若某个自动 continuation 整轮未发起任何工具调用，则 Goal 保持 `active` 但停止继续排队，避免空转。
 - TUI footer 使用独立 keyed status；active turn 中 Goal 耗时每秒刷新。Plan 与 active Goal 互斥，但 paused/terminal Goal 状态可与 Plan 状态同时显示。设置预算时同时显示 `耗时 · 已用 / 预算` token，不占用叠层 widget。
+- footer status 的着色经 `pi-uikit-dev` 的 `tone` 原语渲染，与其他扩展共享同一 token 映射。
 - 状态作为 Pi session journal 的 custom entry 保存，切换 session tree 分支时按当前分支恢复。
 - reload 会把仍活跃的目标安全地暂停，需显式 `/goal resume` 后继续。
 
 ## 安装与启用
 
-要求：Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.81.0` 的 Pi。
+要求：Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.83.0` 的 Pi。
 
 ```bash
 cd /path/to/pi-extensions/goal
@@ -53,8 +54,8 @@ pi --extension ./src/index.ts
 | `/goal <objective>` | 创建并立即启动目标；如已有未完成目标，交互式 UI 会要求确认替换。 |
 | `/goal --tokens 50k <objective>` | 创建带 token 预算的目标；支持正整数及 `k`、`m` 后缀，例如 `75000`、`50k`、`1.5m`。 |
 | `/goal`、`/goal status` | 显示状态、目标、累计时间、token 使用量与可选预算。 |
-| `/goal pause` | 中止当前 agent（若正在运行）并暂停自动续跑。 |
-| `/goal resume` | 恢复并排队下一轮，也可重新启用因“无工具调用”而停止的自动续跑；`budgetLimited` 目标不能直接恢复，需创建带新预算的替代目标。 |
+| `/goal pause` | 中止当前 agent（若正在运行）并暂停自动续跑；预算已耗尽的目标拒绝暂停（它已停止，需设置带新预算的替代目标）。 |
+| `/goal resume` | 恢复并排队下一轮，也可重新启用因“无工具调用”而停止的自动续跑；预算已耗尽的目标不能恢复（无论当前状态是否标记为 budget limited），需创建带新预算的替代目标。 |
 | `/goal edit` | 使用 TUI 编辑器修改目标；无对话框 UI 时用 `/goal <objective>` 替代。 |
 | `/goal clear` | 清除目标及其后续自动推进。 |
 
@@ -70,7 +71,7 @@ pi --extension ./src/index.ts
 | `get_goal` | 无 | 仅在目标活跃时启用；当前 prompt 已含完整状态时不应重复读取。 |
 | `update_goal` | 完成分支：`status`, `evidence[]`；阻塞分支：`status`, `reason`, `attempted[]`, `unblocksWhen` | 仅在目标活跃时启用；Plan 活跃期间 Goal 不可能恢复为 active。完成必须逐项提交 requirement-to-evidence 证据，阻塞必须说明真实外部阻碍、已尝试动作及精确解除条件。 |
 
-用户通常使用 `/goal` 命令；这些工具用于 agent 在执行过程中创建或结束目标。
+用户通常使用 `/goal` 命令；这些工具用于 agent 在执行过程中创建或结束目标。三个工具的 description 说明调用时机，`promptSnippet` 使其进入 system prompt 的 Available tools 段，`promptGuidelines` 逐条点名工具名；`create_goal` 的引导保持低频语义——仅在用户明确要求时创建，绝不从普通任务推断 Goal。
 
 ## 状态与生命周期
 
@@ -96,15 +97,15 @@ stateDiagram-v2
 - continuation message 去重：已有待处理消息或已有 continuation 时不会重复排队；context hook 只保留当前目标最新的一条隐藏续跑消息。自动 continuation 若没有任何工具调用，则设置 session 内续跑抑制但不篡改 Goal 状态；新用户 turn、`/goal resume` 或目标编辑会重新启用。
 - session journal 解码失败时拒绝恢复不安全状态，并在有 UI 时显示警告；未知状态会保守恢复为 paused。
 
-## 与 Plan 插件协作
+## 与 Plan / Loop 插件协作
 
-Goal 与 Plan 使用版本化 `pi-extensions:exclusive-workflow:v1` query channel 仲裁同一 session 的 active workflow：
+Goal 与 Plan、Loop 使用版本化 `pi-extensions:exclusive-workflow:v1` query channel 仲裁同一 session 的 active workflow：
 
-- active Goal 存在时，Plan 拒绝启动；用户必须先 pause、complete 或 clear Goal。
-- Plan 任一活跃 phase 存在时，`/goal <objective>`、`create_goal`、`/goal resume` 以及会恢复 active 状态的 edit 都拒绝；paused/terminal Goal 状态仍可保留和查看。
-- branch restore 若同时发现 active Plan 与 active Goal，Goal 在所有 session handlers 完成后持久化为 `paused`，使结果不依赖扩展加载顺序。
+- active Goal 存在时，Plan 拒绝启动、Loop 拒绝创建/恢复；用户必须先 pause、complete 或 clear Goal。
+- Plan 任一活跃 phase 存在时（或 active Loop 存在时），`/goal <objective>`、`create_goal`、`/goal resume` 以及任何会恢复 active 状态的 edit（含编辑 complete Goal，无论编辑前状态）都拒绝；paused/terminal Goal 状态仍可保留和查看。
+- branch restore 若同时发现 active Plan 与 active Goal，Goal 在所有 session handlers 完成后持久化为 `paused`，使结果不依赖扩展加载顺序；恢复冲突的固定优先级为 **Plan > Goal > Loop**（Loop 向 active Goal/Plan 让步）。
 - Plan approve/cancel 后不自动恢复 paused Goal。批准产生的执行由普通 Todo board 独立跟踪；用户可在 Plan 退出后显式 `/goal resume`。
-- query 带 session ID；其他 session 的状态不会参与仲裁。协议在两个包各自的 `src/workflow-mode.ts` 中独立定义，避免 production cross-import。
+- query 带 session ID；其他 session 的状态不会参与仲裁。协议在三个包各自的 `src/workflow-mode.ts` 中独立定义（字节一致，避免 production cross-import）；**Goal/Plan/Loop 三包必须原子升级**，混装旧版本 unsupported。
 
 ## 与 Request UI 插件协作
 
@@ -134,12 +135,12 @@ Goal 没有外部配置文件。运行期控制项只有：
 
 - `src/index.ts`：扩展入口；持有 session 内状态，注册生命周期 hooks，负责续跑去重、无行动空转抑制、usage 计量、journal 恢复、UI 与 restored workflow conflict 收敛。
 - `src/state.ts`：纯状态模型、输入解析、预算结算及严格的持久化解码边界。
-- `src/command.ts`：`/goal` 用户控制面；先检查 Plan exclusivity，再 abort/idle 并执行 pause/resume/edit/clear。
+- `src/command.ts`：`/goal` 用户控制面；先检查 Plan exclusivity 与预算耗尽，再 abort/idle 并执行 pause/resume/edit/clear。
 - `src/tools.ts`、`src/tool-schema.ts`：agent 工具边界、Plan activation guard、结构化终态证据及 TypeBox 参数约束。
 - `src/prompts.ts`：活跃目标与 continuation prompt；对 objective 做 XML escaping，明确其不可信数据属性，并要求 prompt-to-artifact 完成审计。
 - `src/workflow-mode.ts`：Goal/Plan 互斥 workflow query 协议。
 - `src/protocol.ts`：Goal journal/continuation message 类型与 context 识别。
-- `test/state.test.ts`、`test/prompts.test.ts`：Goal 输入、状态转换、预算、usage、持久化解码及提示词契约；命令、结构化终态、续跑保护、恢复、错误、UI 和 Goal/Plan 互斥由 `plan/test/coexistence.test.ts` 覆盖。
+- `test/state.test.ts`、`test/prompts.test.ts`：Goal 输入、状态转换、预算、usage、持久化解码及提示词契约；`test/command.test.ts`：命令的预算守卫与 edit/Plan 互斥回归；结构化终态、续跑保护、恢复、错误、UI 和端到端 Goal/Plan 互斥由 `plan/test/coexistence.test.ts` 覆盖。
 
 ## 开发与验证
 

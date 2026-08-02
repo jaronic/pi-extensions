@@ -72,6 +72,33 @@ connection.onNotification("textDocument/didOpen", async ({ textDocument }) => {
   documents.set(textDocument.uri, textDocument.text);
   recordDocumentNotification("didOpen", textDocument.text);
   if (mode === "no-diagnostics") return;
+  if (mode === "stale-diagnostics") {
+    // Publish the current version first, then a late notification for an
+    // older version: the client must keep the newer diagnostics cached.
+    await connection.sendNotification("textDocument/publishDiagnostics", {
+      uri: textDocument.uri,
+      version: textDocument.version + 1,
+      diagnostics: [diagnostic("current diagnostic")],
+    });
+    setTimeout(() => {
+      void connection.sendNotification("textDocument/publishDiagnostics", {
+        uri: textDocument.uri,
+        version: textDocument.version,
+        diagnostics: [diagnostic("stale diagnostic")],
+      });
+    }, 50);
+    return;
+  }
+  if (mode === "stale-only-diagnostics") {
+    // Publish only a version older than the client's document version; the
+    // client must treat it as stale and never expose it as diagnostics.
+    await connection.sendNotification("textDocument/publishDiagnostics", {
+      uri: textDocument.uri,
+      version: textDocument.version - 1,
+      diagnostics: [diagnostic("stale diagnostic")],
+    });
+    return;
+  }
   await connection.sendNotification("textDocument/publishDiagnostics", {
     uri: textDocument.uri,
     version: textDocument.version,

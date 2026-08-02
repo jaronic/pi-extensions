@@ -43,6 +43,10 @@ test("lsp tool ships a prompt snippet and references-before-rename guidance", ()
   const guidelines = tool?.promptGuidelines ?? [];
   assert.ok(guidelines.some((g) => g.includes("action=references") && /MUST/u.test(g)), "guidelines must require references before rename");
   assert.ok(guidelines.some((g) => g.includes("rename_preview")), "guidelines must mention rename_preview");
+  // Each guideline must name the tool explicitly; vague "use this tool" bullets
+  // lose their binding when Pi composes guidelines from many extensions.
+  assert.ok(guidelines.length >= 1 && guidelines.length <= 3, "lsp guidelines must stay within the 1-3 system-prompt budget");
+  for (const guideline of guidelines) assert.ok(guideline.includes("lsp"), "every lsp guideline must name the tool");
 });
 const fakeServer = join(dirname(fileURLToPath(import.meta.url)), "fake-server.mjs");
 
@@ -81,6 +85,10 @@ test("lsp rename_preview reports every document change and preserves its full ar
     ui: {
       notify: () => undefined,
       setStatus: () => undefined,
+      theme: {
+        fg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      },
     },
   } as unknown as ExtensionContext;
 
@@ -179,6 +187,10 @@ test("lsp syncs only a successful ast-grep apply result", async () => {
     ui: {
       notify: () => undefined,
       setStatus: () => undefined,
+      theme: {
+        fg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      },
     },
   } as unknown as ExtensionContext;
 

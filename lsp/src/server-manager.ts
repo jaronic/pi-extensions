@@ -18,6 +18,11 @@ export interface DiagnosticResult {
   error?: string;
 }
 
+interface PendingStartup {
+  promise: Promise<LspClient>;
+  abort: AbortController;
+}
+
 const NOOP_LOGGER: Logger = { error() {}, warn() {}, info() {}, debug() {} };
 
 export class ServerManager {
@@ -26,7 +31,7 @@ export class ServerManager {
 
   private readonly logger: Logger;
   private readonly clients = new Map<string, LspClient>();
-  private readonly starting = new Map<string, Promise<LspClient>>();
+  private readonly starting = new Map<string, PendingStartup>();
   private readonly idleTimers = new Map<string, NodeJS.Timeout>();
   private shuttingDown = false;
 
@@ -48,7 +53,7 @@ export class ServerManager {
     };
   }
 
-  async clientForAction(file: string, action: LspAction, requestedServer?: string): Promise<RoutedClient> {
+  async clientForAction(file: string, action: LspAction, requestedServer?: string, signal?: AbortSignal): Promise<RoutedClient> {
     const role = roleForAction(action);
     const servers = matchingServers(this.config, file, role, requestedServer);
     if (servers.length === 0) throw new Error(`No configured LSP server handles ${relative(this.cwd, file) || file}`);
@@ -56,7 +61,7 @@ export class ServerManager {
     const failures: string[] = [];
     for (const server of servers) {
       try {
-        const client = await this.getOrStart(server, await findWorkspaceRoot(file, server.rootMarkers, this.cwd));
+        const client = await this.getOrStart(server, await findWorkspaceRoot(file, server.rootMarkers, this.cwd), signal);
         if (!client.supports(action)) {
           failures.push(`${server.id}: capability not advertised`);
           if (requestedServer) break;
@@ -66,6 +71,7 @@ export class ServerManager {
         if (!languageId) continue;
         return { client, server, languageId };
       } catch (error) {
+        if (isAbortError(error)) throw error;
         const detail = messageOf(error);
         failures.push(`${server.id}: ${detail}`);
         // The client-start failure carries the resolved command and captured
@@ -90,7 +96,7 @@ export class ServerManager {
     return await Promise.all(servers.map(async (server): Promise<DiagnosticResult> => {
       const root = await findWorkspaceRoot(file, server.rootMarkers, this.cwd);
       try {
-        const client = await this.getOrStart(server, root);
+        const client = await this.getOrStart(server, root, signal);
         const languageId = languageIdForFile(server, file);
         if (!languageId) throw new Error("file extension no longer matches server route");
         const diagnostics = await client.getDiagnostics(
@@ -160,7 +166,8 @@ export class ServerManager {
     for (const timer of this.idleTimers.values()) clearTimeout(timer);
     this.idleTimers.clear();
     const pending = [...this.starting.values()];
-    if (pending.length > 0) await Promise.allSettled(pending);
+    for (const startup of pending) startup.abort.abort();
+    if (pending.length > 0) await Promise.allSettled(pending.map((startup) => startup.promise));
     const clients = [...this.clients.values()];
     this.clients.clear();
     this.logger.info("shutdown", { cwd: this.cwd, clients: clients.length, pending: pending.length });
@@ -168,7 +175,7 @@ export class ServerManager {
     this.starting.clear();
   }
 
-  private async getOrStart(server: ServerConfig, root: string): Promise<LspClient> {
+  private async getOrStart(server: ServerConfig, root: string, signal?: AbortSignal): Promise<LspClient> {
     if (this.shuttingDown) throw new Error("LSP manager is shutting down");
     const key = `${server.id}\0${root}`;
     const existing = this.clients.get(key);
@@ -178,12 +185,13 @@ export class ServerManager {
     }
     const pending = this.starting.get(key);
     if (pending) {
-      const client = await pending;
+      const client = await this.raceWithSignal(pending.promise, signal);
       this.scheduleIdle(key, client);
       return client;
     }
 
     let instance: LspClient | undefined;
+    const abort = new AbortController();
     const startup = LspClient.start(server, root, this.config.requestTimeoutMs, () => {
       this.clearIdle(key);
       // A close while the client is still registered is a crash, not a
@@ -193,11 +201,11 @@ export class ServerManager {
       if (unexpected) {
         this.logger.warn("server_exited", { server: server.id, root, command: server.command.join(" ") });
       }
-    }).then(async (client) => {
+    }, abort.signal).then(async (client) => {
       instance = client;
-      if (this.shuttingDown) {
+      if (this.shuttingDown || abort.signal.aborted) {
         await client.shutdown();
-        throw new Error("LSP manager shut down during server startup");
+        throw new Error(this.shuttingDown ? "LSP manager shut down during server startup" : "LSP server startup aborted");
       }
       this.clients.set(key, client);
       this.scheduleIdle(key, client);
@@ -206,8 +214,24 @@ export class ServerManager {
     }).finally(() => {
       this.starting.delete(key);
     });
-    this.starting.set(key, startup);
-    return await startup;
+    this.starting.set(key, { promise: startup, abort });
+    return await this.raceWithSignal(startup, signal);
+  }
+
+  private async raceWithSignal(promise: Promise<LspClient>, signal?: AbortSignal): Promise<LspClient> {
+    if (!signal) return await promise;
+    if (signal.aborted) throw abortError();
+    let onAbort: (() => void) | undefined;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(abortError());
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    void cancelled.catch(() => {});
+    try {
+      return await Promise.race([promise, cancelled]);
+    } finally {
+      if (onAbort) signal.removeEventListener("abort", onAbort);
+    }
   }
   private scheduleIdle(key: string, client: LspClient): void {
     this.clearIdle(key);
@@ -244,4 +268,14 @@ function roleForAction(action: LspAction): ServerRole {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function abortError(): Error {
+  const error = new Error("LSP request aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }

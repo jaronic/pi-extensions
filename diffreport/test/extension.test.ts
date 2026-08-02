@@ -349,3 +349,225 @@ test("extension reports contract warnings when the artifact skips evidence disci
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+test("tool truncates an oversized overview diff and reports it in details and text", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "diffreport-toolcap-"));
+  const tools = new Map<string, RegisteredTool>();
+  const shutdownHandlers: Array<() => Promise<void>> = [];
+
+  try {
+    await run("git", ["init", "-b", "main"], workspace);
+    await run("git", ["config", "user.email", "diffreport@example.com"], workspace);
+    await run("git", ["config", "user.name", "Diffreport Test"], workspace);
+    const original = Array.from({ length: 4_000 }, (_, index) => `const line${index} = "${"x".repeat(60)}";`).join("\n") + "\n";
+    await writeFile(join(workspace, "huge.ts"), original);
+    await run("git", ["add", "huge.ts"], workspace);
+    await run("git", ["commit", "-m", "baseline"], workspace);
+    const changed = Array.from({ length: 4_000 }, (_, index) => `const line${index} = "${"y".repeat(60)}"; // changed`).join("\n") + "\n";
+    await writeFile(join(workspace, "huge.ts"), changed);
+
+    const pi = {
+      events: {},
+      registerTool(tool: RegisteredTool & { name: string }) {
+        tools.set(tool.name, tool);
+      },
+      registerCommand() {},
+      on(event: string, handler: () => Promise<void>) {
+        if (event === "session_shutdown") shutdownHandlers.push(handler);
+      },
+      async exec(command: string, args: string[], options: { cwd: string; signal?: AbortSignal; timeout?: number }) {
+        const result = await run(command, args, options.cwd, options.signal, options.timeout);
+        return { ...result, code: 0, killed: false };
+      },
+      sendUserMessage() {},
+    } as unknown as ExtensionAPI;
+    const requestService: RequestService = {
+      lifetime: new AbortController().signal,
+      async request() {
+        throw new Error("Explicit command input must not open Request.");
+      },
+    };
+    diffreportExtension(pi, {
+      requestService,
+      now: () => new Date("2026-07-29T12:34:56.000Z"),
+    });
+
+    const tool = tools.get("diff_report");
+    assert.ok(tool);
+    const overview = await tool.execute(
+      "cap",
+      { source: "uncommitted", view: "overview" },
+      undefined,
+      undefined,
+      { cwd: workspace },
+    );
+    assert.equal(overview.details.truncated, true);
+    assert.equal(overview.details.totalFiles, 1);
+    assert.match(overview.content[0]?.text ?? "", /Evidence collection truncated/);
+    assert.match(overview.content[0]?.text ?? "", /tracked diff capped at 512\.0KB/);
+
+    // The patch view uses a larger cap; the same diff fits the collection cap
+    // (no collection-truncation notice), even though the formatted output may
+    // still hit the host's own 50KB output bound.
+    const patch = await tool.execute(
+      "cap-patch",
+      { source: "uncommitted", view: "patch" },
+      undefined,
+      undefined,
+      { cwd: workspace },
+    );
+    assert.doesNotMatch(patch.content[0]?.text ?? "", /Evidence collection truncated/);
+    assert.match(patch.content[0]?.text ?? "", /-const line0 = "/);
+  } finally {
+    await Promise.all(shutdownHandlers.map((handler) => handler()));
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("extension never reports a pre-existing stale artifact as freshly written", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "diffreport-stale-"));
+  const commands = new Map<string, RegisteredCommand>();
+  const shutdownHandlers: Array<() => Promise<void>> = [];
+  const notifications: Array<{ message: string; type?: string }> = [];
+  let turnActive = false;
+
+  try {
+    await run("git", ["init", "-b", "main"], workspace);
+    await run("git", ["config", "user.email", "diffreport@example.com"], workspace);
+    await run("git", ["config", "user.name", "Diffreport Test"], workspace);
+    await writeFile(join(workspace, "a.ts"), "export const a = 1;\n");
+    await run("git", ["add", "a.ts"], workspace);
+    await run("git", ["commit", "-m", "init"], workspace);
+    // A stale artifact from an earlier run sits at the target path.
+    await mkdir(join(workspace, "reports", "diffreport"), { recursive: true });
+    await writeFile(join(workspace, "reports", "diffreport", "stale.md"), "# Stale report\n");
+
+    const pi = {
+      events: {},
+      registerTool() {},
+      registerCommand(name: string, command: RegisteredCommand) {
+        commands.set(name, command);
+      },
+      on(event: string, handler: () => Promise<void>) {
+        if (event === "session_shutdown") shutdownHandlers.push(handler);
+      },
+      async exec(command: string, args: string[], options: { cwd: string; signal?: AbortSignal; timeout?: number }) {
+        const result = await run(command, args, options.cwd, options.signal, options.timeout);
+        return { ...result, code: 0, killed: false };
+      },
+      sendUserMessage() {
+        turnActive = true;
+      },
+    } as unknown as ExtensionAPI;
+    const requestService: RequestService = {
+      lifetime: new AbortController().signal,
+      async request() {
+        throw new Error("Explicit command input must not open Request.");
+      },
+    };
+    diffreportExtension(pi, {
+      requestService,
+      now: () => new Date("2026-07-29T12:34:56.000Z"),
+    });
+
+    const command = commands.get("diff_report");
+    assert.ok(command);
+    await command.handler("uncommitted --output reports/diffreport/stale.md", {
+      cwd: workspace,
+      mode: "print",
+      hasUI: false,
+      signal: undefined,
+      isIdle: () => !turnActive,
+      async waitForIdle() {
+        // The exploration turn ends without touching the stale artifact.
+        turnActive = false;
+      },
+      ui: {
+        notify(message: string, type?: string) {
+          notifications.push({ message, type });
+        },
+      },
+    });
+
+    assert.equal(notifications.some((entry) => /Diff report written/.test(entry.message)), false);
+    assert.equal(notifications.at(-1)?.type, "error");
+    assert.match(notifications.at(-1)?.message ?? "", /not regenerated during this exploration/);
+  } finally {
+    await Promise.all(shutdownHandlers.map((handler) => handler()));
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("extension does not burn the turn-start timeout when a queued followUp never starts", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "diffreport-nowait-"));
+  const commands = new Map<string, RegisteredCommand>();
+  const shutdownHandlers: Array<() => Promise<void>> = [];
+  const notifications: Array<{ message: string; type?: string }> = [];
+  let turnActive = true;
+
+  try {
+    await run("git", ["init", "-b", "main"], workspace);
+    await run("git", ["config", "user.email", "diffreport@example.com"], workspace);
+    await run("git", ["config", "user.name", "Diffreport Test"], workspace);
+    await writeFile(join(workspace, "a.ts"), "export const a = 1;\n");
+    await run("git", ["add", "a.ts"], workspace);
+    await run("git", ["commit", "-m", "init"], workspace);
+
+    const pi = {
+      events: {},
+      registerTool() {},
+      registerCommand(name: string, command: RegisteredCommand) {
+        commands.set(name, command);
+      },
+      on(event: string, handler: () => Promise<void>) {
+        if (event === "session_shutdown") shutdownHandlers.push(handler);
+      },
+      async exec(command: string, args: string[], options: { cwd: string; signal?: AbortSignal; timeout?: number }) {
+        const result = await run(command, args, options.cwd, options.signal, options.timeout);
+        return { ...result, code: 0, killed: false };
+      },
+      sendUserMessage() {
+        // The followUp is queued but the agent never starts a new turn.
+      },
+    } as unknown as ExtensionAPI;
+    const requestService: RequestService = {
+      lifetime: new AbortController().signal,
+      async request() {
+        throw new Error("Explicit command input must not open Request.");
+      },
+    };
+    diffreportExtension(pi, {
+      requestService,
+      now: () => new Date("2026-07-29T12:34:56.000Z"),
+    });
+
+    const command = commands.get("diff_report");
+    assert.ok(command);
+    const started = Date.now();
+    await command.handler("uncommitted --output reports/diffreport/missing.md", {
+      cwd: workspace,
+      mode: "print",
+      hasUI: false,
+      signal: undefined,
+      isIdle: () => !turnActive,
+      async waitForIdle() {
+        // The current turn drains; the queued followUp never starts.
+        turnActive = false;
+      },
+      ui: {
+        notify(message: string, type?: string) {
+          notifications.push({ message, type });
+        },
+      },
+    });
+    const elapsed = Date.now() - started;
+
+    assert.ok(elapsed < 5_000, `handler waited ${elapsed}ms for a turn that never started`);
+    assert.match(notifications[0]?.message ?? "", /queued behind the current turn/);
+    assert.equal(notifications.at(-1)?.type, "error");
+    assert.match(notifications.at(-1)?.message ?? "", /no report exists at reports\/diffreport\/missing\.md/);
+  } finally {
+    await Promise.all(shutdownHandlers.map((handler) => handler()));
+    await rm(workspace, { recursive: true, force: true });
+  }
+});

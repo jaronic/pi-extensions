@@ -29,7 +29,9 @@ import {
   formatWorkspaceSymbols,
   type SeverityFilter,
 } from "./format.ts";
+import { tone } from "pi-uikit-dev";
 import { resolvePosition } from "./positions.ts";
+import { renderLspCall, renderLspResult } from "./renderer.ts";
 import { resolveWorkspaceFile } from "./roots.ts";
 import { ServerManager } from "./server-manager.ts";
 import { LspOutputStore, type LspTruncationSummary } from "./output.ts";
@@ -117,11 +119,8 @@ export default function lspExtension(pi: ExtensionAPI): void {
     promptSnippet: "LSP diagnostics, hover, definitions, references, symbols, and safe refactor previews",
     promptGuidelines: [
       "Before renaming or changing the signature of an exported symbol, MUST run lsp action=references to find every callsite; text search misses re-exports and aliased usages.",
-      "For a rename, use lsp action=rename_preview for the complete affected-location preview, then apply the edits; faster and more complete than rg plus manual edits.",
-      "Use lsp for semantic definitions, references, type information, diagnostics, and symbol-aware rename previews.",
-      "Use lsp action=diagnostics after meaningful edits when a matching language server is installed.",
-      "Usually omit server. When selecting one, use its configured ID or a unique language ID such as java for jdtls.",
-      "lsp line and column inputs are 1-based; use symbol only when it has one unambiguous occurrence in the file.",
+      "Use lsp action=rename_preview for the complete affected-location preview of a rename, then apply the edits with the file editing tools; run lsp action=diagnostics after meaningful edits when a matching language server is installed.",
+      "Use lsp instead of text search for definitions, hover type information, implementations, and symbols. Usually omit the lsp server argument; lsp line and column inputs are 1-based, and symbol only when it has one unambiguous occurrence in the file.",
     ],
     parameters: Parameters,
     async execute(_toolCallId, params: Parameters, signal, _onUpdate, ctx) {
@@ -129,7 +128,7 @@ export default function lspExtension(pi: ExtensionAPI): void {
       const startedAt = Date.now();
       const activeManager = await getManager(ctx);
       const limit = Math.min(params.limit ?? activeManager.config.maxResults, 500);
-      ctx.ui.setStatus("lsp", `LSP: ${params.action}`);
+      ctx.ui.setStatus("lsp", tone(ctx.ui.theme, "accent", `LSP: ${params.action}`));
       try {
         const result = await executeAction(activeManager, params, limit, signal);
         signal?.throwIfAborted();
@@ -176,6 +175,12 @@ export default function lspExtension(pi: ExtensionAPI): void {
       } finally {
         ctx.ui.setStatus("lsp", undefined);
       }
+    },
+    renderCall(args, theme, context) {
+      return renderLspCall(args, theme, context.lastComponent);
+    },
+    renderResult(result, options, theme, context) {
+      return renderLspResult(result, { expanded: options.expanded, isError: context.isError }, theme);
     },
   });
 
@@ -279,7 +284,7 @@ async function executeAction(
     };
   }
 
-  const routed = await manager.clientForAction(file, params.action as LspAction, params.server);
+  const routed = await manager.clientForAction(file, params.action as LspAction, params.server, signal);
   const document = await routed.client.syncFile(file, routed.languageId);
   const textDocument = { uri: document.uri };
   const servers = [routed.server.id];

@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import goalExtension from "../../goal/src/index.ts";
+import loopExtension from "../../loop/src/index.ts";
 import planExtension from "../src/index.ts";
+import { decodePlanJournalEntry } from "../src/state.ts";
 import { blockedDecision, ExtensionHarness } from "./harness.ts";
 import type { PlanExtensionDependencies } from "../src/index.ts";
 import { InMemoryPlanArtifactStore } from "./harness.ts";
@@ -794,6 +796,71 @@ test("Plan preserves observable external tool additions and removals", async () 
   assert.deepEqual(harness.getActiveTools(), ["bash", "ask", "todo", "lsp", "external_writer"]);
 });
 
+test("branch restore keeps Plan tool coherence and cancel restores the entered set", async (t) => {
+  const originalTools = ["read", "bash", "edit", "write", "unknown_writer", "ask", "todo"];
+  await t.test("with session_tree", async () => {
+    const harness = new ExtensionHarness(originalTools);
+    registerTestPlan(harness);
+    await harness.emit("session_start", { type: "session_start", reason: "startup" });
+    await harness.command("plan");
+
+    await harness.emit("session_tree", { type: "session_tree" });
+    assert.equal(harness.statuses.get("plan"), "Plan", "restore must keep the Plan active");
+    assert.equal(harness.getActiveTools().includes("submit_plan"), true);
+
+    await harness.command("plan", "cancel");
+    assert.deepEqual(harness.getActiveTools(), originalTools);
+  });
+
+  await t.test("without session_tree", async () => {
+    const harness = new ExtensionHarness(originalTools);
+    registerTestPlan(harness);
+    await harness.emit("session_start", { type: "session_start", reason: "startup" });
+    await harness.command("plan");
+    await harness.command("plan", "cancel");
+    assert.deepEqual(harness.getActiveTools(), originalTools);
+  });
+});
+
+test("a blocked re-check asking for a choice survives branch replay as an active Plan", async () => {
+  const harness = new ExtensionHarness();
+  registerTestPlan(harness);
+  await harness.emit("session_start", { type: "session_start", reason: "startup" });
+  await harness.command("plan");
+  await harness.tool("report_plan_blocked", {
+    summary: "A signing credential is required before a release plan can be approved.",
+    blockingFacts: ["The configured credential store contains no signing key."],
+    evidenceSources: ["config/signing.ts", "credential-store read result"],
+    resolutions: [
+      { kind: "prerequisite", label: "Provide credential", description: "Add a valid signing key to the configured store." },
+      { kind: "alternative", label: "Defer signed release", description: "Plan an unsigned internal build instead." },
+    ],
+  });
+  await harness.command("plan", "resume");
+  await harness.tool("request_plan_choice", {
+    question: "Which signing path should the Plan use?",
+    options: [
+      { label: "Use stored credential", description: "Keep the existing signing flow." },
+      { label: "Defer signed release", description: "Plan an unsigned internal build instead." },
+    ],
+  });
+
+  const latestEntry = harness.entries.at(-1);
+  assert.ok(latestEntry);
+  assert.equal(latestEntry.customType, "plan-state-v4");
+  assert.equal(
+    decodePlanJournalEntry(latestEntry.data).ok,
+    true,
+    "the clarify entry written after a blocked resume must replay",
+  );
+
+  await harness.emit("session_start", { type: "session_start", reason: "reload" });
+  assert.equal(harness.statuses.get("plan"), "Plan");
+  assert.deepEqual(harness.widgets.get("plan"), ["? Which signing path should the Plan use?"]);
+  assert.equal(harness.getActiveTools().includes("answer_plan_choice"), true);
+  assert.equal(harness.getActiveTools().includes("submit_plan"), false);
+});
+
 test("artifact persistence failures roll back planning state and retry safely", async () => {
   const harness = new ExtensionHarness();
   const store = new InMemoryPlanArtifactStore();
@@ -965,4 +1032,24 @@ test("legacy executing Plan journals restore as already handed off", async () =>
   assert.equal(harness.widgets.get("plan"), undefined);
   assert.equal(harness.getActiveTools().includes("update_plan_step"), false);
   assert.deepEqual(harness.getActiveTools(), [...originalTools, "ask", "todo"]);
+});
+
+test("Plan, Goal, and Loop register together and enforce exclusivity", async () => {
+  const harness = new ExtensionHarness();
+  goalExtension(harness.api);
+  loopExtension(harness.api);
+  registerTestPlan(harness);
+  await harness.emit("session_start", { type: "session_start", reason: "startup" });
+
+  await harness.command("plan");
+  assert.equal(harness.statuses.get("plan"), "Plan");
+
+  await harness.command("loop", "3 fix the tests");
+  assert.match(harness.notifications.at(-1)?.message ?? "", /another exclusive workflow/, "Loop cannot start during Plan");
+
+  await harness.command("plan", "cancel");
+  harness.clearPendingMessages();
+  await harness.command("loop", "3 fix the tests");
+  assert.equal(harness.statuses.get("loop"), "Loop 0/3");
+  assert.equal(harness.getActiveTools().includes("submit_plan"), false);
 });

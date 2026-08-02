@@ -335,3 +335,27 @@ test("UTF-8 state size limit rejects large multilingual boards atomically", () =
     /byte limit/,
   );
 });
+
+test("text limits count Unicode code points like Plan and the tool schema", () => {
+  const emoji = "😀";
+  // 120 emoji are exactly 240 UTF-16 units; both counting conventions accept this boundary.
+  const boundary = transitionTodo(null, { op: "init", list: [{ phase: "Emoji", items: [emoji.repeat(120)] }] }, 1, () => BOARD_A);
+  assert.ok(boundary.state);
+  assert.equal(boundary.state?.phases[0]?.tasks[0]?.content, emoji.repeat(120));
+  // 240 emoji are 480 UTF-16 units: rejected by UTF-16 counting, accepted by code-point counting.
+  const full = transitionTodo(null, { op: "init", list: [{ phase: "Emoji", items: [emoji.repeat(240)] }] }, 1, () => BOARD_A);
+  assert.ok(full.state);
+  assert.equal(full.state?.phases[0]?.tasks[0]?.content, emoji.repeat(240));
+  // 241 code points exceed the 240-character limit.
+  assert.throws(
+    () => transitionTodo(null, { op: "init", list: [{ phase: "Emoji", items: [emoji.repeat(241)] }] }, 1, () => BOARD_A),
+    /exceeds the 240 character limit/,
+  );
+  // The same code-point口径 applies to phase names and status details.
+  const phaseFull = transitionTodo(null, { op: "init", list: [{ phase: emoji.repeat(80), items: ["One"] }] }, 1, () => BOARD_A);
+  assert.ok(phaseFull.state);
+  assert.throws(
+    () => transitionTodo(null, { op: "init", list: [{ phase: emoji.repeat(81), items: ["One"] }] }, 1, () => BOARD_A),
+    /exceeds the 80 character limit/,
+  );
+});

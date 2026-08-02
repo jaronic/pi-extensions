@@ -5,6 +5,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { installRequest, type RequestService } from "pi-request-ui-dev";
 import { installTodo, type TodoService, type TodoServiceResult } from "pi-todo-dev";
+import { tone } from "pi-uikit-dev";
 import {
   answerPlanChoice,
   consumePlanChoice,
@@ -38,7 +39,7 @@ import { registerPlanCommand } from "./command.ts";
 import { registerPlanTools } from "./tools.ts";
 import { requestPlanReview, type PlanReviewDecision } from "./review.ts";
 import { requestPlanChoice } from "./clarification.ts";
-import { isExclusiveWorkflowActive, registerExclusiveWorkflow } from "./workflow-mode.ts";
+import { isAnyExclusiveWorkflowActive, registerExclusiveWorkflow } from "./workflow-mode.ts";
 import { createPlanArtifactStore, type PlanArtifactStore } from "./artifacts.ts";
 
 export interface PlanExtensionDependencies {
@@ -117,7 +118,7 @@ export default function planExtension(
       ? "warning"
       : "accent";
     const [heading, ...lines] = renderPlanWidget(current);
-    ctx.ui.setStatus("plan", ctx.ui.theme.fg(color, heading));
+    ctx.ui.setStatus("plan", tone(ctx.ui.theme, color, heading));
     ctx.ui.setWidget("plan", lines.length > 0 ? lines : undefined);
   }
 
@@ -284,7 +285,7 @@ export default function planExtension(
     automaticReviewUpdatedAt = undefined;
     automaticClarificationUpdatedAt = undefined;
     choiceAnswerQueuedAt = undefined;
-    if (state) toolLease.begin(state.enteredWithTools);
+    if (state) toolLease.rebase(state.enteredWithTools, pi.getActiveTools());
     else if (previousTools) pi.setActiveTools(previousTools);
     syncPlanTools();
     updateStatus(ctx);
@@ -535,10 +536,10 @@ ${escapeXmlText(normalized)}
 
   const planRuntime = {
     getState: () => state,
-    isGoalActive: (ctx: ExtensionContext) => isExclusiveWorkflowActive(
+    isGoalActive: (ctx: ExtensionContext) => isAnyExclusiveWorkflowActive(
       pi.events,
       ctx.sessionManager.getSessionId(),
-      "goal",
+      "plan",
     ),
     setState(next: PlanState): void {
       state = next;

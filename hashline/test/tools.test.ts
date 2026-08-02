@@ -71,6 +71,20 @@ function recordingLogger(): { readonly events: RecordedLog[]; readonly logger: L
   return { events, logger: { error: record("error"), warn: record("warn"), info: record("info"), debug: record("debug") } };
 }
 
+test("read and edit ship bounded prompt metadata that names each tool", () => {
+  const state = makeRuntime();
+  const readTool = createHashlineReadTool(state.runtime);
+  const editTool = createHashlineEditTool(state.runtime);
+  // Pi lists a tool in the system prompt only when it carries a promptSnippet,
+  // and composed guidelines stay bound to their tool only when each names it.
+  for (const [name, tool] of [["read", readTool], ["edit", editTool]] as const) {
+    assert.ok(tool.promptSnippet && tool.promptSnippet.length > 0, `${name} must define promptSnippet`);
+    const guidelines = tool.promptGuidelines ?? [];
+    assert.ok(guidelines.length >= 1 && guidelines.length <= 3, `${name} guidelines must stay within the 1-3 system-prompt budget`);
+    for (const guideline of guidelines) assert.ok(guideline.includes(name), `every ${name} guideline must name the tool`);
+  }
+});
+
 test("read and edit emit reconstructable lifecycle logs", async (t) => {
   const { root, path } = await fixture(t);
   const state = makeRuntime();

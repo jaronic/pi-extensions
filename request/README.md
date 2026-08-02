@@ -8,7 +8,7 @@
 
 ## 安装
 
-要求 Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.81.0` 的 Pi。
+要求 Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.83.0` 的 Pi。
 
 ```bash
 cd /path/to/pi-extensions/request
@@ -30,7 +30,7 @@ Request 本身不分发、不选择、也不写入任何 theme；所有颜色只
 
 ## `ask` 工具
 
-`ask` 接受 1–10 个相关 choice question。每题有稳定 `id`、简短导航 `header`、问题正文、1–10 个选项，以及可选的 `recommended` 零基索引和 `multi` 多选标志。`Other (type your own)` 由工具自动追加，不应在 options 中重复声明。
+`ask` 接受 1–10 个相关 choice question。每题有稳定 `id`、简短导航 `header`、问题正文、1–10 个选项，以及可选的 `recommended` 零基索引和 `multi` 多选标志。`Other (type your own)` 由工具自动追加，不应在 options 中重复声明。工具的 description 与逐条点名 `ask` 的 `promptGuidelines` 强调：需求存在会改变实现结果的实质歧义时，应调用 `ask` 主动提问而非自行假设；仅当仓库上下文无法解决该实质选择时才使用。
 
 ```json
 {
@@ -162,17 +162,17 @@ const result = await request.request(questions, {
 - header、id、label、placeholder 与 tool intent 必须为单行。所有外部展示文本拒绝终端控制字符和 Unicode 双向格式控制；Editor 自由文本在存储和渲染前把这些字符替换为可见的 `�`，不会原样写入终端。
 - answer：文本和 Other 最多 1,000 字符。
 - 非 TUI 模式下 `ask` 明确失败；native UI 不会在该模式安装 adapter；事件请求在没有 ready TUI session 时 reject。
-- 所有异步请求支持 abort 和 timeout；session shutdown 会 abort 当前及排队请求、清除 timer/listener、注销兼容 channel；失效 installation 的旧 service 引用会 fail closed。
+- 所有异步请求支持 abort 和 timeout；timeout 自请求入队时起算，排队中的 abort 或超时立即以 cancelled 结算，该请求出队时跳过、不再显示 dialog；真正展示的请求只使用剩余超时。session shutdown 会 abort 当前及排队请求、清除 timer/listener、注销兼容 channel；失效 installation 的旧 service 引用会 fail closed。
 
 ## 代码结构
 
 - `src/index.ts`：composition root；导出幂等 `installRequest()` service，注册 tool/channel，管理 session signal，并安装/恢复 native adapter。
 - `src/request.ts`：public types、输入上限、规范化与结果结构。
-- `src/component.ts`：响应式 Question/Review TUI、键盘状态机、滚动和 Editor 集成。
-- `src/dialog.ts`：所有调用方共享的串行 coordinator。
+- `src/component.ts`：响应式 Question/Review TUI、键盘状态机、滚动和 Editor 集成；所有着色经 `pi-uikit-dev` 的 `tone` 原语映射到 host theme token。
+- `src/dialog.ts`：所有调用方共享的串行 coordinator；入队即监听 signal 并启动 timeout 计时，展示时只传剩余超时，展示后由组件接管 abort/timeout。
 - `src/adapters.ts`：`select`/`confirm`/`input` 的兼容 adapter 与保守 fallback。
 - `src/protocol.ts`：`pi-extensions:request-ui:v1` client/helper 和 listener arbitration。
-- `src/tool.ts`：TypeBox `ask` schema、tool execution、call/result renderer。
+- `src/tool.ts`：TypeBox `ask` schema、tool execution、call/result renderer（标题/答案行经 `pi-uikit-dev` 的 `tone`/`statusRow` 原语渲染）。
 - `test/integration.test.ts`：tool、native API、真实 Goal 共存、外部 fixture、单选/Other 不变量、控制字符、并发、取消、超时、headless 和 terminal fallback 行为。
 
 ## 开发与验证

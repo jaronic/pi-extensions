@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { tone } from "pi-uikit-dev";
 import {
   accountGoalTurn,
   formatElapsed,
@@ -19,7 +20,7 @@ import {
 } from "./protocol.ts";
 import { registerGoalCommand } from "./command.ts";
 import { registerGoalTools } from "./tools.ts";
-import { isExclusiveWorkflowActive, registerExclusiveWorkflow } from "./workflow-mode.ts";
+import { isAnyExclusiveWorkflowActive, registerExclusiveWorkflow } from "./workflow-mode.ts";
 
 export default function goalExtension(pi: ExtensionAPI): void {
   let goal: GoalState | null = null;
@@ -83,12 +84,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
       const usage = goal.tokenBudget === undefined
         ? elapsed
         : `${elapsed} · ${formatTokens(goal.tokensUsed)} / ${formatTokens(goal.tokenBudget)}`;
-      ctx.ui.setStatus("goal", ctx.ui.theme.fg("accent", `Goal active (${usage})`));
+      ctx.ui.setStatus("goal", tone(ctx.ui.theme, "accent", `Goal active (${usage})`));
       return;
     }
-    const color = goal.status === "complete" ? "success" : "warning";
+    const color: "success" | "warning" = goal.status === "complete" ? "success" : "warning";
     const duration = goal.status === "complete" ? ` (${formatElapsed(goal.timeUsedSeconds)})` : "";
-    ctx.ui.setStatus("goal", ctx.ui.theme.fg(color, `Goal ${statusLabel(goal.status)}${duration}`));
+    ctx.ui.setStatus("goal", tone(ctx.ui.theme, color, `Goal ${statusLabel(goal.status)}${duration}`));
   }
 
   function persist(action: GoalJournalEntry["action"], ctx: ExtensionContext): void {
@@ -153,7 +154,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
   );
 
   function planIsActive(ctx: ExtensionContext): boolean {
-    return isExclusiveWorkflowActive(pi.events, ctx.sessionManager.getSessionId(), "plan");
+    return isAnyExclusiveWorkflowActive(pi.events, ctx.sessionManager.getSessionId(), "goal");
   }
 
   function settleRestoredExclusivity(ctx: ExtensionContext): void {

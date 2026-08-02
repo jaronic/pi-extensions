@@ -7,8 +7,10 @@ import {
   planHandoffPhaseName,
   refinePlan,
   reportPlanBlocked,
+  requestPlanChoice,
   resumeBlockedPlan,
   submitPlan,
+  type PlanState,
 } from "../src/state.ts";
 
 function legacyState(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -67,6 +69,47 @@ test("blocked Plan results preserve evidence and resume only into read-only plan
   const submitted = submitPlan(resumed, { summary: "Sign release", plan: "Use the supplied credential.", steps: ["Sign release"] }, 40);
   assert.equal(submitted.blocker, undefined);
   assert.throws(() => reportPlanBlocked(submitted, blocked.blocker!), /only be blocked during planning/);
+});
+
+test("a blocked re-check that requests a choice drops the blocker and replays cleanly", () => {
+  const planning = createPlanningState(["read"], 10);
+  const blocked = reportPlanBlocked(planning, {
+    summary: "The required signing credential is unavailable.",
+    blockingFacts: ["The configured credential store contains no signing key."],
+    evidenceSources: ["config/signing.ts", "credential-store read result"],
+    resolutions: [
+      { kind: "prerequisite", label: "Provide signing credential", description: "Add a valid signing key to the configured credential store." },
+      { kind: "alternative", label: "Defer signed release", description: "Plan an unsigned internal build instead." },
+    ],
+  }, 20);
+  const resumed = resumeBlockedPlan(blocked, 30);
+  assert.equal(resumed.blocker?.summary, blocked.blocker?.summary);
+  const clarifying = requestPlanChoice(resumed, {
+    question: "Which signing path should the Plan use?",
+    options: [
+      { label: "Use stored credential", description: "Keep the existing signing flow." },
+      { label: "Defer signed release", description: "Plan an unsigned internal build instead." },
+    ],
+  }, 40);
+  assert.equal(clarifying.phase, "awaitingClarification");
+  assert.equal(clarifying.blocker, undefined, "a pending choice must not carry the stale blocker");
+
+  const entries = [
+    { version: 4, action: "start", state: planning },
+    { version: 4, action: "block", state: blocked },
+    { version: 4, action: "resume", state: resumed },
+    { version: 4, action: "clarify", state: clarifying },
+  ];
+  const latest = decodePlanJournalEntry(entries[3]);
+  assert.equal(latest.ok, true, "the clarify entry written after resume must be decodable");
+  let restored: PlanState | null = null;
+  for (const entry of entries) {
+    const decoded = decodePlanJournalEntry(entry);
+    restored = decoded.ok ? decoded.value.state : null;
+  }
+  assert.ok(restored, "replay must keep the Plan active");
+  assert.equal(restored.phase, "awaitingClarification");
+  assert.equal(restored.blocker, undefined);
 });
 
 test("refine returns an awaiting plan to read-only planning", () => {

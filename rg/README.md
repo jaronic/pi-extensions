@@ -12,14 +12,14 @@ session shutdown 时扩展把自己占用的 active-tool 槽位恢复为 `grep`�
 - 每次执行时用 `ctx.cwd` 重新创建 definition，搜索根目录始终跟随当前 Pi workspace，而不是启动扩展时的进程目录。
 - 在 `session_start` 与 `session_tree` 后折叠 active tools：`rg` 和 `grep` 同时存在时只保留一个 `rg`，且所有无关工具保持原相对顺序。
 - 在 `session_shutdown` 恢复被替换的 `grep`；若扩展没有执行过替换，或外部已恢复/移除相关工具，则不覆盖外部状态。
-- prompt 明确说明两者共享执行路径，同一失败请求不能通过改名为 `grep` 获得独立 fallback。
+- `rg` 工具携带 description、一行 `promptSnippet` 和一条显式点名 `rg` 的 `promptGuidelines`，进入系统提示词的 Available tools 与 Guidelines 段；prompt 明确说明两者共享执行路径，同一失败请求不能通过改名为 `grep` 获得独立 fallback。
 - 搜索尊重 `.gitignore`，返回文件路径、行号和可选上下文；hidden 文件由底层 ripgrep 搜索规则处理。
 - 仅 TUI 与 HTML export 会将可识别的 `path:line: text` 和 `path-line- text` 结果按文件路径分组：每个文件路径显示一次，匹配行和 context 行缩进列在其下。
 - 模型可见的 tool result content、session 中持久化的 `GrepToolDetails` 与内建 grep 执行格式保持原样，仍是 Pi 提供的逐行 `path:line: text` 输出。
 
 ## 安装与启用
 
-要求：Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.81.0` 的 Pi。
+要求：Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.83.0` 的 Pi。
 
 ```bash
 cd /path/to/pi-extensions/rg
@@ -114,6 +114,8 @@ RG 没有独立配置文件。可调行为全部来自每次 tool call 的参数
 - `replaceGrepWithRg()` 是纯函数：Set 去重、别名折叠、不修改调用方数组，且不重排无关工具。
 - `session_start` 和 `session_tree` 应用替换，`session_shutdown` 只恢复本扩展实际替换过的内建 `grep`。
 - `test/priority.test.ts` 验证折叠、不变性、真实 prompt、call/result renderer 接线和 lifecycle 恢复；`test/result-renderer.test.ts` 验证分组、回退与折叠行数。真实搜索执行继承 Pi 内建 grep definition，升级 Pi host 后仍需执行 live smoke。
+- 结果渲染的行着色（accent/muted/toolOutput）与折叠协议经 `pi-uikit-dev` 的 `tone`/`collapseLines`/`moreLinesHint` 原语实现，与其他扩展共用同一套样式映射。
+- call 卡片的标题着色与流式 Text 复用同样经 `pi-uikit-dev` 的 `tone`/`reuseTextComponent` 原语实现，渲染输出逐字节不变。
 
 ## 开发与验证
 

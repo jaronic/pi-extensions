@@ -37,7 +37,7 @@ export function registerPlanTools(pi: ExtensionAPI, runtime: PlanToolRuntime): v
     promptSnippet: "Submit a complete read-only plan for explicit approval",
     promptGuidelines: [
       "Call submit_plan exactly once when research is complete; do not execute the plan in the same turn.",
-      "Use ordered steps that can be tracked independently during execution.",
+      "Give submit_plan ordered steps that can be tracked independently during execution.",
     ],
     parameters: SubmitPlanParams,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -64,8 +64,8 @@ export function registerPlanTools(pi: ExtensionAPI, runtime: PlanToolRuntime): v
     promptSnippet: "Report that an approvable Plan cannot yet be formed",
     promptGuidelines: [
       "Call report_plan_blocked exactly once only when proportionate read-only investigation proves that an approvable implementation plan cannot yet be formed.",
-      "Include verified blocking facts, the evidence sources consulted, and concrete prerequisite or alternative paths for the user.",
-      "Do not submit an executable plan when the required preconditions remain unavailable.",
+      "Include verified blocking facts, the evidence sources consulted, and concrete prerequisite or alternative paths for the user in report_plan_blocked.",
+      "Call report_plan_blocked rather than submit_plan when the required preconditions remain unavailable.",
     ],
     parameters: ReportPlanBlockedParams,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -90,9 +90,9 @@ export function registerPlanTools(pi: ExtensionAPI, runtime: PlanToolRuntime): v
     description: "Pause read-only planning for a material user decision with 2 to 5 selectable options.",
     promptSnippet: "Request a material planning choice from the user",
     promptGuidelines: [
-      "Resolve questions from repository evidence before asking the user.",
-      "Use only for a material decision with distinct options that would change the submitted plan.",
-      "Provide 2 to 5 concise options with tradeoffs in their descriptions.",
+      "Resolve questions from repository evidence before calling request_plan_choice.",
+      "Use request_plan_choice only for a material decision with distinct options that would change the submitted plan.",
+      "Provide 2 to 5 concise request_plan_choice options with tradeoffs in their descriptions.",
     ],
     parameters: RequestPlanChoiceParams,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -122,8 +122,8 @@ export function registerPlanTools(pi: ExtensionAPI, runtime: PlanToolRuntime): v
     description: "Record the user's one-based answer to a pending Plan choice and resume read-only planning.",
     promptSnippet: "Record the user's pending Plan choice",
     promptGuidelines: [
-      "Use only after the user explicitly identifies one pending option number.",
-      "Do not infer a choice from ambiguous text; ask the user to choose a number instead.",
+      "Use answer_plan_choice only after the user explicitly identifies one pending option number.",
+      "Do not infer an answer_plan_choice selection from ambiguous text; ask the user to choose a number instead.",
     ],
     parameters: AnswerPlanChoiceParams,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {

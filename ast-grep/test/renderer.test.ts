@@ -3,6 +3,7 @@ import test from "node:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   renderEditResult,
+  renderSearchCall,
   renderSearchResult,
 } from "../src/renderer.ts";
 
@@ -48,4 +49,28 @@ test("result renderers strictly decode details and sanitize every fallback and p
   assert.equal(editFallback.includes("\x1b"), false);
   assert.equal(editFallback.includes("\u202E"), false);
   assert.match(editFallback, /^edit scope\\x1b/u);
+});
+
+test("search call renderer whitelists language so partial or forged values render as ?", () => {
+  const valid = rendered(renderSearchCall({
+    pattern: "foo($A)",
+    language: "typescript",
+    path: "src",
+  }, theme));
+  assert.match(valid, /ast_grep_search typescript "src"/u);
+
+  const forged: unknown[] = [
+    "javascri",
+    "\x1b]8;;https://evil.invalid\x07",
+    "\u202E",
+    "\u001b[31mred\u001b[0m",
+    "",
+    42,
+  ];
+  for (const language of forged) {
+    const output = rendered(renderSearchCall({ pattern: "foo($A)", language, path: "src" }, theme));
+    assert.match(output, /ast_grep_search \? "src"/u);
+    assert.equal(output.includes("\x1b"), false);
+    assert.equal(output.includes("\u202E"), false);
+  }
 });

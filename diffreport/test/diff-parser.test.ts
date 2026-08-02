@@ -261,3 +261,28 @@ test("parseDiff: totalAdditions and totalDeletions aggregate across files", () =
   assert.equal(result.totalAdditions, sumAdditions);
   assert.equal(result.totalDeletions, sumDeletions);
 });
+
+test("parseDiff: tolerates an unclosed hunk from a truncated diff", () => {
+  // Simulates a collection cap that cut the diff mid-hunk: the hunk header
+  // promises more lines than the captured content provides, and the last
+  // line has no trailing newline. Parsing must not crash and must keep the
+  // lines captured before the cut.
+  const truncatedDiff = `diff --git a/src/a.ts b/src/a.ts
+index abc1234..def5678 100644
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1,10 +1,12 @@
+ const a = 1;
++const added = true;
+ const b = 2;
+-const removed = 3;
++const replaced = 30;
+ const c = 4;
++const d = 5;`;
+  const result = parseDiff(truncatedDiff);
+  assert.equal(result.totalFiles, 1);
+  const file = result.files[0];
+  assert.equal(file.hunks.length, 1);
+  assert.equal(file.additions, 3);
+  assert.equal(file.deletions, 1);
+});

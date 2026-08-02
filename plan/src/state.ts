@@ -302,7 +302,8 @@ export function requestPlanChoice(state: PlanState, clarification: PlanClarifica
   if (state.phase !== "planning") throw new Error("A Plan choice can only be requested during planning.");
   const validated = validatePlanClarification(clarification);
   if (validated.selection !== undefined) throw new Error("A new Plan choice cannot include a selection.");
-  return { ...state, phase: "awaitingClarification", clarification: validated, updatedAt: now };
+  const { blocker: _blocker, ...clarifyingState } = state;
+  return { ...clarifyingState, phase: "awaitingClarification", clarification: validated, updatedAt: now };
 }
 
 export function answerPlanChoice(state: PlanState, selection: number, now = Date.now()): PlanState {

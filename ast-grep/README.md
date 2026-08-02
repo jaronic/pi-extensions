@@ -18,14 +18,15 @@
 - 一次调用只接受一种显式语言；不会从扩展名猜测。
 - exact-file 搜索从受 identity 和 8 MiB 上限保护的 snapshot 经 stdin 执行。目录搜索沿用 ast-grep 默认 ignore/hidden 行为，并逐组件验证 CLI 返回的真实文件名、symlink、identity 和 workspace containment。
 - CLI 永不写工作区。Edit 在 Pi 的 canonical file mutation queue 内读取最多 3 MiB 的单一 snapshot，校验 ast-grep 的实际 byte ranges，再以同目录临时文件和 atomic rename 提交。
-- Hard link、symlink/junction、非 UTF-8、显式 `ERROR` syntax node、zero-width、重叠或超预算 rewrite 均 fail closed。
+- Hard link、symlink/junction（写入/搜索前对 workspace 内逐路径组件 `lstat`，任一组件是 symlink/junction 即拒绝，包括工作区内指向另一文件的 symlink）、非 UTF-8、显式 `ERROR` syntax node、zero-width、重叠或超预算 rewrite 均 fail closed。
 - `previewId` 绑定 canonical workspace/path、语义参数、source bytes 和实际 replacements。它只防 stale write，不代表用户批准，也不持久化授权。
 - Preview 必须完整容纳全部 before/after；无法容纳时整次失败且不签发 ID。
 - v1 不提供多文件事务、project YAML rules、自动 formatter、语言推断或 UI approval。
+- 两个工具都携带 description、一行 `promptSnippet` 和 1–3 条 `promptGuidelines`（每条显式点名对应工具名），进入系统提示词的 Available tools 与 Guidelines 段。
 
 ## 安装与启用
 
-要求 Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.81.0` 的 Pi。
+要求 Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.83.0` 的 Pi。
 
 支持且由 native CI 覆盖的 tuple：
 
@@ -94,7 +95,7 @@ ln -sfn "$PWD" "$HOME/.pi/agent/extensions/ast-grep"
 
 结果按 path、byte range 和稳定 payload hash 排序。`nextOffset` 存在时可继续分页；分页不是 snapshot-isolated，任何写入后都应从 offset 0 重启。零匹配表示 pattern 执行成功，不证明 scope 内每个文件都 parse-valid。
 
-最终 `details` 中的 workspace-relative `scope`/`path` 保留真实、well-formed、NUL-free 字符串，供 LSP 等 machine consumer 精确解析；模型最终 `content` 把路径显示为完整 JSON string literal，例如真实换行文件名显示为 `"src/a\nb.ts"`。后续工具调用应使用该 literal 解码后的字符串值；literal 无法完整进入最终输出预算时整次操作失败。TUI 与 transient progress 使用相同 JSON-style escaping 的固定上限 projection，过长时明确以 `...` 截断，不能反向当作 machine path。
+最终 `details` 中的 workspace-relative `scope`/`path` 保留真实、well-formed、NUL-free 字符串，供 LSP 等 machine consumer 精确解析；模型最终 `content` 把路径显示为完整 JSON string literal，例如真实换行文件名显示为 `"src/a\nb.ts"`。后续工具调用应使用该 literal 解码后的字符串值；literal 无法完整进入最终输出预算时整次操作失败。TUI 与 transient progress 使用相同 JSON-style escaping 的固定上限 projection，过长时明确以 `...` 截断，不能反向当作 machine path。两个工具的 call/result 卡片着色经 `pi-uikit-dev` 的 `tone` 原语渲染（preview 的 diff 行映射到 `diffAdded`/`diffRemoved`），与其他扩展共享同一 token 映射。search call 卡片上的 `language` 只显示 allowlist 内的 canonical 名称，流式未闭合或非法的值一律渲染为 `?`。
 
 ## `ast_grep_edit`
 

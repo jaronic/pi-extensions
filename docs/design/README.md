@@ -76,6 +76,7 @@ flowchart TB
 | [10 · AST-Grep 扩展设计](10-ast-grep-extension-design.md) | Pi 怎样把 ast-grep 变成可取消、可审计的结构搜索与单文件改写工具 | 固定 native 引擎、流式输出、preview/apply、失效检测、生产级 Review |
 | [补充 · 通用能力注册调研](10-capability-registry-research.md) | 通用扩展怎样被硬依赖插件、可选 consumer、自定义 SDK 宿主和 stock Pi 复用；怎样从每能力一套 channel 演进到 typed capability | 依赖分流、capability discovery、直接 service、核心 facade |
 | [11 · Hashline 扩展设计与实现](11-hashline-extension-design.md) | 怎样用 branch-local 完整文件快照、已见行与同文件 CAS 实现精确编辑，并拒绝短 hash、stale merge 和路径猜测 | Read/Edit 数据流、快照生命周期、并发边界、实现与严格审查矩阵 |
+| [12 · Loop 扩展设计](12-loop-extension-design.md) | 固定轮数、generation 化 continuation、恢复暂停、Goal/Plan 互斥 | 循环状态机、generation 化 continuation、恢复暂停、跨轮上下文注入、Goal/Plan 互斥 |
 
 已有的 [Pi 插件开发参考与最佳实践](../pi-extension-development.md) 是 API/工程速查；本系列专注设计原理和选择依据，两者互补。
 

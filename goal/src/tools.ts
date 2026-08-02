@@ -103,7 +103,7 @@ export function registerGoalTools(pi: ExtensionAPI, runtime: GoalToolRuntime): v
     promptSnippet: "Create an explicitly requested long-running thread goal",
     promptGuidelines: [
       "Use create_goal only when the user explicitly asks to create or replace a long-running goal.",
-      "Write a durable objective with concrete outcomes, constraints, verification evidence, and a blocked stop condition.",
+      "Write the create_goal objective with concrete outcomes, constraints, verification evidence, and a blocked stop condition.",
     ],
     parameters: CreateGoalParams,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -142,9 +142,9 @@ export function registerGoalTools(pi: ExtensionAPI, runtime: GoalToolRuntime): v
       "Mark the active goal complete with requirement-to-evidence proof, or blocked with a concrete impasse report requiring user input or external change.",
     promptSnippet: "Finish a verified goal or report a genuine external impasse",
     promptGuidelines: [
-      "Use complete only after a prompt-to-artifact audit verifies every objective requirement; provide concise evidence entries for all requirements.",
-      "Use blocked only when progress requires specific user input or an external state change; provide the reason, attempted actions, and exact unblocking condition.",
-      "Never use either terminal status because work is difficult, slow, uncertain, incomplete, or near its budget.",
+      "Use update_goal complete only after a prompt-to-artifact audit verifies every objective requirement; provide concise evidence entries for all requirements.",
+      "Use update_goal blocked only when progress requires specific user input or an external state change; provide the reason, attempted actions, and exact unblocking condition.",
+      "Never call update_goal with either terminal status because work is difficult, slow, uncertain, incomplete, or near its budget.",
     ],
     parameters: UpdateGoalParams,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {

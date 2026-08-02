@@ -8,7 +8,7 @@ import {
   type ReadToolDetails,
   type ReadToolInput,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { reuseTextComponent, toolCallTitle } from "pi-uikit-dev";
 import { snapshotTokenForBytes } from "./digest.ts";
 import { abortIfNeeded, fail } from "./errors.ts";
 import type { Logger } from "./logger.ts";
@@ -112,15 +112,14 @@ const NOOP_LOGGER: Logger = { error() {}, warn() {}, info() {}, debug() {} };
 export function createHashlineReadTool(runtime: HashlineRuntime, logger: Logger = NOOP_LOGGER) {
   const renderer = createReadToolDefinition(process.cwd());
   const renderCall: NonNullable<typeof renderer.renderCall> = (args, theme, context) => {
-    const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
     const start = args.offset ?? 1;
     const range = args.offset === undefined && args.limit === undefined
       ? ""
       : args.limit === undefined ? `:${start}` : `:${start}-${start + args.limit - 1}`;
-    text.setText(
-      `${theme.fg("toolTitle", theme.bold("Hashline"))}${theme.fg("muted", " · read ")}${theme.fg("accent", `${args.path}${range}`)}`,
+    return reuseTextComponent(
+      context.lastComponent,
+      toolCallTitle(theme, { brand: "Hashline", action: "read", target: `${args.path}${range}` }),
     );
-    return text;
   };
   return {
     ...renderer,
@@ -160,9 +159,22 @@ export function createHashlineReadTool(runtime: HashlineRuntime, logger: Logger 
           },
         },
       });
+      // The host preread counts lines via split("\n"), so a CR-only file looks
+      // like a single line and any offset > 1 would fail before Hashline's
+      // CR-aware line table could apply. Preread without the range; editable
+      // text has offset/limit validated and applied below against physical
+      // lines, while images and non-editable fallbacks keep the host's own
+      // range semantics (Pi line counting, truncation and image handling).
+      const prereadParams: ReadToolInput = { ...params, offset: undefined, limit: undefined };
+      const hostRangedResult = (): Promise<AgentToolResult<ReadToolDetails | undefined>> =>
+        builtin.execute(toolCallId, params, signal, onUpdate, ctx).catch((error) => {
+          abortIfNeeded(signal);
+          logger.debug("read_failed", { path: params.path, offset: params.offset, limit: params.limit, error });
+          throw error;
+        });
       let builtinResult: AgentToolResult<ReadToolDetails | undefined>;
       try {
-        builtinResult = await builtin.execute(toolCallId, params, signal, onUpdate, ctx);
+        builtinResult = await builtin.execute(toolCallId, prereadParams, signal, onUpdate, ctx);
       } catch (error) {
         abortIfNeeded(signal);
         if (error instanceof CaptureTooLargeError) {
@@ -193,14 +205,14 @@ export function createHashlineReadTool(runtime: HashlineRuntime, logger: Logger 
         captured.canonicalPath.length > MAX_PATH_CHARS ||
         captured.canonicalPath.includes("\0")
       ) {
-        return builtinResult;
+        return hostRangedResult();
       }
       let editable;
       try {
         editable = decodeEditableBytes(captured.bytes);
         assertEditableLineSizes(editable.lines);
       } catch {
-        return builtinResult;
+        return hostRangedResult();
       }
       if (editable.lines.length === 0) {
         return textResult("[Empty file. Use write for explicit full-file content.]", undefined);
@@ -219,7 +231,7 @@ export function createHashlineReadTool(runtime: HashlineRuntime, logger: Logger 
         displayFilePath,
         token,
       );
-      if (!formatted) return builtinResult;
+      if (!formatted) return hostRangedResult();
       const tokenResult = textResult(formatted.tokenText, formatted.details);
       const noTokenResult = textResult(formatted.noTokenText, formatted.details);
       const record: SnapshotRecord = Object.freeze({

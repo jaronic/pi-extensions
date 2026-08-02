@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { toolCallTitle, tone } from "pi-uikit-dev";
 import {
   DEFAULT_VIEW_LIMIT,
   MAX_VIEW_LIMIT,
@@ -223,7 +224,7 @@ export function registerTodoTool(pi: ExtensionAPI, runtime: TodoToolRuntime): vo
       "Globally available, branch-local Todo execution ledger: it organizes multi-step work into ordered phases and tasks with stable numeric #IDs, keeps at most one task inProgress, and preserves done/blocked/dropped/reopened transitions across turns, compaction, and reloads. Plan approval hands its approved steps onto this same board, and other extensions share it through a versioned service. Judge for yourself when tracking work here adds value — typically multi-step execution or when the user asks to track a checklist.",
     promptSnippet: "Track an execution-ready branch-local checklist with one active task",
     promptGuidelines: [
-      "Use the todo tool for branch-local execution tracking whenever you judge a persistent checklist adds value; after Plan approval, continuing through the transferred board is mandatory, not optional.",
+      "Use the todo tool for branch-local execution tracking whenever you judge a persistent checklist adds value — register multi-step work as tasks up front and close each task with todo done only after its verification; after Plan approval, continuing through the transferred board is mandatory, not optional.",
       ...TODO_PROMPT_GUIDELINES,
     ],
     parameters: TodoParams,
@@ -242,19 +243,19 @@ export function registerTodoTool(pi: ExtensionAPI, runtime: TodoToolRuntime): vo
       } else if (op === "append" && Array.isArray(args.items)) {
         suffix = ` ${args.items.length} item${args.items.length === 1 ? "" : "s"}`;
       }
-      return new Text(theme.fg("toolTitle", theme.bold("Todo")) + theme.fg("muted", ` · ${op}${suffix}`), 0, 0);
+      return new Text(toolCallTitle(theme, { brand: "Todo" }) + tone(theme, "muted", ` · ${op}${suffix}`), 0, 0);
     },
     renderResult(result, { expanded }, theme, context) {
-      if (context.isError) return new Text(theme.fg("error", firstText(result)), 0, 0);
+      if (context.isError) return new Text(tone(theme, "error", firstText(result)), 0, 0);
       const decoded = decodeTodoToolDetails(result.details);
-      if (decoded.kind !== "valid") return new Text(theme.fg("error", "Todo result details are unavailable."), 0, 0);
+      if (decoded.kind !== "valid") return new Text(tone(theme, "error", "Todo result details are unavailable."), 0, 0);
       if (expanded) {
         const phaseSummary = changedPhaseSummary(decoded.value);
         return new Text(phaseSummary === undefined ? firstText(result) : `${firstText(result)}\n${phaseSummary}`, 0, 0);
       }
       const glyph = decoded.value.op === "view" || decoded.value.op === "get" ? "○" : "✓";
       const color = decoded.value.op === "view" || decoded.value.op === "get" ? "muted" : "success";
-      return new Text(`${theme.fg(color, glyph)} ${theme.fg("text", activeSummary(decoded.value))}`, 0, 0);
+      return new Text(`${tone(theme, color, glyph)} ${tone(theme, "text", activeSummary(decoded.value))}`, 0, 0);
     },
   });
 }

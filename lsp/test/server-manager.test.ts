@@ -142,11 +142,11 @@ test("ServerManager removes idle and crashed clients", async (context) => {
   await crashManager.shutdown();
 });
 
-test("ServerManager shutdown waits for pending startup and closes it", async (context) => {
+test("ServerManager shutdown aborts pending startup and closes it", async (context) => {
   const { root, file } = await workspace(context);
   const manager = new ServerManager(root, config([server("delayed", "delay-initialize")]));
   const pending = manager.clientForAction(file, "hover");
-  const rejection = assert.rejects(pending, /shut down during server startup/);
+  const rejection = assert.rejects(pending, /Failed to start LSP server .*LSP request aborted/);
   await delay(20);
   await manager.shutdown();
   await rejection;

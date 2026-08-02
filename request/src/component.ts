@@ -10,6 +10,7 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { tone } from "pi-uikit-dev";
 import {
   MAX_REQUEST_ANSWER_CHARS,
   type NormalizedRequestChoiceQuestion,
@@ -102,6 +103,7 @@ export function createRequestComponent({
   let editing: "other" | "text" | null = questions[0]?.kind === "text" ? "text" : null;
   let bodyScrollOffset = 0;
   let cachedWidth: number | undefined;
+  let cachedTerminalRows: number | undefined;
   let cachedLines: string[] | undefined;
   let settled = false;
   const timeoutMilliseconds = timeout !== undefined && Number.isFinite(timeout) && timeout > 0
@@ -111,13 +113,13 @@ export function createRequestComponent({
   const answers = new Map<string, StoredAnswer>();
 
   const editorTheme: EditorTheme = {
-    borderColor: (text) => theme.fg("borderAccent", text),
+    borderColor: (text) => tone(theme, "borderAccent", text),
     selectList: {
-      selectedPrefix: (text) => theme.fg("accent", text),
-      selectedText: (text) => theme.fg("accent", text),
-      description: (text) => theme.fg("muted", text),
-      scrollInfo: (text) => theme.fg("dim", text),
-      noMatch: (text) => theme.fg("warning", text),
+      selectedPrefix: (text) => tone(theme, "accent", text),
+      selectedText: (text) => tone(theme, "accent", text),
+      description: (text) => tone(theme, "muted", text),
+      scrollInfo: (text) => tone(theme, "dim", text),
+      noMatch: (text) => tone(theme, "warning", text),
     },
   };
   const editor = new Editor(tui, editorTheme);
@@ -147,6 +149,7 @@ export function createRequestComponent({
   function refresh(): void {
     cachedLines = undefined;
     cachedWidth = undefined;
+    cachedTerminalRows = undefined;
     tui.requestRender();
   }
 
@@ -387,19 +390,19 @@ export function createRequestComponent({
       const active = stage === "question" && index === questionIndex;
       const glyph = active ? "▶" : answered ? "✓" : "○";
       const text = `${glyph} ${index + 1} ${question.header}`;
-      if (active) return theme.fg("accent", theme.bold(text));
-      return theme.fg(answered ? "success" : "muted", text);
+      if (active) return tone(theme, "accent", text, { bold: true });
+      return tone(theme, answered ? "success" : "muted", text);
     });
     const reviewActive = stage === "review";
     const review = reviewActive
-      ? theme.fg("accent", theme.bold("▶ Review"))
-      : theme.fg("muted", "◇ Review");
-    return truncateToWidth([...parts, review].join(theme.fg("dim", "  ·  ")), width, "…");
+      ? tone(theme, "accent", "▶ Review", { bold: true })
+      : tone(theme, "muted", "◇ Review");
+    return truncateToWidth([...parts, review].join(tone(theme, "dim", "  ·  ")), width, "…");
   }
 
   function renderChoiceBody(question: NormalizedRequestChoiceQuestion, width: number): BodyRender {
     const lines: string[] = [];
-    lines.push(...wrapPrefixed(theme.fg("text", theme.bold(question.question)), width));
+    lines.push(...wrapPrefixed(tone(theme, "text", question.question, { bold: true }), width));
     lines.push("");
     const answer = answers.get(question.id);
     const options = displayOptions(question);
@@ -414,27 +417,27 @@ export function createRequestComponent({
       const radio = question.multi ? (selected ? "■" : "□") : (selected ? "●" : "○");
       const cursor = focused ? "›" : " ";
       const recommended = !displayOption.isOther && index === question.recommended
-        ? theme.fg("accent", " (Recommended)")
+        ? tone(theme, "accent", " (Recommended)")
         : "";
       const styledLabel = focused
-        ? theme.bg("selectedBg", theme.fg("text", ` ${radio} ${label} `))
-        : theme.fg(selected ? "success" : "text", `${radio} ${label}`);
+        ? tone(theme, "selected", ` ${radio} ${label} `)
+        : tone(theme, selected ? "success" : "text", `${radio} ${label}`);
       if (focused) focusLine = lines.length;
-      lines.push(...wrapPrefixed(`${styledLabel}${recommended}`, width, `${theme.fg("accent", cursor)} `, "  "));
+      lines.push(...wrapPrefixed(`${styledLabel}${recommended}`, width, `${tone(theme, "accent", cursor)} `, "  "));
       const description = displayOption.isOther
         ? answer?.customInput
         : displayOption.option?.description;
       if (description) {
-        lines.push(...wrapPrefixed(theme.fg("muted", description), width, "    ", "    "));
+        lines.push(...wrapPrefixed(tone(theme, "muted", description), width, "    ", "    "));
       }
       if (focused && displayOption.option?.preview) {
-        lines.push(...wrapPrefixed(theme.fg("dim", displayOption.option.preview), width, theme.fg("accent", "    │ "), "      "));
+        lines.push(...wrapPrefixed(tone(theme, "dim", displayOption.option.preview), width, tone(theme, "accent", "    │ "), "      "));
       }
       if (index < options.length - 1) lines.push("");
     }
     if (editing === "other") {
       lines.push("");
-      lines.push(theme.fg("accent", theme.bold("Your answer")));
+      lines.push(tone(theme, "accent", "Your answer", { bold: true }));
       const editorWidth = Math.max(1, width - 2);
       const editorStart = lines.length;
       for (const line of editor.render(editorWidth)) lines.push(`  ${truncateToWidth(line, editorWidth, "")}`);
@@ -445,12 +448,12 @@ export function createRequestComponent({
 
   function renderTextBody(question: Extract<NormalizedRequestQuestion, { kind: "text" }>, width: number): BodyRender {
     const lines = [
-      ...wrapPrefixed(theme.fg("text", theme.bold(question.question)), width),
+      ...wrapPrefixed(tone(theme, "text", question.question, { bold: true }), width),
       "",
-      theme.fg("accent", theme.bold("Your answer")),
+      tone(theme, "accent", "Your answer", { bold: true }),
     ];
     if (question.placeholder && !editor.getText()) {
-      lines.push(...wrapPrefixed(theme.fg("dim", question.placeholder), width, "  ", "  "));
+      lines.push(...wrapPrefixed(tone(theme, "dim", question.placeholder), width, "  ", "  "));
     }
     const editorWidth = Math.max(1, width - 2);
     const editorStart = lines.length;
@@ -466,9 +469,9 @@ export function createRequestComponent({
   }
 
   function renderReviewBody(width: number): BodyRender {
-    const lines: string[] = [theme.fg("text", theme.bold("Review answers")), ""];
+    const lines: string[] = [tone(theme, "text", "Review answers", { bold: true }), ""];
     const unanswered = questions.filter((question) => answerSummary(question) === "unanswered").length;
-    lines.push(theme.fg(unanswered > 0 ? "warning" : "success", unanswered > 0
+    lines.push(tone(theme, unanswered > 0 ? "warning" : "success", unanswered > 0
       ? `${unanswered} unanswered question${unanswered === 1 ? "" : "s"}; Enter still submits.`
       : "All questions answered."));
     lines.push("");
@@ -478,21 +481,21 @@ export function createRequestComponent({
       const focused = reviewIndex === index;
       if (focused) focusLine = lines.length;
       const glyph = answerSummary(question) === "unanswered" ? "○" : "✓";
-      const prefix = focused ? theme.fg("accent", "› ") : "  ";
+      const prefix = focused ? tone(theme, "accent", "› ") : "  ";
       const header = `${glyph} ${index + 1}. ${question.header}`;
       const styledHeader = focused
-        ? theme.bg("selectedBg", theme.fg("text", ` ${header} `))
-        : theme.fg(answerSummary(question) === "unanswered" ? "muted" : "success", header);
+        ? tone(theme, "selected", ` ${header} `)
+        : tone(theme, answerSummary(question) === "unanswered" ? "muted" : "success", header);
       lines.push(...wrapPrefixed(styledHeader, width, prefix, "  "));
-      lines.push(...wrapPrefixed(theme.fg("muted", answerSummary(question)), width, "     ", "     "));
+      lines.push(...wrapPrefixed(tone(theme, "muted", answerSummary(question)), width, "     ", "     "));
       lines.push("");
     }
     const submitFocused = reviewIndex === questions.length;
     if (submitFocused) focusLine = lines.length;
     const submit = submitFocused
-      ? theme.bg("selectedBg", theme.fg("text", " ✓ Submit "))
-      : theme.fg("accent", "✓ Submit");
-    lines.push(`${submitFocused ? theme.fg("accent", "› ") : "  "}${submit}`);
+      ? tone(theme, "selected", " ✓ Submit ")
+      : tone(theme, "accent", "✓ Submit");
+    lines.push(`${submitFocused ? tone(theme, "accent", "› ") : "  "}${submit}`);
     return { lines, focusLine };
   }
 
@@ -504,8 +507,8 @@ export function createRequestComponent({
 
   function render(width: number): string[] {
     const renderWidth = Math.max(1, width);
-    if (cachedLines && cachedWidth === renderWidth) return cachedLines;
     const terminalRows = Math.max(4, tui.terminal.rows || 24);
+    if (cachedLines && cachedWidth === renderWidth && cachedTerminalRows === terminalRows) return cachedLines;
     const framed = renderWidth >= 24 && terminalRows >= 9;
     const innerWidth = framed ? Math.max(1, renderWidth - 4) : renderWidth;
     const question = stage === "question" ? currentQuestion() : undefined;
@@ -545,31 +548,33 @@ export function createRequestComponent({
 
     if (!framed) {
       const compact = [
-        theme.fg("accent", theme.bold(`Ask · ${mode}`)),
+        tone(theme, "accent", `Ask · ${mode}`, { bold: true }),
         navLine(innerWidth),
         ...visibleBody,
-        theme.fg("dim", `${scrollStatus} ${help}${timeoutText()}`.trim()),
+        tone(theme, "dim", `${scrollStatus} ${help}${timeoutText()}`.trim()),
       ].map((line) => truncateToWidth(line, renderWidth, ""));
       cachedWidth = renderWidth;
+      cachedTerminalRows = terminalRows;
       cachedLines = compact;
       return compact;
     }
 
-    const frame = (line = "") => `${theme.fg("borderMuted", "│")} ${padToWidth(line, innerWidth)} ${theme.fg("borderMuted", "│")}`;
+    const frame = (line = "") => `${tone(theme, "borderMuted", "│")} ${padToWidth(line, innerWidth)} ${tone(theme, "borderMuted", "│")}`;
     const title = ` Ask · ${mode} `;
     const titleWidth = visibleWidth(title);
     const top = `╭─${title}${"─".repeat(Math.max(0, renderWidth - titleWidth - 3))}╮`;
     const bottom = `╰${"─".repeat(Math.max(0, renderWidth - 2))}╯`;
     const lines = [
-      theme.fg("borderAccent", truncateToWidth(top, renderWidth, "")),
+      tone(theme, "borderAccent", truncateToWidth(top, renderWidth, "")),
       frame(navLine(innerWidth)),
-      frame(theme.fg("borderMuted", "─".repeat(innerWidth))),
+      frame(tone(theme, "borderMuted", "─".repeat(innerWidth))),
       ...visibleBody.map(frame),
       frame(),
-      frame(theme.fg("dim", `${scrollStatus ? `${scrollStatus} ` : ""}${help}${timeoutText()}`)),
-      theme.fg("borderAccent", truncateToWidth(bottom, renderWidth, "")),
+      frame(tone(theme, "dim", `${scrollStatus ? `${scrollStatus} ` : ""}${help}${timeoutText()}`)),
+      tone(theme, "borderAccent", truncateToWidth(bottom, renderWidth, "")),
     ];
     cachedWidth = renderWidth;
+    cachedTerminalRows = terminalRows;
     cachedLines = lines;
     return lines;
   }
@@ -592,6 +597,7 @@ export function createRequestComponent({
     invalidate: () => {
       cachedLines = undefined;
       cachedWidth = undefined;
+      cachedTerminalRows = undefined;
       editor.invalidate();
     },
     dispose: () => {

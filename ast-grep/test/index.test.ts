@@ -36,7 +36,9 @@ test("extension factory registers two narrow tools without starting native work"
   for (const name of ["ast_grep_search", "ast_grep_edit"]) {
     const tool = tools.get(name);
     assert.ok(tool?.promptSnippet && tool.promptSnippet.length > 0, `${name} must define promptSnippet`);
-    assert.ok((tool?.promptGuidelines?.length ?? 0) > 0, `${name} must define promptGuidelines`);
+    const guidelines = tool?.promptGuidelines ?? [];
+    assert.ok(guidelines.length >= 1 && guidelines.length <= 3, `${name} guidelines must stay within the 1-3 system-prompt budget`);
+    for (const guideline of guidelines) assert.ok(guideline.includes(name), `every ${name} guideline must name the tool`);
   }
   assert.equal(handlers.get("session_start"), undefined);
   assert.equal(handlers.get("session_tree"), undefined);

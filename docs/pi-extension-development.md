@@ -1,6 +1,6 @@
 # Pi 插件开发参考与最佳实践
 
-> 适用基线：本仓库使用 `@earendil-works/pi-coding-agent >=0.81.0`，本文依据本地安装的 0.81.0 文档与 2026-07-22 可访问的官方、社区源码编写。Pi API 演进较快；升级 peer dependency 时，先核对本文末尾的官方文档。
+> 适用基线：本仓库使用 `@earendil-works/pi-coding-agent >=0.83.0`，本文依据本地安装的 0.83.0 文档与可访问的官方、社区源码编写。Pi API 演进较快；升级 peer dependency 时，先核对本文末尾的官方文档。
 
 本文中的“插件”泛指 Pi extension；“package”是包含 extension、skill、prompt、theme 等资源的分发单元。官方 API 约束高于社区惯例，社区项目只作为设计案例，不代表安全背书。
 
@@ -109,6 +109,7 @@ flowchart LR
 - 状态机、持久化和跨插件协议：`plan/`、`goal/`、`todo/`
 - 子进程、协议客户端、配置路由和清理：`lsp/`
 - 响应式共享 UI 与 native adapter：`request/`
+- 共享渲染原语库（纯函数、无扩展入口）：`uikit/`
 
 ### 4.2 最小 package manifest
 
@@ -127,15 +128,15 @@ flowchart LR
     "test": "node --import tsx --test test/*.test.ts"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.81.0",
-    "@earendil-works/pi-coding-agent": ">=0.81.0",
-    "@earendil-works/pi-tui": ">=0.81.0",
+    "@earendil-works/pi-ai": ">=0.83.0",
+    "@earendil-works/pi-coding-agent": ">=0.83.0",
+    "@earendil-works/pi-tui": ">=0.83.0",
     "typebox": ">=1.0.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.81.0",
-    "@earendil-works/pi-coding-agent": "^0.81.0",
-    "@earendil-works/pi-tui": "^0.81.0",
+    "@earendil-works/pi-ai": "^0.83.0",
+    "@earendil-works/pi-coding-agent": "^0.83.0",
+    "@earendil-works/pi-tui": "^0.83.0",
     "@types/node": "^22.0.0",
     "tsx": "^4.20.0",
     "typebox": "^1.0.0",
@@ -211,7 +212,7 @@ make pi-extensions-on
 make pi-extensions-status
 ```
 
-`make pi-extensions-off` 只删除仍指向当前仓库的九个链接；`make pi-extensions-toggle` 在全部启用时关闭，否则补齐缺失链接。冲突的普通文件、目录和外部软链接会导致操作在修改前失败。
+`make pi-extensions-off` 只删除仍指向当前仓库的十五个链接；`make pi-extensions-toggle` 在全部启用时关闭，否则补齐缺失链接。冲突的普通文件、目录和外部软链接会导致操作在修改前失败。
 
 然后在 Pi 中执行 `/reload`。只链接 package，不链接仓库根目录；根目录没有 `package.json`。完整的扩展与主题开关可使用 `make pi-on|off|toggle|status`，临时试运行单文件可使用 `pi -e ./path/to/extension.ts`。
 
@@ -226,7 +227,7 @@ npm test
 
 涉及多个插件协议时，运行所有受影响 package；Plan coordination 协议变更至少运行 `goal`、`plan` 与 `todo`，并覆盖 `plan/test/coexistence.test.ts` 和 `todo/test/coexistence.test.ts`。
 
-`.github/workflows/ci.yml` 在 Node 22.19 上对 `goal`、`plan`、`lsp`、`request`、`rg`、`todo` 分别执行 clean install、typecheck 和完整 package 测试。新增顶层 package 时必须同步扩展 CI matrix 与全局链接管理器。
+`.github/workflows/ci.yml` 在 Node 22.19 上对十五个顶层 package 分别执行 clean install、typecheck 和完整 package 测试（`ast-grep` 另有跨平台原生矩阵；`uikit` 是无扩展入口的纯库，同样跑 check/test）。新增顶层 package 时必须同步扩展 CI matrix 与全局链接管理器。
 
 ## 5. API 速查与选择
 
@@ -355,7 +356,7 @@ npm test
 ### 7.3 当前仓库验证命令
 
 ```sh
-for dir in goal plan lsp ast-grep hashline request rg todo jaron; do
+for dir in goal plan lsp ast-grep hashline request rg todo jaron diffreport telemetry enforce notify doclint uikit; do
   (cd "$dir" && npm run check && npm test) || exit 1
 done
 ```
@@ -363,7 +364,7 @@ done
 CI 会执行上述 package matrix。提交前还要从仓库根目录执行隔离加载 smoke，不读取当前 session 或全局链接：
 
 ```sh
-for name in goal plan lsp ast-grep hashline request rg todo jaron; do
+for name in goal plan lsp ast-grep hashline request rg todo jaron diffreport telemetry enforce notify doclint; do
   pi --no-session -p --extension "$PWD/$name" "Reply with exactly: SMOKE_OK"
 done
 ```
@@ -391,7 +392,7 @@ done
 
 ### 合并前
 
-- [ ] 受影响 package 的 `npm run check`、`npm test` 通过，CI 配置仍覆盖全部九个顶层插件。
+- [ ] 受影响 package 的 `npm run check`、`npm test` 通过，CI 配置仍覆盖全部十五个顶层 package。
 - [ ] 新可观察契约有回归测试，跨插件协议有 coexistence test。
 - [ ] 真实 Pi 完成主路径、失败路径、`/reload` 和退出 smoke test。
 - [ ] package manifest、runtime dependencies、lockfile 和全局软链接说明一致。

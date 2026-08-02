@@ -1,6 +1,6 @@
 # Todo Extension 设计
 
-> 文档状态：当前实现合同，更新于 2026-07-27。实现位于 `todo/`，运行基线为 Node.js `>=22.19.0` 与 `@earendil-works/pi-coding-agent >=0.82.1`。
+> 文档状态：当前实现合同，更新于 2026-08-02。实现位于 `todo/`，运行基线为 Node.js `>=22.19.0` 与 `@earendil-works/pi-coding-agent >=0.82.1`。
 
 ## 1. 结论
 
@@ -187,6 +187,8 @@ Mutation 顺序：
 
 校验、取消、journal append 或上限失败都不会增加 sequence/revision、消耗 ID 或留下部分 state。
 
+`/todos clear` 在确认前捕获当前 snapshot，确认后提交前与最新 snapshot 做 CAS（sequence 与 state 全等比较）；确认期间 board 发生任何变化（tool/service mutation、Plan handoff 或 branch restore，包括初始化新 board）都拒绝清空并提示重新确认，避免用户确认的投影与实际被清空的 board 不一致。
+
 ### 7.1 Restore
 
 `session_start` 与 `session_tree` 顺序扫描当前 branch：
@@ -215,7 +217,7 @@ Todo · <phase> · 0/3 completed · 0 blocked · 0 dropped
 
 排序为 active → runnable pending → blocked。默认不重复列 completed/dropped 文本；计数始终保留。唯一例外是结算时刻：使看板 settled 的那次 `done`/`drop` 结果附带一段有界 `Settled recap:`（最多 20 任务 / 4 KiB）列出全部 closed 任务供模型向用户总结；看板 settled 后 widget/status 立即清理。
 
-`before_agent_start` 只在 board active/blocked 且 Plan gate 关闭时注入 `<untrusted_todo_state>`。投影最多包含 20 个 open task，active task 优先；所有 task/phase/reason 文本 XML escape并明确视为不可信数据。
+`before_agent_start` 只在 board active/blocked 且 Plan gate 关闭时注入 `<untrusted_todo_state>`。投影最多包含 20 个 open task，active task 优先；所有 task/phase/reason 文本 XML escape并明确视为不可信数据。XML 实体扩张可能把合法文本放大数倍，因此转义后的最终 UTF-8 输出另受 32 KiB 上限约束：达到上限时在任务边界停止追加，并保留 `... N more open tasks; call todo view` 提示。
 
 Tool `content`、expanded renderer 和分页输出独立有界。`view` 返回 `nextOffset`；分页期间 revision 改变时调用方应从 offset 0 重读。
 
@@ -320,9 +322,10 @@ Todo 不接管 active tools，不监听 RG/LSP，也不从搜索、diagnostics �
 | details/custom envelope | 64 KiB UTF-8 |
 | 单次模型输出 | 16 KiB、200 行 |
 | prompt open task | 20 |
+| prompt 字节上限 | 32 KiB（XML 转义后最终 UTF-8） |
 | widget | 12 行 |
 
-所有显示文本拒绝换行、terminal control 与 bidirectional formatting code point。
+所有显示文本拒绝换行、terminal control 与 bidirectional formatting code point。字符上限（phase 名、task 文本、reason/note）按 Unicode code point 计数（`Array.from(...).length`），与 Plan 的 `validatePlanText` 口径一致。
 
 ## 13. 实现节点
 

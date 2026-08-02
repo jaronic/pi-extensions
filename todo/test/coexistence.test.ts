@@ -3,6 +3,7 @@ import test from "node:test";
 import goalExtension from "../../goal/src/index.ts";
 import planExtension from "../../plan/src/index.ts";
 import requestExtension from "../../request/src/index.ts";
+import loopExtension from "../../loop/src/index.ts";
 import todoExtension, { installTodo, TODO_SERVICE_CHANNEL, type TodoPhase, type TodoTask } from "../src/index.ts";
 import { REQUEST_UI_CHANNEL } from "../../request/src/protocol.ts";
 import { TodoHarness } from "./harness.ts";
@@ -260,4 +261,20 @@ test("Goal and Todo inject one independent prompt projection and retain separate
   await harness.emit("before_agent_start", afterTodo);
   assert.equal((afterTodo.systemPrompt.match(/<untrusted_objective>/g) ?? []).length, 1);
   assert.equal(afterTodo.systemPrompt.includes("<untrusted_todo_state"), false);
+});
+
+test("Loop and Todo coexist without cross-talk", async () => {
+  const harness = new TodoHarness();
+  loadTodo(harness);
+  loopExtension(harness.api);
+  await harness.startSession();
+  await harness.tool({ op: "init", list: [{ phase: "Todo", items: ["Inspect"] }] });
+  await harness.command("loop", "2 fix the tests");
+
+  assert.match(harness.statuses.get("loop") ?? "", /Loop 0\/2/);
+  const read = await harness.tool({ op: "view", includeClosed: true, offset: 0, limit: 50 });
+  assert.equal(read.details.sequence, 1, "Loop creation does not touch the Todo board");
+  const appended = await harness.tool({ op: "append", phase: "Todo", items: ["Verify"] });
+  assert.equal(appended.details.sequence, 2, "Todo mutations keep working while a Loop is active");
+  assert.match(harness.widgets.get("loop")?.[0] ?? "", /Objective: fix the tests/);
 });

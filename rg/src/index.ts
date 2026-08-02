@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createGrepToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { reuseTextComponent, tone } from "pi-uikit-dev";
 import { renderGrepOutput } from "./result-renderer.ts";
 
 const grepDefinition = createGrepToolDefinition(process.cwd());
@@ -43,18 +43,17 @@ export default function rgExtension(pi: ExtensionAPI): void {
       return definition.execute(toolCallId, params, signal, onUpdate, ctx);
     },
     renderCall(args, theme, context) {
-      const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
       const pattern = displayValue(args.pattern, "?");
       const path = displayValue(args.path, ".");
       const glob = args.glob === undefined ? "" : ` (${displayValue(args.glob, "?")})`;
       const limit = args.limit === undefined ? "" : ` limit ${String(args.limit)}`;
-      text.setText(
-        theme.fg("toolTitle", theme.bold("rg")) +
+      return reuseTextComponent(
+        context.lastComponent,
+        tone(theme, "title", "rg") +
         " " +
-        theme.fg("accent", `/${pattern}/`) +
-        theme.fg("toolOutput", ` in ${path}${glob}${limit}`),
+        tone(theme, "accent", `/${pattern}/`) +
+        tone(theme, "output", ` in ${path}${glob}${limit}`),
       );
-      return text;
     },
     renderResult(result, options, theme, context) {
       // Grep execution remains byte-for-byte unchanged; only its text presentation is grouped.
