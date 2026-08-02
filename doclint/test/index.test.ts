@@ -19,6 +19,8 @@ interface RegisteredToolSummary {
     onUpdate: undefined,
     ctx: ExtensionContext,
   ) => Promise<{ content: { type: string; text: string }[]; details: Record<string, unknown> }>;
+  renderCall?: (...args: unknown[]) => unknown;
+  renderResult?: (...args: unknown[]) => unknown;
 }
 
 interface RegisteredCommandSummary {
@@ -112,6 +114,39 @@ test("doc_lint aborts before touching the filesystem when cancelled", async () =
     tool.execute("call-5", { action: "check" }, controller.signal, undefined, { cwd: "/nonexistent" } as ExtensionContext),
     /cancelled/,
   );
+});
+
+test("doc_lint wires renderCall/renderResult that accept its own real results", async () => {
+  const { tool } = registerExtension();
+  assert.equal(typeof tool.renderCall, "function");
+  assert.equal(typeof tool.renderResult, "function");
+
+  const theme = {
+    fg(token: string, text: string): string {
+      return `«${token}:${text}»`;
+    },
+    bold(text: string): string {
+      return `**${text}**`;
+    },
+  };
+  const root = tempRepo();
+  try {
+    writeFixture(root, "# Demo\n\nnpm run check\nnpm test\n");
+    const result = await tool.execute("call-6", { action: "check" }, undefined, undefined, {
+      cwd: root,
+    } as ExtensionContext);
+    const component = tool.renderResult!(
+      result,
+      { expanded: false, isPartial: false },
+      theme,
+      { isError: false },
+    ) as { render(width: number): string[] };
+    const lines = component.render(500);
+    assert.ok(lines.some((line) => line.includes("«error:✕»")), "error status row must render");
+    assert.ok(lines.some((line) => line.includes("«accent:demo/README.md:»")), "finding groups must render");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("/doclint notifies in all modes, including print mode without UI dialogs", async () => {

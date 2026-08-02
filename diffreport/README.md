@@ -128,6 +128,15 @@ TUI 中所有来源、边界和后续澄清均使用 Request。`print/json` 等�
 
 `overview` 输出 changed-path table、delta、选定边界内的 commit 和 untracked inventory；它明确标记为 inventory。`patch` 输出可归因的原始 hunk；untracked 文件不会伪造 Git patch，而是提示 agent 直接读取。`history` 保留 commit body，并提醒将 commit message 当作待代码证据印证的历史声明。
 
+### TUI 渲染
+
+tool 注册了自定义 `renderCall`/`renderResult`（`src/renderer.ts`），仅影响 TUI 展示，模型面向的 `content` 文本逐字节不变：
+
+- call 卡片标题经 `pi-uikit-dev` 的 `toolCallTitle`/`reuseTextComponent` 渲染：`Diff Report · <source> <view> [target]`（无 target 时显示定向路径数），流式参数更新复用同一 Text 组件。
+- result 卡片头部是 `statusRow` 状态行（成功 ✓ / 截断 !）加证据摘要（`N files +A/-D, N commits, N untracked`；history 按 commit 计数），随后是 `kvRow` 的 scope（复用 `scopeDescription`）和截断时的 full-output artifact 路径；证据正文按 `collapseLines`/`moreLinesHint` 协议折叠（折叠态 15 行），展开态显示全部。
+- 流式 partial（仅有 `{source, view}` details）显示 pending 的 collecting 行；错误结果整段按 error tone 显示；无法识别的 details 回退为纯证据文本。
+- 所有着色经 `pi-uikit-dev` 的 `tone`/`statusRow`/`kvRow` 原语映射 host Theme token，与其他扩展的工具卡片共享同一样式映射。
+
 ## Skill: `change-report`
 
 位置：`skills/change-report/SKILL.md`。
@@ -181,6 +190,7 @@ branch/commit 的未变更代码必须从对应 target revision 读取；只有�
 - `src/command.ts`：`/diff_report` 注册、busy/followUp 与错误边界。
 - `src/workflow.ts`：参数解析、Request 来源/边界选择、ref 修正、默认报告路径和 agent kickoff。
 - `src/tool.ts`：`diff_report` schema 与 overview/patch/history 调度，并向台账记录成功调用。
+- `src/renderer.ts`：uikit 卡片渲染（call 标题、证据摘要状态行、scope/full-output kv 行、证据正文折叠）。
 - `src/call-ledger.ts`：探索期间的 `diff_report` 调用台账，供命令层核验最少证据 pass。
 - `src/report-quality.ts`：报告产物的机械合同检查（证据 ID、证据索引、代码围栏）。
 - `src/git-diff.ts`：Git ref/path 安全、branch/commit discovery、diff/history/untracked 捕获。

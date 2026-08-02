@@ -31,6 +31,8 @@
 
 工具输出先给出 error/warning 总数、lint 根目录与被扫描包清单，然后按文件分组列出 finding（组内 error 先于 warning），最后用 Pi 的 `truncateHead` 截断到 50KB/2000 行预算；finding 总数另有 `maxFindings` 上限（默认 100），被截断/省略的数量都会在输出中明示。tool result 的 details 附带结构化摘要（root、packagesScanned、errors、warnings、omitted 与前 50 条 finding）。
 
+`doc_lint` 还注册了自定义 `renderCall`/`renderResult` 渲染钩子（仅影响 TUI 展示，模型面向的 `content` 文本不变，仍由 `format.ts` 生成）：调用卡片是共享的单行标题（bold toolTitle 品牌 + muted action + accent root），经 `pi-uikit-dev` 的 `toolCallTitle`/`reuseTextComponent` 实现流式重渲染复用；结果体首行是 `statusRow` 状态行（✓/!/✕ + 计数摘要），随后是 root 与扫描包清单的 `kvRow`、omitted 警示行，finding 按文件分组（accent 文件名，组内 error 先于 warning），每行按严重级经 `tone(error/warning)` 着色，折叠态只显示前 15 行 body 并以 `moreLinesHint` 提示隐藏行数，展开态显示全部；超出 details 50 条上限的 finding 另有 muted 尾注指向完整文本输出。details 缺失或非法时回退为 output/error tone 的纯文本。所有着色都经 `pi-uikit-dev` 原语（`tone`/`statusRow`/`kvRow`/`collapseLines`/`moreLinesHint`/`linesToText`），与其他扩展共用同一套样式映射。
+
 ## 安装与启用
 
 要求：Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.82.1` 的 Pi。
@@ -84,8 +86,9 @@ Doclint 没有独立配置文件。全部可调行为来自工具参数（`root`
 - `src/checks.ts`：`runDocLint()` 纯函数编排全部检查项；输入是 `RepoFileSystem` adapter + 根路径，输出 `LintReport`（finding 带 file/check/severity/message），finding 按发现顺序保留并应用 `maxFindings` 上限。
 - `src/fs-adapter.ts`：node:fs 实现的 adapter 与 `resolveLintRoot()`（realpath + workspace 边界校验）。
 - `src/format.ts`：按文件分组渲染文本，`truncateHead` 应用输出预算。
-- `src/index.ts`：仅装配——注册 `doc_lint` 工具与 `/doclint` 命令；扩展不持有进程、timer 或 watcher，shutdown 无需清理。
-- `test/`：`scan.test.ts`（扫描器边界）、`checks.test.ts`（内存 adapter 驱动的全部检查项，含 malformed manifest 输入）、`format.test.ts`（分组、排序、截断）、`index.test.ts`（注册接线、真实临时仓库执行、workspace 外 root 失败路径、取消、print 模式无 UI 路径）；`test/mock-fs.ts` 是共享的内存 adapter 与 fixture。
+- `src/renderer.ts`：`doc_lint` 的 TUI 渲染钩子（call 卡片标题、结果状态行/分组 finding 列表/折叠），全部经 `pi-uikit-dev` 原语着色，不接触模型面向的文本。
+- `src/index.ts`：仅装配——注册 `doc_lint` 工具（含 `renderCall`/`renderResult`）与 `/doclint` 命令；扩展不持有进程、timer 或 watcher，shutdown 无需清理。
+- `test/`：`scan.test.ts`（扫描器边界）、`checks.test.ts`（内存 adapter 驱动的全部检查项，含 malformed manifest 输入）、`format.test.ts`（分组、排序、截断）、`index.test.ts`（注册接线、渲染钩子接线与真实 details 渲染、真实临时仓库执行、workspace 外 root 失败路径、取消、print 模式无 UI 路径）、`renderer.test.ts`（call 标题与 Text 复用、状态行/分组/严重级着色形状、折叠与展开、omitted 与 details 上限尾注、error/malformed details 回退）；`test/mock-fs.ts` 是共享的内存 adapter 与 fixture。
 
 ## 开发与验证
 

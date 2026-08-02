@@ -9,6 +9,7 @@ import { Type } from "typebox";
 import { runDocLint, type LintReport } from "./checks.ts";
 import { nodeRepoFileSystem, resolveLintRoot } from "./fs-adapter.ts";
 import { formatReport } from "./format.ts";
+import { renderDocLintCall, renderDocLintResult } from "./renderer.ts";
 
 /** Findings copied into tool details; the full list stays in the text content. */
 const MAX_DETAILS_FINDINGS = 50;
@@ -68,6 +69,14 @@ export default function doclintExtension(pi: ExtensionAPI): void {
           findings: report.findings.slice(0, MAX_DETAILS_FINDINGS),
         },
       };
+    },
+    // Model-facing content stays the plain formatReport text above; these
+    // hooks only style the TUI card via pi-uikit-dev primitives.
+    renderCall(args, theme, context) {
+      return renderDocLintCall(args, theme, context);
+    },
+    renderResult(result, options, theme, context) {
+      return renderDocLintResult(result, options, theme, context);
     },
   });
 

@@ -61,7 +61,7 @@ muted 键 + text 值的键值行；`[text]` 形式的短标记。
 }
 ```
 
-然后按包名导入：`import { toolCallTitle } from "pi-uikit-dev";`。uikit 无扩展入口，消费方的 `pi.extensions` 无需为其增加资源顺序条目。当前消费方：`ast-grep`、`goal`、`hashline`、`jaron`、`plan`、`request`、`rg`、`todo`（全部含 UI 着色的扩展均已接入；`lsp`、`diffreport`、`telemetry`、`enforce`、`notify`、`doclint` 无工具 UI，无需接入）。
+然后按包名导入：`import { toolCallTitle } from "pi-uikit-dev";`。uikit 无扩展入口，消费方的 `pi.extensions` 无需为其增加资源顺序条目。当前消费方：`ast-grep`、`diffreport`、`doclint`、`goal`、`hashline`、`jaron`、`lsp`、`plan`、`request`、`rg`、`todo`（全部拥有工具 UI 或自有渲染面的扩展均已接入；`telemetry`、`enforce`、`notify` 只有 `ctx.ui.notify` 输出——host 会按严重级统一着色，没有自有渲染面，刻意不接入）。
 
 ## 测试
 

@@ -33,7 +33,7 @@ jobs:
           - extension: plan
             testDependencies: "goal ast-grep uikit"
           - extension: lsp
-            testDependencies: ""
+            testDependencies: "uikit"
           - extension: uikit
             testDependencies: ""
           - extension: hashline
@@ -47,7 +47,7 @@ jobs:
           - extension: jaron
             testDependencies: "uikit"
           - extension: diffreport
-            testDependencies: ""
+            testDependencies: "uikit"
           - extension: telemetry
             testDependencies: ""
           - extension: enforce
@@ -55,7 +55,7 @@ jobs:
           - extension: notify
             testDependencies: ""
           - extension: doclint
-            testDependencies: ""
+            testDependencies: "uikit"
     defaults:
       run:
         working-directory: ${{ matrix.extension }}

@@ -29,7 +29,9 @@ import {
   formatWorkspaceSymbols,
   type SeverityFilter,
 } from "./format.ts";
+import { tone } from "pi-uikit-dev";
 import { resolvePosition } from "./positions.ts";
+import { renderLspCall, renderLspResult } from "./renderer.ts";
 import { resolveWorkspaceFile } from "./roots.ts";
 import { ServerManager } from "./server-manager.ts";
 import { LspOutputStore, type LspTruncationSummary } from "./output.ts";
@@ -126,7 +128,7 @@ export default function lspExtension(pi: ExtensionAPI): void {
       const startedAt = Date.now();
       const activeManager = await getManager(ctx);
       const limit = Math.min(params.limit ?? activeManager.config.maxResults, 500);
-      ctx.ui.setStatus("lsp", `LSP: ${params.action}`);
+      ctx.ui.setStatus("lsp", tone(ctx.ui.theme, "accent", `LSP: ${params.action}`));
       try {
         const result = await executeAction(activeManager, params, limit, signal);
         signal?.throwIfAborted();
@@ -173,6 +175,12 @@ export default function lspExtension(pi: ExtensionAPI): void {
       } finally {
         ctx.ui.setStatus("lsp", undefined);
       }
+    },
+    renderCall(args, theme, context) {
+      return renderLspCall(args, theme, context.lastComponent);
+    },
+    renderResult(result, options, theme, context) {
+      return renderLspResult(result, { expanded: options.expanded, isError: context.isError }, theme);
     },
   });
 

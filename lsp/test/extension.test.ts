@@ -85,6 +85,10 @@ test("lsp rename_preview reports every document change and preserves its full ar
     ui: {
       notify: () => undefined,
       setStatus: () => undefined,
+      theme: {
+        fg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      },
     },
   } as unknown as ExtensionContext;
 
@@ -183,6 +187,10 @@ test("lsp syncs only a successful ast-grep apply result", async () => {
     ui: {
       notify: () => undefined,
       setStatus: () => undefined,
+      theme: {
+        fg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      },
     },
   } as unknown as ExtensionContext;
 

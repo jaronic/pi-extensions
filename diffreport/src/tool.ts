@@ -16,6 +16,7 @@ import {
   formatPatchEvidence,
 } from "./formatter.ts";
 import type { DiffReportOutputStore } from "./output.ts";
+import { renderDiffReportCall, renderDiffReportResult } from "./renderer.ts";
 import type { EvidenceSource, EvidenceView } from "./types.ts";
 
 const Parameters = Type.Object({
@@ -50,7 +51,7 @@ const Parameters = Type.Object({
   })),
 }, { additionalProperties: false });
 
-interface DiffReportToolParams {
+export interface DiffReportToolParams {
   source: EvidenceSource;
   view?: EvidenceView;
   target?: string;
@@ -90,6 +91,12 @@ export function registerDiffReportTool(pi: ExtensionAPI, outputStore: DiffReport
       "Ground the final deliverable in diff_report evidence: a detailed Markdown business-logic report with evidence-backed diagrams and tradeoff analysis, not a code review.",
     ],
     parameters: Parameters,
+    renderCall(args, theme, context) {
+      return renderDiffReportCall(args, theme, context.lastComponent);
+    },
+    renderResult(result, options, theme, context) {
+      return renderDiffReportResult(result, options, theme, context);
+    },
     async execute(_toolCallId, params: DiffReportToolParams, signal, onUpdate, ctx) {
       if (signal?.aborted) throw new Error("Diff report evidence collection was cancelled.");
       const view = params.view ?? "overview";

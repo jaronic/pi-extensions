@@ -38,9 +38,11 @@
     "node": ">=22.19.0"
   },
   "bundledDependencies": [
-    "pi-request-ui-dev"
+    "pi-request-ui-dev",
+    "pi-uikit-dev"
   ],
   "dependencies": {
-    "pi-request-ui-dev": "file:../request"
+    "pi-request-ui-dev": "file:../request",
+    "pi-uikit-dev": "file:../uikit"
   }
 }

@@ -12,7 +12,8 @@
 - client 按 `server + workspace root` 懒启动并复用，空闲后自动 shutdown。
 - diagnostics 对所有匹配服务器并行请求，保留成功结果并单独报告局部失败。
 - `edit`/`write` 工具成功后，已启动且覆盖该文件的 client 会同步最新磁盘内容；`ast_grep_edit` 仅在成功返回严格的 v1 `edit-apply` details 时触发同样同步，并把 details path 当作 literal machine path（不会剥离 `@`），preview、错误结果和 malformed details 均忽略。
-- 工具运行时 TUI status 显示当前 action；`/lsp` 显示已配置和活跃的 client。
+- 工具运行时 TUI status 以 accent 着色显示当前 action（经 `pi-uikit-dev` 的 `tone` 与 `ctx.ui.theme`）；`/lsp` 显示已配置和活跃的 client。
+- 工具卡片与结果渲染走自定义 `renderCall`/`renderResult`（`src/renderer.ts`），样式全部经 `pi-uikit-dev` 原语：调用卡片标题用 `toolCallTitle`（`LSP · action target`，rename 时 target 为 `file → newName`）并用 `reuseTextComponent` 复用流式 Text；结果首行是 `statusRow`（`✓`/`!` + action + 结果数，`status` action 显示 `active / configured`），正文按行着色（诊断 error/warning、`[server] ERROR` 与 `… omitted` 尾行分别着 error/warning/muted，其余 toolOutput），`collapseLines` 折叠 15 行、`moreLinesHint` 提示展开；截断时以 `kvRow` 追加完整 artifact 路径。模型可见的 `content` 文本不受渲染影响。
 - `server` 通常应省略；指定时优先按配置的 server ID 路由。若没有同名 ID，唯一的 LSP language ID 也可作为别名，例如 `java` 解析为 `jdtls`；多个候选会明确报歧义，不会任意选择。
 - 输出受 Pi 的 2,000 行/50 KiB 上限约束；formatter 在全局限额前保留每个原始 replacement，截断时完整格式化结果写入权限为 `0600` 的临时文件，并在 session reload/shutdown 时清理。
 - 所有 file action 都将 realpath 限制在当前 workspace 内，符号链接不能绕过边界。
@@ -269,6 +270,7 @@ Server patch 除 `initOptions` 外是浅合并。修改嵌套对象时应提供�
 ## 实现原理与关键节点
 
 - `src/index.ts`：`lsp` 工具 schema、action dispatch、`/lsp`、状态 UI、tool-result 同步 wiring 和 shutdown。
+- `src/renderer.ts`：`renderCall`/`renderResult` 的 uikit 渲染（标题、statusRow 首行、按行 severity 着色、折叠与截断提示），以及 details 的防御性解码。
 - `src/config.ts`：内置服务器、配置路径、严格 decoder、分层 patch、schema normalization、后缀/role 路由。
 - `src/server-manager.ts`：client 缓存、候选 fallback、并行 diagnostics、idle timer 和有界 shutdown。
 - `src/logger.ts`：默认开启 `error` 级、由 `PI_LSP_LOG`/`PI_EXT_LOG` 环境变量或全局 `lsp.json` 的 `logEnabled`/`logLevel` 控制、首次写入才创建日志目录、写入 `getAgentDir()/logs/lsp.log` 并有界轮转、C1 中和、吞掉自身失败的排查日志。与 hashline 的同名文件逐字节相同，避免跨包生产导入。
