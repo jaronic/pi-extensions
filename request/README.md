@@ -30,7 +30,7 @@ Request 本身不分发、不选择、也不写入任何 theme；所有颜色只
 
 ## `ask` 工具
 
-`ask` 接受 1–10 个相关 choice question。每题有稳定 `id`、简短导航 `header`、问题正文、1–10 个选项，以及可选的 `recommended` 零基索引和 `multi` 多选标志。`Other (type your own)` 由工具自动追加，不应在 options 中重复声明。
+`ask` 接受 1–10 个相关 choice question。每题有稳定 `id`、简短导航 `header`、问题正文、1–10 个选项，以及可选的 `recommended` 零基索引和 `multi` 多选标志。`Other (type your own)` 由工具自动追加，不应在 options 中重复声明。工具的 description 与逐条点名 `ask` 的 `promptGuidelines` 强调：需求存在会改变实现结果的实质歧义时，应调用 `ask` 主动提问而非自行假设；仅当仓库上下文无法解决该实质选择时才使用。
 
 ```json
 {

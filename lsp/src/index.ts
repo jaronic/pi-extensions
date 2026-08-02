@@ -117,11 +117,8 @@ export default function lspExtension(pi: ExtensionAPI): void {
     promptSnippet: "LSP diagnostics, hover, definitions, references, symbols, and safe refactor previews",
     promptGuidelines: [
       "Before renaming or changing the signature of an exported symbol, MUST run lsp action=references to find every callsite; text search misses re-exports and aliased usages.",
-      "For a rename, use lsp action=rename_preview for the complete affected-location preview, then apply the edits; faster and more complete than rg plus manual edits.",
-      "Use lsp for semantic definitions, references, type information, diagnostics, and symbol-aware rename previews.",
-      "Use lsp action=diagnostics after meaningful edits when a matching language server is installed.",
-      "Usually omit server. When selecting one, use its configured ID or a unique language ID such as java for jdtls.",
-      "lsp line and column inputs are 1-based; use symbol only when it has one unambiguous occurrence in the file.",
+      "Use lsp action=rename_preview for the complete affected-location preview of a rename, then apply the edits with the file editing tools; run lsp action=diagnostics after meaningful edits when a matching language server is installed.",
+      "Use lsp instead of text search for definitions, hover type information, implementations, and symbols. Usually omit the lsp server argument; lsp line and column inputs are 1-based, and symbol only when it has one unambiguous occurrence in the file.",
     ],
     parameters: Parameters,
     async execute(_toolCallId, params: Parameters, signal, _onUpdate, ctx) {

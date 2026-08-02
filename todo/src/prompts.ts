@@ -8,16 +8,16 @@ import {
 } from "./state.ts";
 
 export const TODO_PROMPT_GUIDELINES = [
-  "Decide for yourself when a Todo board is worth creating: it pays off for multi-step execution and whenever the user asks to track a checklist, while single-step work or pure Q&A rarely needs one. Plan approval always hands its approved steps onto this board; never skip or replace that transferred board. Before mirroring a request's list into tasks, judge whether the items are actual execution scope rather than requirements, examples, questions, options, or hypotheses.",
-  "Preserve every explicit user item as a separate task. Never merge, sample, omit, or silently truncate items; report a hard limit instead.",
-  "Use concise actionable task text describing what must be accomplished. Initialize only before the first tracked execution step, and append newly discovered or newly requested scope immediately. Appending to a settled board revives it with continuous IDs and preserved history; reserve init for replacing a settled board with a genuinely new unit of work.",
-  "Update the active task in the same turn as observable progress. Mark done only after implementation and that task's verification are complete.",
-  "Keep unresolved errors and partial work inProgress. Use blocked only for a concrete external dependency, user decision, or missing permission, with the exact unblocking condition.",
-  "Use drop with a reason when scope is explicitly removed; never disguise abandoned work as completed. Reopen immediately when a closed task regresses or returns to scope. When a pivot retires many tasks at once, drop them in one call with an id array and a shared reason instead of issuing one call per task.",
-  "When a mutation settles the board, its result includes a settled recap; summarize for the user in that same reply what was completed and what was dropped instead of leaving the outcome implicit.",
-  "While Plan approval is active, do not mutate Todo. After approval the transferred board is already initialized: never re-run init or re-append the transferred steps; continue only through the existing Todo tasks and their numeric #IDs.",
-  "Strict-schema providers require every declared field: set fields unused by the selected op to null. For view, null phase/includeClosed/offset/limit means the documented default.",
-  "A Todo state update should not be the only action in a turn when the corresponding read, edit, or verification can run alongside it.",
+  "Decide for yourself when a Todo board is worth creating with todo: it pays off for multi-step execution and whenever the user asks to track a checklist, while single-step work or pure Q&A rarely needs the todo tool. Plan approval always hands its approved steps onto this board; never skip or replace that transferred board. Before mirroring a request's list into todo tasks, judge whether the items are actual execution scope rather than requirements, examples, questions, options, or hypotheses.",
+  "Preserve every explicit user item as a separate todo task. Never merge, sample, omit, or silently truncate items in todo; report a hard limit instead.",
+  "Use concise actionable todo task text describing what must be accomplished. Initialize only before the first tracked execution step, and append newly discovered or newly requested scope to todo immediately. Appending to a settled todo board revives it with continuous IDs and preserved history; reserve todo init for replacing a settled board with a genuinely new unit of work.",
+  "Update the active todo task in the same turn as observable progress. Mark the task done via todo only after implementation and that task's verification are complete.",
+  "Keep unresolved errors and partial work inProgress. Use todo blocked only for a concrete external dependency, user decision, or missing permission, with the exact unblocking condition.",
+  "Use todo drop with a reason when scope is explicitly removed; never disguise abandoned work as completed. Reopen immediately when a closed task regresses or returns to scope. When a pivot retires many tasks at once, drop them in one todo call with an id array and a shared reason instead of issuing one call per task.",
+  "When a todo mutation settles the board, its result includes a settled recap; summarize for the user in that same reply what was completed and what was dropped instead of leaving the outcome implicit.",
+  "While Plan approval is active, do not mutate todo. After approval the transferred board is already initialized: never re-run init or re-append the transferred steps; continue only through the existing todo tasks and their numeric #IDs.",
+  "Strict-schema providers require every declared todo field: set fields unused by the selected op to null. For todo view, null phase/includeClosed/offset/limit means the documented default.",
+  "A todo state update should not be the only action in a turn when the corresponding read, edit, or verification can run alongside it.",
 ] as const;
 
 function escapeXml(value: string): string {

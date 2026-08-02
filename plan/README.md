@@ -100,6 +100,8 @@ stateDiagram-v2
 
 ### Agent 工具
 
+四个工具的 description 都说明调用时机，并各带一行 `promptSnippet` 与逐条点名工具名的 `promptGuidelines`，使它们进入 system prompt 的 Available tools 段。`report_plan_blocked` 与 `request_plan_choice`/`answer_plan_choice` 属于边缘路径：其引导只保证元数据准确，不主动推广调用。
+
 #### `submit_plan`
 
 仅在 `planning` 启用，一次提交完整计划：

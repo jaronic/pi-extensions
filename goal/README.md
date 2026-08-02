@@ -70,7 +70,7 @@ pi --extension ./src/index.ts
 | `get_goal` | 无 | 仅在目标活跃时启用；当前 prompt 已含完整状态时不应重复读取。 |
 | `update_goal` | 完成分支：`status`, `evidence[]`；阻塞分支：`status`, `reason`, `attempted[]`, `unblocksWhen` | 仅在目标活跃时启用；Plan 活跃期间 Goal 不可能恢复为 active。完成必须逐项提交 requirement-to-evidence 证据，阻塞必须说明真实外部阻碍、已尝试动作及精确解除条件。 |
 
-用户通常使用 `/goal` 命令；这些工具用于 agent 在执行过程中创建或结束目标。
+用户通常使用 `/goal` 命令；这些工具用于 agent 在执行过程中创建或结束目标。三个工具的 description 说明调用时机，`promptSnippet` 使其进入 system prompt 的 Available tools 段，`promptGuidelines` 逐条点名工具名；`create_goal` 的引导保持低频语义——仅在用户明确要求时创建，绝不从普通任务推断 Goal。
 
 ## 状态与生命周期
 

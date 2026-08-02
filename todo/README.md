@@ -19,7 +19,7 @@ Todo 适合以下工作：
 
 启用后：
 
-- agent 获得一个顺序执行、带显式全局使用说明的 `todo` 工具；只要没有更严格的 active-tool lease 隐藏它，模型会从工具 schema、description、`promptSnippet` 和 `promptGuidelines` 感知其能力；
+- agent 获得一个顺序执行、带显式全局使用说明的 `todo` 工具；只要没有更严格的 active-tool lease 隐藏它，模型会从工具 schema、description、`promptSnippet` 和逐条点名 `todo` 的 `promptGuidelines` 感知其能力；引导强调多步任务先行登记为任务、逐项验证后才 `done` 回执，以及 settled recap 必须在同一回复中向用户总结；
 - 当前 Pi 进程中的其他扩展可通过 `pi-extensions:todo-service:v1` 读写同一普通 board；声明 Todo package 依赖的 extension 则直接持有同一 `TodoService`。两条入口复用模型工具的 reducer、校验、输出、Plan gate 和 branch persistence；
 - TUI 使用独立的 `todo` widget，最多 12 行；Plan 候选期隐藏普通 board，批准后 Plan UI 清除，Todo 以相同的 `#1`、`#2` 样式继续显示转交任务；
 - open task 的有界摘要会注入每轮 system prompt，所有文本按不可信数据处理；

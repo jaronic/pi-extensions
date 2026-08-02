@@ -16,6 +16,7 @@
 - `server` 通常应省略；指定时优先按配置的 server ID 路由。若没有同名 ID，唯一的 LSP language ID 也可作为别名，例如 `java` 解析为 `jdtls`；多个候选会明确报歧义，不会任意选择。
 - 输出受 Pi 的 2,000 行/50 KiB 上限约束；formatter 在全局限额前保留每个原始 replacement，截断时完整格式化结果写入权限为 `0600` 的临时文件，并在 session reload/shutdown 时清理。
 - 所有 file action 都将 realpath 限制在当前 workspace 内，符号链接不能绕过边界。
+- `lsp` 工具携带 description、一行 `promptSnippet` 和 1–3 条 `promptGuidelines`（每条显式点名 `lsp`），确保进入系统提示词的 Available tools 与 Guidelines 段。
 
 该插件是 LSP client，不包含 language server 本身。对应可执行文件必须在 `PATH` 中；server 仅在第一次实际请求时启动，因此 `/lsp` 显示“configured”不代表二进制已安装。
 

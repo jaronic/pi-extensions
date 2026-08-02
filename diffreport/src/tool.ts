@@ -79,15 +79,15 @@ export function registerDiffReportTool(pi: ExtensionAPI, outputStore: DiffReport
   pi.registerTool({
     name: "diff_report",
     label: "Diff Report Evidence",
-    description: "Collect bounded Git evidence for a multi-pass business-logic report. This tool does not generate the final report: start with view='overview', then use targeted patch/history passes and repository navigation before writing Markdown.",
+    description: "Collect bounded Git evidence for a multi-pass business-logic report. Use it to verify what actually changed before delivering changes or writing a change report. This tool does not generate the final report: start with view='overview', then use targeted patch/history passes and repository navigation before writing Markdown.",
     promptSnippet: "Collect Git evidence for business-flow and decision-chain analysis",
     promptGuidelines: [
       "Use diff_report view='overview' first for each selected source; its output is inventory, never the final report.",
       "After diff_report overview, run at least one targeted patch or history pass and trace unchanged callers, state, persistence, and external effects with repository tools.",
       "Treat diff_report source and paths as evidence anchors, not hard investigation boundaries.",
-      "Treat a user-provided description as context to verify, never as a commit-message or file filter.",
+      "In diff_report, treat a user-provided description as context to verify, never as a commit-message or file filter.",
       "Use the Request ask tool for material scope or intent ambiguity; do not ask clarifying questions as plain prose.",
-      "The final deliverable is a detailed Markdown business-logic report with evidence-backed diagrams and tradeoff analysis, not a code review.",
+      "Ground the final deliverable in diff_report evidence: a detailed Markdown business-logic report with evidence-backed diagrams and tradeoff analysis, not a code review.",
     ],
     parameters: Parameters,
     async execute(_toolCallId, params: DiffReportToolParams, signal, onUpdate, ctx) {

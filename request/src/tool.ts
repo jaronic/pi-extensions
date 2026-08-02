@@ -108,11 +108,12 @@ export function registerAskTool(pi: ExtensionAPI, runtime: AskToolRuntime): void
     name: "ask",
     label: "Ask",
     description:
-      "Ask the user one or more related questions in an interactive request UI. Use only when a material choice changes the implementation; options should be concise and distinct. Other is added automatically.",
+      "Ask the user one or more related questions in an interactive request UI. When a requirement is ambiguous and the answer would change what you build, ask instead of assuming. Use only when a material choice changes the implementation; options should be concise and distinct. Other is added automatically.",
     promptSnippet: "Interactive single- or multi-question user request",
     promptGuidelines: [
       "Use ask only when repository context cannot resolve a material user choice.",
-      "Keep option labels short; put tradeoffs in description and detailed examples in preview.",
+      "Prefer calling ask when a requirement is genuinely ambiguous and the answer changes the implementation, rather than guessing and reworking.",
+      "Keep ask option labels short; put tradeoffs in description and detailed examples in preview.",
       "Group related questions in one ask call instead of serial prompts.",
     ],
     parameters: AskParams,

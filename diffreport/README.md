@@ -99,7 +99,7 @@ TUI 中所有来源、边界和后续澄清均使用 Request。`print/json` 等�
 
 ## Tool: `diff_report`
 
-该 tool 是证据采集器，不是最终报告生成器。
+该 tool 是证据采集器，不是最终报告生成器。description 与逐条点名 `diff_report` 的 `promptGuidelines` 强调在交付变更或撰写变更报告前先取证：用 Git 证据锚定结论，再写出多 pass 的业务逻辑报告。
 
 | 参数 | 必填 | 默认 | 语义 |
 | --- | --- | --- | --- |

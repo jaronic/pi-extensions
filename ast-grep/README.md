@@ -22,6 +22,7 @@
 - `previewId` 绑定 canonical workspace/path、语义参数、source bytes 和实际 replacements。它只防 stale write，不代表用户批准，也不持久化授权。
 - Preview 必须完整容纳全部 before/after；无法容纳时整次失败且不签发 ID。
 - v1 不提供多文件事务、project YAML rules、自动 formatter、语言推断或 UI approval。
+- 两个工具都携带 description、一行 `promptSnippet` 和 1–3 条 `promptGuidelines`（每条显式点名对应工具名），进入系统提示词的 Available tools 与 Guidelines 段。
 
 ## 安装与启用
 
