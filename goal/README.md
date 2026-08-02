@@ -97,15 +97,15 @@ stateDiagram-v2
 - continuation message 去重：已有待处理消息或已有 continuation 时不会重复排队；context hook 只保留当前目标最新的一条隐藏续跑消息。自动 continuation 若没有任何工具调用，则设置 session 内续跑抑制但不篡改 Goal 状态；新用户 turn、`/goal resume` 或目标编辑会重新启用。
 - session journal 解码失败时拒绝恢复不安全状态，并在有 UI 时显示警告；未知状态会保守恢复为 paused。
 
-## 与 Plan 插件协作
+## 与 Plan / Loop 插件协作
 
-Goal 与 Plan 使用版本化 `pi-extensions:exclusive-workflow:v1` query channel 仲裁同一 session 的 active workflow：
+Goal 与 Plan、Loop 使用版本化 `pi-extensions:exclusive-workflow:v1` query channel 仲裁同一 session 的 active workflow：
 
-- active Goal 存在时，Plan 拒绝启动；用户必须先 pause、complete 或 clear Goal。
-- Plan 任一活跃 phase 存在时，`/goal <objective>`、`create_goal`、`/goal resume` 以及会恢复 active 状态的 edit 都拒绝；paused/terminal Goal 状态仍可保留和查看。
-- branch restore 若同时发现 active Plan 与 active Goal，Goal 在所有 session handlers 完成后持久化为 `paused`，使结果不依赖扩展加载顺序。
+- active Goal 存在时，Plan 拒绝启动、Loop 拒绝创建/恢复；用户必须先 pause、complete 或 clear Goal。
+- Plan 任一活跃 phase 存在时（或 active Loop 存在时），`/goal <objective>`、`create_goal`、`/goal resume` 以及会恢复 active 状态的 edit 都拒绝；paused/terminal Goal 状态仍可保留和查看。
+- branch restore 若同时发现 active Plan 与 active Goal，Goal 在所有 session handlers 完成后持久化为 `paused`，使结果不依赖扩展加载顺序；恢复冲突的固定优先级为 **Plan > Goal > Loop**（Loop 向 active Goal/Plan 让步）。
 - Plan approve/cancel 后不自动恢复 paused Goal。批准产生的执行由普通 Todo board 独立跟踪；用户可在 Plan 退出后显式 `/goal resume`。
-- query 带 session ID；其他 session 的状态不会参与仲裁。协议在两个包各自的 `src/workflow-mode.ts` 中独立定义，避免 production cross-import。
+- query 带 session ID；其他 session 的状态不会参与仲裁。协议在三个包各自的 `src/workflow-mode.ts` 中独立定义（字节一致，避免 production cross-import）；**Goal/Plan/Loop 三包必须原子升级**，混装旧版本 unsupported。
 
 ## 与 Request UI 插件协作
 

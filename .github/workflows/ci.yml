@@ -31,7 +31,9 @@ jobs:
           - extension: goal
             testDependencies: "uikit"
           - extension: plan
-            testDependencies: "goal ast-grep uikit"
+            testDependencies: "goal ast-grep uikit loop"
+          - extension: loop
+            testDependencies: "uikit goal plan"
           - extension: lsp
             testDependencies: "uikit"
           - extension: uikit
@@ -43,7 +45,7 @@ jobs:
           - extension: rg
             testDependencies: "uikit"
           - extension: todo
-            testDependencies: "goal plan request uikit"
+            testDependencies: "goal plan request uikit loop"
           - extension: jaron
             testDependencies: "uikit"
           - extension: diffreport

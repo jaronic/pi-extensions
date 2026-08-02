@@ -212,7 +212,7 @@ make pi-extensions-on
 make pi-extensions-status
 ```
 
-`make pi-extensions-off` 只删除仍指向当前仓库的十四个链接；`make pi-extensions-toggle` 在全部启用时关闭，否则补齐缺失链接。冲突的普通文件、目录和外部软链接会导致操作在修改前失败。
+`make pi-extensions-off` 只删除仍指向当前仓库的十五个链接；`make pi-extensions-toggle` 在全部启用时关闭，否则补齐缺失链接。冲突的普通文件、目录和外部软链接会导致操作在修改前失败。
 
 然后在 Pi 中执行 `/reload`。只链接 package，不链接仓库根目录；根目录没有 `package.json`。完整的扩展与主题开关可使用 `make pi-on|off|toggle|status`，临时试运行单文件可使用 `pi -e ./path/to/extension.ts`。
 

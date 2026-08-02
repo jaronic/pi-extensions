@@ -64,7 +64,7 @@ stateDiagram-v2
 
 `planning` 阶段注入完整的英文规划契约：
 
-- Plan 与 Goal 是互斥的 active workflow；启动 Plan 前必须暂停、完成或清除 active Goal，Plan 活跃时不能创建或恢复 Goal。
+- Plan 与 Goal、Loop 是互斥的 active workflow；启动 Plan 前必须暂停、完成或清除 active Goal/Loop，Plan 活跃时不能创建或恢复 Goal/Loop。
 - agent 先通过仓库代码、配置、测试、历史和既有模式消除不确定性，不得询问能够自行查到的信息；具体路径、符号、命令和行为判断必须有证据。
 - 只有缺少正确规划所需事实、存在实质性取舍、假设可能破坏数据或契约，或业务语义无法从代码和测试确定时，才使用 `request_plan_choice` 或外部 Request `ask`；提供 2–5 个有区别的选项与取舍描述，不得询问工具可查的信息。
 - 每个顶层实施阶段都写明 Target、Change 和 Check，并按照真实依赖排序；计划层面还必须说明有证据支持的问题、为用户/调用方/系统带来的具体价值及方案理由，不得编造业务收益或影响指标。验证方式必须对应 bug、API、UI、数据库或内部重构的可观察行为；只能承诺当前已确认可执行的验证，真实 UI、外部服务或迁移环境不可用时应写明所需环境、手工路径和不可替代的成功信号。
@@ -183,14 +183,15 @@ Copy 把未装饰的完整 `renderPlan(plan)` 写入系统剪贴板，并保持 
 
 这既是安全边界，也是可靠性边界：没有界面会隐式批准，用户审阅长计划也不会让 `submit_plan` 因等待输入而超时。`/plan status` 可随时重新显示已持久化的完整候选计划。
 
-## 与 Goal 插件协作
+## 与 Goal / Loop 插件协作
 
-Plan 与 Goal 使用版本化 `pi-extensions:exclusive-workflow:v1` query channel 保证同一 session 只有一个 active workflow：
+Plan 与 Goal、Loop 使用版本化 `pi-extensions:exclusive-workflow:v1` query channel 保证同一 session 只有一个 active workflow：
 
-- active Goal 存在时，`/plan` 拒绝启动；用户需先 pause、complete 或 clear Goal。
-- Plan 任一活跃 phase 存在时，Goal 的 create/resume 及会恢复 active 状态的 edit 都拒绝；Plan 的 tool lease 也不暴露 Goal mutation 工具。
-- branch restore 若同时发现 active Plan 与 active Goal，Goal 在所有 session handlers 完成后持久化为 `paused`，避免依赖扩展加载顺序。
-- 查询带 session ID；其他 session 的状态不会参与仲裁。Plan 批准或取消后即不再占用 workflow，Todo 执行与 Goal 仍各自独立，系统不会自动恢复 paused Goal。
+- active Goal 或 active Loop 存在时，`/plan` 拒绝启动；用户需先 pause、complete/stop 或 clear 对应 workflow。
+- Plan 任一活跃 phase 存在时，Goal 与 Loop 的 create/resume 及会恢复 active 状态的 edit 都拒绝；Plan 的 tool lease 也不暴露 Goal/Loop mutation 工具。
+- branch restore 若同时发现 active Plan 与 active Goal/Loop，Goal 与 Loop 在所有 session handlers 完成后持久化为 `paused`，避免依赖扩展加载顺序（固定优先级 **Plan > Goal > Loop**）。
+- 查询带 session ID；其他 session 的状态不会参与仲裁。Plan 批准或取消后即不再占用 workflow，Todo 执行与 Goal/Loop 仍各自独立，系统不会自动恢复 paused 的 Goal/Loop。
+- **Goal/Plan/Loop 三包必须原子升级**（`exclusive-workflow:v1` 的 `target` 枚举含 `loop` 后，旧版调用方查询不到 Loop）；混装旧版本 unsupported。
 
 ## 与 Todo 插件协作
 

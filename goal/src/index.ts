@@ -20,7 +20,7 @@ import {
 } from "./protocol.ts";
 import { registerGoalCommand } from "./command.ts";
 import { registerGoalTools } from "./tools.ts";
-import { isExclusiveWorkflowActive, registerExclusiveWorkflow } from "./workflow-mode.ts";
+import { isAnyExclusiveWorkflowActive, registerExclusiveWorkflow } from "./workflow-mode.ts";
 
 export default function goalExtension(pi: ExtensionAPI): void {
   let goal: GoalState | null = null;
@@ -154,7 +154,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
   );
 
   function planIsActive(ctx: ExtensionContext): boolean {
-    return isExclusiveWorkflowActive(pi.events, ctx.sessionManager.getSessionId(), "plan");
+    return isAnyExclusiveWorkflowActive(pi.events, ctx.sessionManager.getSessionId(), "goal");
   }
 
   function settleRestoredExclusivity(ctx: ExtensionContext): void {

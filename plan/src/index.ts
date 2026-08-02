@@ -39,7 +39,7 @@ import { registerPlanCommand } from "./command.ts";
 import { registerPlanTools } from "./tools.ts";
 import { requestPlanReview, type PlanReviewDecision } from "./review.ts";
 import { requestPlanChoice } from "./clarification.ts";
-import { isExclusiveWorkflowActive, registerExclusiveWorkflow } from "./workflow-mode.ts";
+import { isAnyExclusiveWorkflowActive, registerExclusiveWorkflow } from "./workflow-mode.ts";
 import { createPlanArtifactStore, type PlanArtifactStore } from "./artifacts.ts";
 
 export interface PlanExtensionDependencies {
@@ -536,10 +536,10 @@ ${escapeXmlText(normalized)}
 
   const planRuntime = {
     getState: () => state,
-    isGoalActive: (ctx: ExtensionContext) => isExclusiveWorkflowActive(
+    isGoalActive: (ctx: ExtensionContext) => isAnyExclusiveWorkflowActive(
       pi.events,
       ctx.sessionManager.getSessionId(),
-      "goal",
+      "plan",
     ),
     setState(next: PlanState): void {
       state = next;

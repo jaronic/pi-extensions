@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import goalExtension from "../../goal/src/index.ts";
+import loopExtension from "../../loop/src/index.ts";
 import planExtension from "../src/index.ts";
 import { blockedDecision, ExtensionHarness } from "./harness.ts";
 import type { PlanExtensionDependencies } from "../src/index.ts";
@@ -965,4 +966,24 @@ test("legacy executing Plan journals restore as already handed off", async () =>
   assert.equal(harness.widgets.get("plan"), undefined);
   assert.equal(harness.getActiveTools().includes("update_plan_step"), false);
   assert.deepEqual(harness.getActiveTools(), [...originalTools, "ask", "todo"]);
+});
+
+test("Plan, Goal, and Loop register together and enforce exclusivity", async () => {
+  const harness = new ExtensionHarness();
+  goalExtension(harness.api);
+  loopExtension(harness.api);
+  registerTestPlan(harness);
+  await harness.emit("session_start", { type: "session_start", reason: "startup" });
+
+  await harness.command("plan");
+  assert.equal(harness.statuses.get("plan"), "Plan");
+
+  await harness.command("loop", "3 fix the tests");
+  assert.match(harness.notifications.at(-1)?.message ?? "", /another exclusive workflow/, "Loop cannot start during Plan");
+
+  await harness.command("plan", "cancel");
+  harness.clearPendingMessages();
+  await harness.command("loop", "3 fix the tests");
+  assert.equal(harness.statuses.get("loop"), "Loop 0/3");
+  assert.equal(harness.getActiveTools().includes("submit_plan"), false);
 });

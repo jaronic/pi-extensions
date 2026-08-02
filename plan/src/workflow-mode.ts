@@ -1,7 +1,8 @@
 import type { EventBus } from "@earendil-works/pi-coding-agent";
 
 export const EXCLUSIVE_WORKFLOW_CHANNEL = "pi-extensions:exclusive-workflow:v1";
-export type ExclusiveWorkflowMode = "plan" | "goal";
+export type ExclusiveWorkflowMode = "plan" | "goal" | "loop";
+export const EXCLUSIVE_WORKFLOW_MODES: readonly ExclusiveWorkflowMode[] = ["plan", "goal", "loop"];
 
 interface WorkflowQuery {
   readonly version: 1;
@@ -23,7 +24,7 @@ function isWorkflowQuery(value: unknown): value is WorkflowQuery {
     record.sessionId.length > 0 &&
     record.sessionId.trim() === record.sessionId &&
     [...record.sessionId].length <= 256 &&
-    (record.target === "plan" || record.target === "goal") &&
+    (record.target === "plan" || record.target === "goal" || record.target === "loop") &&
     typeof record.respond === "function";
 }
 
@@ -44,6 +45,16 @@ export function isExclusiveWorkflowActive(
   });
   events.emit(EXCLUSIVE_WORKFLOW_CHANNEL, query);
   return active;
+}
+
+export function isAnyExclusiveWorkflowActive(
+  events: EventBus,
+  sessionId: string,
+  except: ExclusiveWorkflowMode,
+): boolean {
+  return EXCLUSIVE_WORKFLOW_MODES.some(
+    (target) => target !== except && isExclusiveWorkflowActive(events, sessionId, target),
+  );
 }
 
 export function registerExclusiveWorkflow(
