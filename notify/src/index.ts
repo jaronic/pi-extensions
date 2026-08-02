@@ -20,7 +20,17 @@ export interface NotifyExtensionDeps {
   loadConfig?: (ctx: ExtensionContext) => Promise<LoadedNotifyConfig>;
   now?: () => number;
   dispatchTimeoutMs?: number;
+  /** Grace window after agent_settled before dispatching; a new run cancels the pending notification. */
+  settleGraceMs?: number;
 }
+
+/**
+ * agent_settled is emitted per agent run, not per logical task: handoffs,
+ * auto-continuations, and queued follow-ups all end one run and immediately
+ * start another. Wait a short grace window after settle and re-check liveness
+ * before notifying, so settle→resume transitions never report "idle".
+ */
+const DEFAULT_SETTLE_GRACE_MS = 3_000;
 
 export function createNotifyExtension(pi: ExtensionAPI, deps: NotifyExtensionDeps = {}): void {
   let loaded: LoadedNotifyConfig | null = null;
@@ -42,6 +52,34 @@ export function createNotifyExtension(pi: ExtensionAPI, deps: NotifyExtensionDep
     now: deps.now,
     dispatchTimeoutMs: deps.dispatchTimeoutMs,
   });
+  const settleGraceMs = deps.settleGraceMs ?? DEFAULT_SETTLE_GRACE_MS;
+  let settleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function cancelPendingSettle(): void {
+    if (settleTimer !== null) {
+      clearTimeout(settleTimer);
+      settleTimer = null;
+    }
+  }
+
+  async function confirmAndNotify(ctx: ExtensionContext): Promise<void> {
+    const current = loaded;
+    if (!current) return;
+    // Re-validate liveness at dispatch time: a run started during the grace
+    // window, or queued messages waiting to continue, mean the agent is not idle.
+    if (!ctx.isIdle() || ctx.hasPendingMessages()) return;
+    const report = await notifier.settled(current.config, runtimeEnabled, ctx.cwd);
+    if (!report.decision.notify || report.outcomes.length === 0) return;
+    const delivered = report.outcomes.some((outcome) => outcome.ok);
+    if (!delivered && ctx.hasUI) {
+      const failures = report.outcomes
+        .map((outcome) => (outcome.error ? `${outcome.channel} (${outcome.error})` : undefined))
+        .filter((entry): entry is string => entry !== undefined);
+      if (failures.length > 0) {
+        ctx.ui.notify(`Idle notification failed on every channel: ${failures.join(", ")}`, "warning");
+      }
+    }
+  }
 
   const loadConfig = deps.loadConfig ?? ((ctx: ExtensionContext) => loadNotifyConfig({
     globalPath: join(getAgentDir(), "notify.json"),
@@ -71,28 +109,27 @@ export function createNotifyExtension(pi: ExtensionAPI, deps: NotifyExtensionDep
   });
 
   pi.on("agent_start", () => {
+    cancelPendingSettle();
     notifier.agentStarted();
   });
 
-  // agent_settled — not agent_end — is the stable "completely idle" point:
-  // retries, compaction retries, and queued continuations have all finished.
-  pi.on("agent_settled", async (_event, ctx) => {
-    const current = loaded;
-    if (!current) return;
-    const report = await notifier.settled(current.config, runtimeEnabled, ctx.cwd);
-    if (!report.decision.notify || report.outcomes.length === 0) return;
-    const delivered = report.outcomes.some((outcome) => outcome.ok);
-    if (!delivered && ctx.hasUI) {
-      const failures = report.outcomes
-        .map((outcome) => (outcome.error ? `${outcome.channel} (${outcome.error})` : undefined))
-        .filter((entry): entry is string => entry !== undefined);
-      if (failures.length > 0) {
-        ctx.ui.notify(`Idle notification failed on every channel: ${failures.join(", ")}`, "warning");
-      }
-    }
+  // agent_settled — not agent_end — is the stable "completely idle" point per
+  // run, but a logical task can span many runs (handoffs, auto-continuations,
+  // queued follow-ups). Defer dispatch by a grace window; agent_start cancels
+  // the pending notification, and the timer re-checks liveness before sending.
+  pi.on("agent_settled", (_event, ctx) => {
+    cancelPendingSettle();
+    settleTimer = setTimeout(() => {
+      settleTimer = null;
+      confirmAndNotify(ctx).catch(() => {
+        // A failed confirmation must never surface as an extension error.
+      });
+    }, settleGraceMs);
+    settleTimer.unref?.();
   });
 
   pi.on("session_shutdown", () => {
+    cancelPendingSettle();
     notifier.shutdown();
   });
 

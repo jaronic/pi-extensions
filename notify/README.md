@@ -7,6 +7,7 @@
 ## 触发与防抖
 
 - 核心触发是 `agent_settled` 事件，而不是 `agent_end`：`agent_end` 之后仍可能自动重试、压缩重试或处理 follow-up，只有 `agent_settled` 表示没有后续自动行为的稳定空闲点。
+- **空闲确认窗口**：`agent_settled` 是按"一次 agent 运行"发出的，而一个逻辑任务可能跨多次运行——Plan 交接、Goal 自动续跑、排队的 follow-up、用户打断后立刻追问，都是上一个 run settle 后立刻开始新 run，此时直接通知就是"还在运行中"的误报。因此 settle 后不立即发送，而是等待 3 秒宽限期（`DEFAULT_SETTLE_GRACE_MS`）：宽限期内触发 `agent_start` 则取消本次待发通知；宽限期结束时再用 `ctx.isIdle()` 与 `ctx.hasPendingMessages()` 复核，任一不满足（新运行已开始、或有排队消息等待继续）则跳过。
 - 每次 `agent_start` 记录运行开始时间；settle 时先经过纯函数门控（`src/state.ts` 的 `decideSettledNotification`）：
   - `enabled`（配置）与 `/notify off`（运行时）任一为关则跳过；
   - `minTurnSeconds > 0` 时，短于该阈值的运行不通知（避免琐碎秒回的打扰）；
@@ -123,4 +124,4 @@ npm run check    # tsc --noEmit
 npm test         # node --import tsx --test test/*.test.ts
 ```
 
-测试覆盖：配置解析/合并/分层与环境变量（含 malformed 输入 fail closed、secret 不泄漏）、SSRF 字面与 DNS 校验、三个通道适配器（含转义、超时/失败 outcome、token 不泄漏）、纯门控逻辑，以及 harness 级的注册形状、settle 触发、去抖、时长阈值、`/notify` 各子命令、print 无 UI 路径、配置加载失败和幂等 shutdown。`test/harness.ts` 在 `test/*.test.ts` glob 之外，提供内存版 ExtensionAPI/Context 与录制通道。
+测试覆盖：配置解析/合并/分层与环境变量（含 malformed 输入 fail closed、secret 不泄漏）、SSRF 字面与 DNS 校验、三个通道适配器（含转义、超时/失败 outcome、token 不泄漏）、纯门控逻辑，以及 harness 级的注册形状、settle 触发、空闲确认窗口（宽限期内新 run 取消、idle/pending 复核、shutdown 取消）、去抖、时长阈值、`/notify` 各子命令、print 无 UI 路径、配置加载失败和幂等 shutdown。`test/harness.ts` 在 `test/*.test.ts` glob 之外，提供内存版 ExtensionAPI/Context 与录制通道。

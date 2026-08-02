@@ -6,6 +6,9 @@ import type { FakeChannel } from "./harness.ts";
 import { fakeChannel, NotifyHarness } from "./harness.ts";
 
 const T0 = 1_700_000_000_000;
+const GRACE_MS = 15;
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 interface SetupOptions {
   overlay?: NotifyConfigOverlay;
@@ -30,6 +33,7 @@ function setup(options: SetupOptions = {}) {
       return loaded;
     },
     now: () => now,
+    settleGraceMs: GRACE_MS,
   });
   return { harness, channels, loaded, advance: (ms: number) => { now += ms; } };
 }
@@ -37,6 +41,7 @@ function setup(options: SetupOptions = {}) {
 async function startAndSettle(harness: NotifyHarness): Promise<void> {
   await harness.emit("agent_start");
   await harness.emit("agent_settled");
+  await sleep(GRACE_MS + 30);
 }
 
 describe("notify extension registration", () => {
@@ -78,10 +83,12 @@ describe("agent_settled trigger", () => {
     await harness.emit("agent_start");
     advance(5_000);
     await harness.emit("agent_settled");
+    await sleep(GRACE_MS + 30);
     assert.equal(channels[0].sends.length, 0);
     await harness.emit("agent_start");
     advance(61_000);
     await harness.emit("agent_settled");
+    await sleep(GRACE_MS + 30);
     assert.equal(channels[0].sends.length, 1);
   });
 
@@ -89,6 +96,56 @@ describe("agent_settled trigger", () => {
     const { harness, channels } = setup({ overlay: { enabled: false } });
     await harness.emit("session_start", { reason: "startup" });
     await startAndSettle(harness);
+    assert.equal(channels[0].sends.length, 0);
+  });
+
+  test("defers dispatch until the settle grace window elapses", async () => {
+    const { harness, channels } = setup();
+    await harness.emit("session_start", { reason: "startup" });
+    await harness.emit("agent_start");
+    await harness.emit("agent_settled");
+    assert.equal(channels[0].sends.length, 0);
+    await sleep(GRACE_MS + 30);
+    assert.equal(channels[0].sends.length, 1);
+  });
+
+  test("cancels the pending notification when a new run starts during the grace window", async () => {
+    const { harness, channels } = setup();
+    await harness.emit("session_start", { reason: "startup" });
+    await harness.emit("agent_start");
+    await harness.emit("agent_settled");
+    await harness.emit("agent_start");
+    await sleep(GRACE_MS + 30);
+    assert.equal(channels[0].sends.length, 0);
+  });
+
+  test("skips the notification when the agent is no longer idle at dispatch time", async () => {
+    const { harness, channels } = setup();
+    await harness.emit("session_start", { reason: "startup" });
+    await harness.emit("agent_start");
+    await harness.emit("agent_settled");
+    harness.idle = false;
+    await sleep(GRACE_MS + 30);
+    assert.equal(channels[0].sends.length, 0);
+  });
+
+  test("skips the notification when messages are still pending at dispatch time", async () => {
+    const { harness, channels } = setup();
+    await harness.emit("session_start", { reason: "startup" });
+    await harness.emit("agent_start");
+    await harness.emit("agent_settled");
+    harness.pendingMessages = true;
+    await sleep(GRACE_MS + 30);
+    assert.equal(channels[0].sends.length, 0);
+  });
+
+  test("session_shutdown during the grace window cancels the pending notification", async () => {
+    const { harness, channels } = setup();
+    await harness.emit("session_start", { reason: "startup" });
+    await harness.emit("agent_start");
+    await harness.emit("agent_settled");
+    await harness.emit("session_shutdown", { reason: "new" });
+    await sleep(GRACE_MS + 30);
     assert.equal(channels[0].sends.length, 0);
   });
 
@@ -146,10 +203,11 @@ describe("agent_settled trigger", () => {
     const { harness } = setup({ channels: hanging, overlay: { minIntervalSeconds: 0 } });
     await harness.emit("session_start", { reason: "startup" });
     await harness.emit("agent_start");
-    const pending = harness.emit("agent_settled");
+    await harness.emit("agent_settled");
+    await sleep(GRACE_MS + 30);
+    assert.equal(hanging[0].sends.length, 1);
     await harness.emit("session_shutdown", { reason: "quit" });
     await harness.emit("session_shutdown", { reason: "reload" });
-    await pending;
     assert.equal(hanging[0].signals[0].aborted, true);
   });
 });

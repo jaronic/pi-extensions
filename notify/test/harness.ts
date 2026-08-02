@@ -28,6 +28,8 @@ export class NotifyHarness {
   hasUI = true;
   trusted = true;
   cwd = "/test/project";
+  idle = true;
+  pendingMessages = false;
   execResult: ExecResult = { stdout: "", stderr: "", code: 0, killed: false };
   readonly notifications: RecordedNotification[] = [];
   readonly execCalls: Array<{ command: string; args: string[]; options?: ExecOptions }> = [];
@@ -69,8 +71,8 @@ export class NotifyHarness {
       hasUI: harness.hasUI,
       cwd: harness.cwd,
       isProjectTrusted: () => harness.trusted,
-      isIdle: () => true,
-      hasPendingMessages: () => false,
+      isIdle: () => harness.idle,
+      hasPendingMessages: () => harness.pendingMessages,
       ui: {
         notify: (message: string, type?: string) => {
           harness.notifications.push({ message, type });
