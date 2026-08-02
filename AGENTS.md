@@ -56,7 +56,7 @@ Whole repo: run the same loop over all sixteen package directories. Several pack
 - `src/index.ts` is the composition root (lifecycle state, registration, wiring only); logic lives in focused modules (`command.ts`, `tools.ts`, `prompts.ts`, `protocol.ts`, `state.ts`, …). `state.ts` transitions stay pure and immutable; validate unknown persisted/config input before use.
 - Tool input via TypeBox (`Type.Object`, `StringEnum`); finite states/actions via string-literal unions.
 - Throw `Error` from validation/routing/tool failures so Pi records a failed tool call; slash-command/UI handlers may catch and notify. Propagate `AbortSignal`; clean up listeners, timers, and processes on all exit paths.
-- Pi host packages and TypeBox are peer dependencies (`>=0.81.0`), never bundled runtime deps; third-party runtime code belongs in the owning package's `dependencies`, tooling in `devDependencies`.
+- Pi host packages and TypeBox are peer dependencies (`>=0.83.0`), never bundled runtime deps; third-party runtime code belongs in the owning package's `dependencies`, tooling in `devDependencies`.
 - UI components render only from host `Theme` semantic tokens (`text`/`muted`/`dim`, `accent`, `selectedBg`, `success`/`warning`/`error`, `md*`, `tool*`); never hardcode ANSI, RGB, hex, or private palettes. Distributable palettes live in `themes/` and must pass `node themes/validate.mjs`.
 
 ## Documentation Contract

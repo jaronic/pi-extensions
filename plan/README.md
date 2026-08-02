@@ -18,7 +18,7 @@
 
 ## 安装与启用
 
-要求：Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.81.0` 的 Pi。
+要求：Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.83.0` 的 Pi。
 
 ```bash
 cd /path/to/pi-extensions/plan

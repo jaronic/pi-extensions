@@ -22,12 +22,12 @@
     "pi-uikit-dev"
   ],
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.82.1",
-    "@earendil-works/pi-tui": ">=0.82.1"
+    "@earendil-works/pi-coding-agent": ">=0.83.0",
+    "@earendil-works/pi-tui": ">=0.83.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.82.1",
-    "@earendil-works/pi-tui": "^0.82.1",
+    "@earendil-works/pi-coding-agent": "^0.83.0",
+    "@earendil-works/pi-tui": "^0.83.0",
     "@types/node": "^22.0.0",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"

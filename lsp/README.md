@@ -23,7 +23,7 @@
 
 ## 安装与启用
 
-要求：Node.js `>=22.19.0`、npm、兼容 `@earendil-works/pi-coding-agent >=0.81.0` 的 Pi，以及目标语言的 language server。
+要求：Node.js `>=22.19.0`、npm、兼容 `@earendil-works/pi-coding-agent >=0.83.0` 的 Pi，以及目标语言的 language server。
 
 ```bash
 cd /path/to/pi-extensions/lsp

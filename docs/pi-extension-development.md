@@ -1,6 +1,6 @@
 # Pi 插件开发参考与最佳实践
 
-> 适用基线：本仓库使用 `@earendil-works/pi-coding-agent >=0.81.0`，本文依据本地安装的 0.81.0 文档与 2026-07-22 可访问的官方、社区源码编写。Pi API 演进较快；升级 peer dependency 时，先核对本文末尾的官方文档。
+> 适用基线：本仓库使用 `@earendil-works/pi-coding-agent >=0.83.0`，本文依据本地安装的 0.83.0 文档与可访问的官方、社区源码编写。Pi API 演进较快；升级 peer dependency 时，先核对本文末尾的官方文档。
 
 本文中的“插件”泛指 Pi extension；“package”是包含 extension、skill、prompt、theme 等资源的分发单元。官方 API 约束高于社区惯例，社区项目只作为设计案例，不代表安全背书。
 
@@ -128,15 +128,15 @@ flowchart LR
     "test": "node --import tsx --test test/*.test.ts"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.81.0",
-    "@earendil-works/pi-coding-agent": ">=0.81.0",
-    "@earendil-works/pi-tui": ">=0.81.0",
+    "@earendil-works/pi-ai": ">=0.83.0",
+    "@earendil-works/pi-coding-agent": ">=0.83.0",
+    "@earendil-works/pi-tui": ">=0.83.0",
     "typebox": ">=1.0.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.81.0",
-    "@earendil-works/pi-coding-agent": "^0.81.0",
-    "@earendil-works/pi-tui": "^0.81.0",
+    "@earendil-works/pi-ai": "^0.83.0",
+    "@earendil-works/pi-coding-agent": "^0.83.0",
+    "@earendil-works/pi-tui": "^0.83.0",
     "@types/node": "^22.0.0",
     "tsx": "^4.20.0",
     "typebox": "^1.0.0",
