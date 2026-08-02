@@ -57,7 +57,7 @@ export class TodoHarness {
   private readonly tools = new Map<string, ToolDefinition>();
   private readonly commands = new Map<string, CommandDefinition>();
   private readonly toolSources = new Map<string, string>();
-  private readonly confirmResults: boolean[] = [];
+  private readonly confirmQueue: Array<{ result: boolean; effect?: () => void | Promise<void> }> = [];
   private readonly customInputs: string[][] = [];
   private readonly customFallbacks: unknown[] = [];
   private activeTools: string[];
@@ -116,7 +116,11 @@ export class TodoHarness {
 
     const ui = {
       select: async () => undefined,
-      confirm: async () => this.confirmResults.shift() ?? false,
+      confirm: async () => {
+        const entry = this.confirmQueue.shift();
+        if (entry?.effect !== undefined) await entry.effect();
+        return entry?.result ?? false;
+      },
       input: async () => undefined,
       notify: (message: string, type?: string) => this.notifications.push({ message, ...(type === undefined ? {} : { type }) }),
       setStatus: (key: string, value: string | undefined) => this.statuses.set(key, value),
@@ -249,7 +253,16 @@ export class TodoHarness {
   }
 
   queueConfirm(...results: boolean[]): void {
-    this.confirmResults.push(...results);
+    for (const result of results) this.confirmQueue.push({ result });
+  }
+
+  /**
+   * Queues a confirmation whose resolution first runs `effect` — used to
+   * simulate the board moving while a confirm dialog is pending — then
+   * resolves with `result`.
+   */
+  queueConfirmEffect(effect: () => void | Promise<void>, result = true): void {
+    this.confirmQueue.push({ result, effect });
   }
 
   queueCustomDialog(...inputs: string[]): void {

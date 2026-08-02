@@ -59,6 +59,10 @@ export function registerGoalCommand(pi: ExtensionAPI, runtime: GoalCommandRuntim
           ctx.ui.notify("No goal is set.", "warning");
           return;
         }
+        if (current.status === "budgetLimited") {
+          ctx.ui.notify("The goal token budget is exhausted. Set a replacement goal with a new budget.", "warning");
+          return;
+        }
         await stopCurrentAgent(ctx);
         const settled = runtime.getGoal();
         if (!settled) return;
@@ -79,7 +83,7 @@ export function registerGoalCommand(pi: ExtensionAPI, runtime: GoalCommandRuntim
         await stopCurrentAgent(ctx);
         const settled = runtime.getGoal();
         if (!settled) return;
-        if (settled.status === "budgetLimited") {
+        if (settled.tokenBudget !== undefined && settled.tokensUsed >= settled.tokenBudget) {
           ctx.ui.notify("The goal token budget is exhausted. Set a replacement goal with a new budget.", "warning");
           return;
         }
@@ -98,8 +102,7 @@ export function registerGoalCommand(pi: ExtensionAPI, runtime: GoalCommandRuntim
           ctx.ui.notify("/goal edit requires dialog-capable UI. Use /goal <objective> instead.", "warning");
           return;
         }
-        const resumeAfterEdit = current.status === "active";
-        if (resumeAfterEdit && runtime.isPlanActive(ctx)) {
+        if (current.status === "active" && runtime.isPlanActive(ctx)) {
           ctx.ui.notify("An active Goal cannot be edited while Plan mode is active. Pause Goal or exit Plan first.", "warning");
           return;
         }
@@ -110,7 +113,11 @@ export function registerGoalCommand(pi: ExtensionAPI, runtime: GoalCommandRuntim
         if (edited === undefined) return;
         try {
           let next = editGoal(settled, edited);
-          if (resumeAfterEdit && next.status === "paused") next = setGoalStatus(next, "active");
+          if (current.status === "active" && next.status === "paused") next = setGoalStatus(next, "active");
+          if (next.status === "active" && runtime.isPlanActive(ctx)) {
+            ctx.ui.notify("An active Goal cannot be edited while Plan mode is active. Pause Goal or exit Plan first.", "warning");
+            return;
+          }
           runtime.setGoal(next, "edit", ctx);
           ctx.ui.notify(`Goal ${statusLabel(next.status)}.`, "info");
           if (next.status === "active") runtime.queueContinuation(ctx);

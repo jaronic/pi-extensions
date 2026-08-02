@@ -167,6 +167,28 @@ describe("ntfy channel", () => {
     assert.equal(fetchCalls.length, 0);
   });
 
+  test("a hanging DNS lookup is released by abort and by the fetch timeout", async () => {
+    const { deps } = makeDeps({
+      fetchTimeoutMs: 40,
+      lookup: () => new Promise<LookupAddress[]>(() => {}),
+    });
+    const adapter = channel(deps, "ntfy");
+    const controller = new AbortController();
+    const aborted = adapter.send(MESSAGE, ntfyConfig, controller.signal);
+    controller.abort();
+    const abortedOutcome = await settledWithin(aborted, 500, "send was not released by abort");
+    assert.equal(abortedOutcome.ok, false);
+    assert.match(abortedOutcome.error ?? "", /aborted/);
+
+    const timedOut = await settledWithin(
+      adapter.send(MESSAGE, ntfyConfig, new AbortController().signal),
+      500,
+      "send was not released by the fetch timeout",
+    );
+    assert.equal(timedOut.ok, false);
+    assert.match(timedOut.error ?? "", /timed out/);
+  });
+
   test("refuses redirects and reports HTTP failures", async () => {
     const redirecting = makeDeps({
       fetchImpl: (async () => new Response(null, { status: 302 })) as typeof fetch,
@@ -201,3 +223,11 @@ describe("ntfy channel", () => {
     assert.ok(!JSON.stringify(outcome).includes(secret));
   });
 });
+
+/** Reject when the promise does not settle within the guard, so regressions fail fast instead of hanging. */
+function settledWithin<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
+}

@@ -26,6 +26,8 @@ export class TelemetryHarness {
   readonly commandRegistrationCounts = new Map<string, number>();
   model: { provider: string; id: string } | undefined = { provider: "anthropic", id: "claude-test" };
   confirmResponses: boolean[] = [];
+  /** When set, every appendEntry call throws this error instead of appending. */
+  appendEntryError: Error | undefined = undefined;
   private readonly commands = new Map<string, CommandDefinition>();
   private readonly handlers = new Map<string, RegisteredHandler[]>();
   private readonly sessionId: string;
@@ -78,6 +80,7 @@ export class TelemetryHarness {
         this.toolRegistrationCounts.set(name, (this.toolRegistrationCounts.get(name) ?? 0) + 1);
       },
       appendEntry: (customType: string, data: unknown) => {
+        if (this.appendEntryError) throw this.appendEntryError;
         this.entries.push({ type: "custom", customType, data });
       },
     };

@@ -22,13 +22,13 @@ Todo 适合以下工作：
 - agent 获得一个顺序执行、带显式全局使用说明的 `todo` 工具；只要没有更严格的 active-tool lease 隐藏它，模型会从工具 schema、description、`promptSnippet` 和逐条点名 `todo` 的 `promptGuidelines` 感知其能力；引导强调多步任务先行登记为任务、逐项验证后才 `done` 回执，以及 settled recap 必须在同一回复中向用户总结；
 - 当前 Pi 进程中的其他扩展可通过 `pi-extensions:todo-service:v1` 读写同一普通 board；声明 Todo package 依赖的 extension 则直接持有同一 `TodoService`。两条入口复用模型工具的 reducer、校验、输出、Plan gate 和 branch persistence；
 - TUI 使用独立的 `todo` widget，最多 12 行；Plan 候选期隐藏普通 board，批准后 Plan UI 清除，Todo 以相同的 `#1`、`#2` 样式继续显示转交任务；
-- open task 的有界摘要会注入每轮 system prompt，所有文本按不可信数据处理；
+- open task 的有界摘要会注入每轮 system prompt（最多 20 项，XML 转义后的最终 UTF-8 输出 ≤32 KiB，超出时在任务边界截断并保留 “more open tasks” 提示），所有文本按不可信数据处理；
 - 成功工具结果、用户命令、service mutation 与 Plan handoff 都写入同一普通 Todo branch journal，切换 branch 时恢复最高有效快照；
 - 看板 settled（全部任务 completed/dropped）时立即清理 widget 与 status；结算的那次 `done`/`drop` 工具结果附带有界的 `Settled recap:`（completed/dropped 任务列表），并有 guideline 要求模型在同一回复中向用户总结完成了哪些任务；历史状态仍可通过 `/todos` 或 `todo view includeClosed:true` 查看。settled 不是终态：对 settled 看板 `append` 会在保留历史与连续 `#ID` 的前提下把看板恢复为 active，`init` 仍可在 settled 后整板替换开新局。
 
 ## 安装与启用
 
-要求：Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.81.0` 的 Pi。
+要求：Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.83.0` 的 Pi。
 
 从仓库根目录启用全部扩展（包含 Todo）：
 
@@ -136,7 +136,7 @@ Todo 不根据文件修改、命令退出码或测试文本自动推断完成。
 | `/todos show` | 显示常驻 widget。 |
 | `/todos hide` | 隐藏常驻 widget，不改变持久状态。 |
 | `/todos toggle` | 切换 widget 可见性。 |
-| `/todos clear` | 先中止并等待当前 agent idle，再请求用户确认；确认后清空当前投影，session 历史仍保留。 |
+| `/todos clear` | 先中止并等待当前 agent idle，再请求用户确认；确认后提交前会校验 board 未在确认期间变化（append/init/恢复等），任一变化则拒绝清空并提示重新确认；只有用户确认时看到的 board 才会被清空，session 历史仍保留。 |
 | `/todos reopen <id> <reason>` | 中止并等待当前 agent idle，把关闭或阻塞项重新打开，并写入 command journal entry。 |
 
 `status/show/hide/toggle/clear` 的 UI 路径仅在 TUI 或具备 dialog UI 的 RPC 中可用。Print/JSON 模式继续支持完整 `todo` 工具；查看状态应调用 `todo view`，需要确认的 clear 会 fail closed。模型工具没有 `clear` op，不能物理清除用户范围。
@@ -180,10 +180,11 @@ Widget heading 显示当前（或下一可见）phase，任务按“当前项 �
 | details/custom envelope | 64 KiB UTF-8 |
 | 单次模型输出 | 16 KiB、200 行 |
 | prompt 中 open task | 20 |
+| prompt 字节上限 | 32 KiB（XML 转义后的最终 UTF-8） |
 | settled recap | 20 任务、4 KiB |
 | widget | 12 行 |
 
-所有显示文本拒绝换行、terminal control 和 bidirectional formatting code point。`view` 同时受 offset/limit 和模型输出上限约束；结果给出 `nextOffset`，若 board/revision 在分页中改变，应从 offset 0 重新读取。
+所有显示文本拒绝换行、terminal control 和 bidirectional formatting code point。字符上限（phase 名、task 文本、reason/note）按 Unicode code point 计数（`Array.from(...).length`），与 Plan 的步骤校验口径一致；`&` 等字符在 prompt 中按 XML 实体转义，因此 prompt 另受 32 KiB 字节上限约束，`view` 同时受 offset/limit 和模型输出上限约束；结果给出 `nextOffset`，若 board/revision 在分页中改变，应从 offset 0 重新读取。
 
 ## 与其他扩展协作
 

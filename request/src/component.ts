@@ -103,6 +103,7 @@ export function createRequestComponent({
   let editing: "other" | "text" | null = questions[0]?.kind === "text" ? "text" : null;
   let bodyScrollOffset = 0;
   let cachedWidth: number | undefined;
+  let cachedTerminalRows: number | undefined;
   let cachedLines: string[] | undefined;
   let settled = false;
   const timeoutMilliseconds = timeout !== undefined && Number.isFinite(timeout) && timeout > 0
@@ -148,6 +149,7 @@ export function createRequestComponent({
   function refresh(): void {
     cachedLines = undefined;
     cachedWidth = undefined;
+    cachedTerminalRows = undefined;
     tui.requestRender();
   }
 
@@ -505,8 +507,8 @@ export function createRequestComponent({
 
   function render(width: number): string[] {
     const renderWidth = Math.max(1, width);
-    if (cachedLines && cachedWidth === renderWidth) return cachedLines;
     const terminalRows = Math.max(4, tui.terminal.rows || 24);
+    if (cachedLines && cachedWidth === renderWidth && cachedTerminalRows === terminalRows) return cachedLines;
     const framed = renderWidth >= 24 && terminalRows >= 9;
     const innerWidth = framed ? Math.max(1, renderWidth - 4) : renderWidth;
     const question = stage === "question" ? currentQuestion() : undefined;
@@ -552,6 +554,7 @@ export function createRequestComponent({
         tone(theme, "dim", `${scrollStatus} ${help}${timeoutText()}`.trim()),
       ].map((line) => truncateToWidth(line, renderWidth, ""));
       cachedWidth = renderWidth;
+      cachedTerminalRows = terminalRows;
       cachedLines = compact;
       return compact;
     }
@@ -571,6 +574,7 @@ export function createRequestComponent({
       tone(theme, "borderAccent", truncateToWidth(bottom, renderWidth, "")),
     ];
     cachedWidth = renderWidth;
+    cachedTerminalRows = terminalRows;
     cachedLines = lines;
     return lines;
   }
@@ -593,6 +597,7 @@ export function createRequestComponent({
     invalidate: () => {
       cachedLines = undefined;
       cachedWidth = undefined;
+      cachedTerminalRows = undefined;
       editor.invalidate();
     },
     dispose: () => {

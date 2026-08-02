@@ -87,6 +87,32 @@ describe("toolCallTitle", () => {
       "<toolTitle>**Hashline**</><muted> · read </>",
     );
   });
+
+  test("leaves control-free input byte-for-byte unchanged", () => {
+    assert.equal(
+      toolCallTitle(stubTheme, { brand: "目标", action: "读", target: "中文文件.ts" }),
+      "<toolTitle>**目标**</><muted> · 读 </><accent>中文文件.ts</>",
+    );
+  });
+
+  test("folds line breaks and tabs to a single space so the title stays one line", () => {
+    assert.equal(
+      toolCallTitle(stubTheme, { brand: "Hashline", action: "read", target: "a.ts\nb.ts\r\nc.ts" }),
+      "<toolTitle>**Hashline**</><muted> · read </><accent>a.ts b.ts c.ts</>",
+    );
+    assert.equal(toolCallTitle(stubTheme, { brand: "a\tb" }), "<toolTitle>**a b**</>");
+  });
+
+  test("drops ESC/OSC/BEL so control sequences cannot leak into the TUI", () => {
+    assert.equal(
+      toolCallTitle(stubTheme, { brand: "Hashline\u001b]0;x\u0007", action: "read\u0007", target: "src/a.ts\u001b[31m" }),
+      "<toolTitle>**Hashline]0;x**</><muted> · read </><accent>src/a.ts[31m</>",
+    );
+    assert.equal(
+      toolCallTitle(stubTheme, { brand: "\u001b", target: "\u009b" }),
+      "<toolTitle>****</><accent></>",
+    );
+  });
 });
 
 describe("reuseTextComponent", () => {

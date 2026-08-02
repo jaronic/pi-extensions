@@ -131,7 +131,7 @@ export function createChannels(deps: ChannelDeps): ChannelAdapter[] {
         return { channel: "ntfy", ok: false, error: `baseUrl rejected: ${validated.reason}` };
       }
       try {
-        await assertPublicHostname(validated.url, deps.lookup);
+        await assertPublicHostname(validated.url, deps.lookup, { timeoutMs: fetchTimeoutMs, signal });
       } catch (error) {
         return { channel: "ntfy", ok: false, error: truncate(errorMessage(error), MAX_ERROR_TEXT) };
       }

@@ -88,10 +88,11 @@ test("real git: oversized diff is truncated at a line boundary with the truncate
     assert.ok(Buffer.byteLength(full.content, "utf8") > 16 * 1024);
     assert.equal(parseDiff(full.content).totalAdditions, 400);
 
-    const diffCall = calls.find((args) => args[2] === "diff");
+    const diffCall = calls.find((args) => args[3] === "diff");
     assert.ok(diffCall, "a git diff call must be recorded");
     assert.equal(diffCall[0], "-c");
     assert.equal(diffCall[1], "core.quotePath=false");
+    assert.equal(diffCall[2], "--literal-pathspecs");
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -110,10 +111,11 @@ test("real git: non-ASCII file names produce parseable diff headers", async () =
 
     const result = await runGitDiff(pi, workspace, { source: "uncommitted" }, [], 3);
     assert.equal(result.truncated, false);
-    const diffCall = calls.find((args) => args[2] === "diff");
+    const diffCall = calls.find((args) => args[3] === "diff");
     assert.ok(diffCall, "a git diff call must be recorded");
     assert.equal(diffCall[0], "-c");
     assert.equal(diffCall[1], "core.quotePath=false");
+    assert.equal(diffCall[2], "--literal-pathspecs");
     const summary = parseDiff(result.content);
     assert.ok(summary.totalFiles >= 1, `non-ASCII header must parse; got ${summary.totalFiles} files`);
     assert.equal(summary.files[0]?.newPath, "说明文档.txt");

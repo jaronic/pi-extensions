@@ -24,7 +24,7 @@
 
 ### `toolCallTitle(theme, { brand, action?, target? })`
 
-工具调用卡片的标准标题行：`<bold toolTitle>Brand</>` + `<muted> · action </>` + `<accent>target</>`。hashline 的 read/edit 卡片即用此形状。
+工具调用卡片的标准标题行：`<bold toolTitle>Brand</>` + `<muted> · action </>` + `<accent>target</>`。hashline 的 read/edit 卡片即用此形状。三段文本在着色拼接前先做单行化 + C0/C1 中和：换行/制表符折叠为单个空格，其余控制字符（ESC、BEL、CSI/OSC 引导符等）直接丢弃，防止工具参数里的转义序列直通进 TUI；无控制字符的普通输入逐字节不变。
 
 ### `reuseTextComponent(lastComponent, content)`
 
@@ -69,4 +69,4 @@ muted 键 + text 值的键值行；`[text]` 形式的短标记。
 
 ## 维护约束
 
-新增原语必须是纯函数、只经 `tone()` 取色；改变任何原语的输出形状时，同步检查所有消费方（ast-grep/goal/hashline/jaron/plan/request/rg/todo）的渲染输出与测试断言（它们依赖逐字节一致的输出），并在同一改动中更新本 README。
+新增原语必须是纯函数、只经 `tone()` 取色；改变任何原语的输出形状时，同步检查所有消费方（ast-grep/diffreport/doclint/goal/hashline/jaron/lsp/plan/request/rg/todo）的渲染输出与测试断言（它们依赖逐字节一致的输出），并在同一改动中更新本 README。

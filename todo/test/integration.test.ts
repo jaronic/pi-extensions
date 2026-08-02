@@ -406,6 +406,48 @@ test("clear confirms after settling the agent and commits only after journal app
   assert.equal(harness.entries.filter((entry: any) => entry.type === "custom" && entry.customType === TODO_STATE_TYPE).length, 1);
 });
 
+test("clear is rejected when the board is appended during the confirmation window", async () => {
+  const harness = new TodoHarness();
+  install(harness);
+  await harness.startSession();
+  await harness.tool({ op: "init", list: [{ phase: "A", items: ["One"] }] });
+
+  harness.queueConfirmEffect(async () => {
+    await harness.tool({ op: "append", phase: "A", items: ["Two"] });
+  });
+  await harness.command("todos", "clear");
+  let view = await harness.tool({ op: "view", includeClosed: true, offset: 0, limit: 50 });
+  assert.equal(sequenceFrom(view), 2);
+  assert.equal(stateFrom(view).phases[0].tasks.length, 2, "a stale clear must not wipe tasks appended during confirmation");
+  assert.equal(harness.entries.filter((entry: any) => entry.type === "custom" && entry.customType === TODO_STATE_TYPE).length, 0);
+  assert.match(harness.notifications.at(-1)?.message ?? "", /changed while confirming/);
+
+  harness.queueConfirm(true);
+  await harness.command("todos", "clear");
+  view = await harness.tool({ op: "view", includeClosed: true, offset: 0, limit: 50 });
+  assert.equal(stateFrom(view), null, "a fresh confirmation still clears the current board");
+  assert.equal(harness.entries.filter((entry: any) => entry.type === "custom" && entry.customType === TODO_STATE_TYPE).length, 1);
+});
+
+test("clear is rejected when a new board is initialized during the confirmation window", async () => {
+  const harness = new TodoHarness();
+  install(harness);
+  await harness.startSession();
+  await harness.tool({ op: "init", list: [{ phase: "A", items: ["One"] }] });
+
+  harness.queueConfirmEffect(async () => {
+    await harness.tool({ op: "done", id: 1 });
+    await harness.tool({ op: "init", list: [{ phase: "B", items: ["Fresh"] }] });
+  });
+  await harness.command("todos", "clear");
+  const view = await harness.tool({ op: "view", includeClosed: true, offset: 0, limit: 50 });
+  assert.ok(stateFrom(view), "a stale clear must not wipe a board initialized during confirmation");
+  assert.equal(stateFrom(view).phases[0].name, "B");
+  assert.equal(stateFrom(view).phases[0].tasks[0].content, "Fresh");
+  assert.equal(harness.entries.filter((entry: any) => entry.type === "custom" && entry.customType === TODO_STATE_TYPE).length, 0);
+  assert.match(harness.notifications.at(-1)?.message ?? "", /changed while confirming/);
+});
+
 test("reopen command parses a stable ID, interrupts streaming, and journals the transition", async () => {
   const harness = new TodoHarness();
   install(harness);
@@ -630,4 +672,28 @@ test("Plan handoff commits the transferred board and points execution at its #ID
     stateFrom(view).phases.map((phase: { name: string }) => phase.name),
     ["Ship safely"],
   );
+});
+
+test("Plan handoff accepts steps of 240 emoji code points", async () => {
+  const harness = new TodoHarness();
+  const service = install(harness);
+  await harness.startSession();
+
+  service.syncPlanPhase({ sessionId: "todo-session", phase: "awaitingApproval" });
+  const emoji = "😀".repeat(240);
+  const handoff = service.handoffPlan({
+    sessionId: "todo-session",
+    phase: "Emoji steps",
+    items: [emoji],
+  });
+  assert.equal(handoff.details.sequence, 1);
+  assert.equal(handoff.details.state?.phases[0]?.tasks[0]?.content, emoji);
+  assert.match(handoff.content, /Initialized Todo board with 1 tasks/);
+  service.syncPlanPhase({ sessionId: "todo-session", phase: "off" });
+
+  const view = await requestTodoService(harness.api, {
+    sessionId: "todo-session",
+    operation: { op: "view", includeClosed: true },
+  });
+  assert.equal(view.details.state?.phases[0]?.tasks[0]?.content, emoji);
 });

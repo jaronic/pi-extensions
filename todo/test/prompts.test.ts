@@ -5,7 +5,12 @@ import {
   todoPromptContainsClosedText,
   todoSystemPrompt,
 } from "../src/prompts.ts";
-import { MAX_PROMPT_OPEN_TASKS, transitionTodo, type TodoState } from "../src/state.ts";
+import {
+  MAX_PROMPT_BYTES,
+  MAX_PROMPT_OPEN_TASKS,
+  transitionTodo,
+  type TodoState,
+} from "../src/state.ts";
 
 const BOARD = "00000000-0000-4000-8000-000000000021";
 
@@ -77,4 +82,26 @@ test("prompt prioritizes the active task and caps open-task projection", () => {
   assert.match(taskLines[0] ?? "", /^#90 \[inProgress\]/);
   assert.match(prompt, new RegExp(`\.\.\. ${100 - MAX_PROMPT_OPEN_TASKS} more open tasks; call todo view`));
   assert.ok(Buffer.byteLength(prompt, "utf8") < 6_000);
+});
+
+test("prompt caps XML-escaped UTF-8 output at MAX_PROMPT_BYTES and keeps the more-tasks hint", () => {
+  // Worst-case entity expansion: '"' becomes "&quot;" (6x), and every task
+  // also carries a 500-character blocker, so the uncapped projection exceeds
+  // the byte budget while staying inside every task-count limit.
+  const items = Array.from({ length: 20 }, (_, index) => `${index + 1}-${"\"".repeat(236)}`);
+  let state = init(items);
+  for (let id = 1; id <= items.length; id += 1) {
+    const blocked = transitionTodo(state, { op: "block", id, reason: "\"".repeat(500) }, 10 + id, () => BOARD).state;
+    assert.ok(blocked);
+    state = blocked;
+  }
+  const prompt = todoSystemPrompt(state);
+  assert.ok(prompt);
+  assert.ok(Buffer.byteLength(prompt, "utf8") <= MAX_PROMPT_BYTES);
+  const taskLines = prompt.split("\n").filter((line) => /^#\d+ /.test(line));
+  assert.ok(taskLines.length > 0 && taskLines.length < items.length, "entity-expanded blockers must stop the projection early");
+  // Stopping happens at task boundaries: every listed line is a complete task.
+  for (const line of taskLines) assert.match(line, /\[blocked\] \d+-&quot;/);
+  // The hint counts tasks skipped for bytes as well as the count cap.
+  assert.match(prompt, new RegExp(`\\.\\.\\. ${items.length - taskLines.length} more open tasks; call todo view`));
 });

@@ -124,6 +124,29 @@ test("malformed persisted snapshots restore to empty with a warning", async () =
   assert.match(harness.notifications.at(-1)?.message ?? "", /No tool calls recorded yet/);
 });
 
+test("a trailing invalid snapshot keeps the last valid state instead of clearing it", async () => {
+  const harness = new TelemetryHarness();
+  telemetryExtension(harness.api);
+  harness.entries.push({ type: "custom", customType: TELEMETRY_STATE_TYPE, data: structuredClone(VALID_SNAPSHOT) });
+  harness.entries.push({ type: "custom", customType: TELEMETRY_STATE_TYPE, data: "garbage" });
+  await harness.emit("session_start", { type: "session_start", reason: "resume" });
+  const warning = harness.notifications.find((notification) => notification.type === "warning");
+  assert.ok(warning, "a warning is surfaced for the invalid snapshot");
+  assert.match(warning.message, /not fully restored/);
+  await harness.command("telemetry", "status");
+  assert.match(harness.notifications.at(-1)?.message ?? "", /Tool calls: 3 · failures: 1/);
+});
+
+test("an invalid snapshot before the last valid one restores the valid state", async () => {
+  const harness = new TelemetryHarness();
+  telemetryExtension(harness.api);
+  harness.entries.push({ type: "custom", customType: TELEMETRY_STATE_TYPE, data: "garbage" });
+  harness.entries.push({ type: "custom", customType: TELEMETRY_STATE_TYPE, data: structuredClone(VALID_SNAPSHOT) });
+  await harness.emit("session_start", { type: "session_start", reason: "resume" });
+  await harness.command("telemetry", "status");
+  assert.match(harness.notifications.at(-1)?.message ?? "", /Tool calls: 3 · failures: 1/);
+});
+
 test("restore clears in-flight calls so unmatched ends still count once", async () => {
   const harness = new TelemetryHarness();
   telemetryExtension(harness.api);
@@ -275,6 +298,34 @@ test("reset requires confirmation with UI and appends a cleared snapshot", async
   await harness.command("telemetry", "reset");
   assert.equal(harness.entries.length, 1);
   assert.deepEqual((harness.entries[0].data as { aggregates: unknown[] }).aggregates, []);
+  await harness.command("telemetry", "status");
+  assert.match(harness.notifications.at(-1)?.message ?? "", /No tool calls recorded yet/);
+});
+
+test("reset reports failure when persisting the empty snapshot fails, then retries on the next turn", async () => {
+  const harness = new TelemetryHarness();
+  telemetryExtension(harness.api);
+  await harness.emit("session_start", { type: "session_start", reason: "startup" });
+  await harness.emit("tool_execution_start", toolExecutionStart("c1", "grep"));
+  await harness.emit("tool_execution_end", toolExecutionEnd("c1", "grep"));
+  await harness.emit("turn_end", { type: "turn_end", turnIndex: 0 });
+  assert.equal(harness.entries.length, 1);
+
+  harness.appendEntryError = new Error("journal unavailable");
+  await harness.command("telemetry", "reset");
+  const notice = harness.notifications.at(-1);
+  assert.ok(notice);
+  assert.equal(notice.type, "error", "reset failure is surfaced as an error");
+  assert.match(notice.message, /failed/i);
+  assert.equal(harness.entries.length, 1, "the failed reset appends nothing");
+
+  // The dirty flag survives the failure; the next turn_end retries, so the
+  // cleared state becomes durable and a restart no longer revives old data.
+  harness.appendEntryError = undefined;
+  await harness.emit("turn_end", { type: "turn_end", turnIndex: 1 });
+  assert.equal(harness.entries.length, 2);
+  assert.deepEqual((harness.entries[1].data as { aggregates: unknown[] }).aggregates, []);
+  await harness.emit("session_start", { type: "session_start", reason: "resume" });
   await harness.command("telemetry", "status");
   assert.match(harness.notifications.at(-1)?.message ?? "", /No tool calls recorded yet/);
 });

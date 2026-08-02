@@ -36,13 +36,15 @@ export interface GitExecResult {
  * fails (not a repository, invalid ref) must not look like an empty success.
  * `-c core.quotePath=false` is prepended so diff headers keep raw UTF-8 paths
  * that the diff parser can match, even for non-ASCII file names.
+ * `--literal-pathspecs` is prepended so pathspec magic (e.g. `:(top)`) cannot
+ * resolve a targeted path outside the calling workspace.
  */
 export async function execGitChecked(
   pi: ExtensionAPI,
   args: readonly string[],
   options: GitExecOptions,
 ): Promise<GitExecResult> {
-  const result = await pi.exec("git", ["-c", "core.quotePath=false", ...args], {
+  const result = await pi.exec("git", ["-c", "core.quotePath=false", "--literal-pathspecs", ...args], {
     cwd: options.cwd,
     signal: options.signal,
     timeout: options.timeout,
@@ -108,7 +110,10 @@ export function buildGitDiffArgs(
     throw new Error("contextLines must be an integer from 0 to 20.");
   }
 
-  const diffOptions = ["--no-color", "--no-ext-diff", `--unified=${contextLines}`];
+  // --no-ext-diff and --no-textconv keep repository-configured diff drivers
+  // and textconv conversions from running arbitrary processes during
+  // collection; --no-color keeps the output parseable.
+  const diffOptions = ["--no-color", "--no-ext-diff", "--no-textconv", `--unified=${contextLines}`];
   let args: string[];
   switch (scope.source) {
     case "uncommitted":
@@ -127,7 +132,10 @@ export function buildGitDiffArgs(
       assertSafeRevision(target, "Commit selection");
       args = target.includes("..")
         ? ["diff", ...diffOptions, target]
-        : ["show", "--format=", ...diffOptions, target];
+        // A single commit diffs against its first parent (`-m --first-parent`):
+        // a clean merge otherwise shows an empty combined diff and a root
+        // commit keeps its full diff.
+        : ["show", "-m", "--first-parent", "--format=", ...diffOptions, target];
       break;
     }
   }
@@ -320,7 +328,12 @@ export async function getCommitHistory(
   exactSelection: boolean,
   signal?: AbortSignal,
 ): Promise<CommitInfo[]> {
-  const args = ["log", "--no-merges", `--max-count=${limit}`, `--format=${LOG_FORMAT}`];
+  // A precisely selected single commit must surface as itself: the default
+  // --no-merges filter would silently report its first parent instead.
+  const exactCommit = exactSelection && scope.source === "commits" && !(scope.target ?? "").includes("..");
+  const args = ["log"];
+  if (!exactCommit) args.push("--no-merges");
+  args.push(`--max-count=${limit}`, `--format=${LOG_FORMAT}`);
   if (query) args.push(`--grep=${query}`, "--regexp-ignore-case");
 
   switch (scope.source) {
@@ -332,7 +345,7 @@ export async function getCommitHistory(
       break;
     case "commits": {
       const target = scope.target ?? "";
-      if (exactSelection && !target.includes("..")) args.push("-1");
+      if (exactCommit) args.push("-1");
       args.push(target);
       break;
     }

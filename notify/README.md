@@ -29,8 +29,8 @@
 
 发送前对 `baseUrl` 做两层校验：
 
-1. 字面校验：只允许 `https:`；拒绝 URL 内嵌凭据、`localhost`/`*.localhost`/`*.local`/`*.internal`，以及私网/保留 IP 字面量（IPv4 全量常见段、IPv6 `::1`/ULA/link-local/IPv4-mapped）。
-2. DNS 校验：解析 hostname，任一解析结果为私网/保留地址即拒绝；DNS 失败也拒绝。
+1. 字面校验：只允许 `https:`；拒绝 URL 内嵌凭据、`localhost`/`*.localhost`/`*.local`/`*.internal`，以及私网/保留 IP 字面量（IPv4 全量常见段、IPv6 `::`/`::1`/ULA/link-local/IPv4-mapped——mapped 地址同时识别 `::ffff:a.b` 点分与 `::ffff:xxxx` 十六进制两种形式，避免 WHATWG URL 规范化把 `[::ffff:127.0.0.1]` 改写为 `[::ffff:7f00:1]` 后绕过）。
+2. DNS 校验：解析 hostname，任一解析结果为私网/保留地址即拒绝；DNS 失败也拒绝。解析与通道超时/abort 信号 race（ntfy 通道的 8 秒 fetch 超时、dispatch 级 15 秒超时与 `session_shutdown` 的 abort），挂起的解析会按时失败而不是卡住 dispatch。
 
 ### secret 边界
 
@@ -89,7 +89,7 @@ token 推荐走环境变量而不是文件：`export PI_NOTIFY_NTFY_TOKEN=tk_...
 ## 模式与生命周期
 
 - TUI/RPC/JSON/print 四种模式都能发系统通知：dispatch 只走 `pi.exec`、`fetch` 和 stderr/stdout bell，不调用 `ctx.ui`。`ctx.ui.notify` 仅用于命令回复、配置 warning 和"所有通道失败"的降级提示，且都先检查 `ctx.hasUI`。
-- 所有 exec/fetch 都携带 AbortSignal 与超时；dispatch 级 15 秒超时与 `session_shutdown` 触发的 abort 通过 `AbortSignal.any` 合成。
+- 所有 exec/fetch/DNS 解析都携带 AbortSignal 与超时（挂起的 DNS 解析与超时/abort race 后按失败处理）；dispatch 级 15 秒超时与 `session_shutdown` 触发的 abort 通过 `AbortSignal.any` 合成。
 - `session_shutdown` 幂等：中止进行中的 dispatch、清掉运行计时，重复调用安全；插件不启动常驻 timer、watcher 或子进程。
 
 ## 实现原理与关键节点
@@ -104,7 +104,7 @@ token 推荐走环境变量而不是文件：`export PI_NOTIFY_NTFY_TOKEN=tk_...
 
 ## 安装与启用
 
-要求：Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.82.1` 的 Pi。
+要求：Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.83.0` 的 Pi。
 
 ```bash
 cd /path/to/pi-extensions/notify
@@ -124,4 +124,4 @@ npm run check    # tsc --noEmit
 npm test         # node --import tsx --test test/*.test.ts
 ```
 
-测试覆盖：配置解析/合并/分层与环境变量（含 malformed 输入 fail closed、secret 不泄漏）、SSRF 字面与 DNS 校验、三个通道适配器（含转义、超时/失败 outcome、token 不泄漏）、纯门控逻辑，以及 harness 级的注册形状、settle 触发、空闲确认窗口（宽限期内新 run 取消、idle/pending 复核、shutdown 取消）、去抖、时长阈值、`/notify` 各子命令、print 无 UI 路径、配置加载失败和幂等 shutdown。`test/harness.ts` 在 `test/*.test.ts` glob 之外，提供内存版 ExtensionAPI/Context 与录制通道。
+测试覆盖：配置解析/合并/分层与环境变量（含 malformed 输入 fail closed、secret 不泄漏）、SSRF 字面与 DNS 校验（含 IPv4-mapped 十六进制形式、挂起 lookup 的超时/abort）、三个通道适配器（含转义、超时/失败 outcome、token 不泄漏）、纯门控逻辑，以及 harness 级的注册形状、settle 触发、空闲确认窗口（宽限期内新 run 取消、idle/pending 复核、shutdown 取消）、去抖、时长阈值、`/notify` 各子命令、print 无 UI 路径、配置加载失败和幂等 shutdown。`test/harness.ts` 在 `test/*.test.ts` glob 之外，提供内存版 ExtensionAPI/Context 与录制通道。

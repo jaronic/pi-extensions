@@ -16,10 +16,26 @@ export interface ToolCallTitleParts {
  * `Brand · action target` with brand/action/target in title/muted/accent.
  */
 export function toolCallTitle(theme: Theme, parts: ToolCallTitleParts): string {
-  let line = tone(theme, "title", parts.brand);
-  if (parts.action !== undefined) line += tone(theme, "muted", ` · ${parts.action} `);
-  if (parts.target !== undefined) line += tone(theme, "accent", parts.target);
+  const brand = sanitizeTitleSegment(parts.brand);
+  const action = parts.action === undefined ? undefined : sanitizeTitleSegment(parts.action);
+  const target = parts.target === undefined ? undefined : sanitizeTitleSegment(parts.target);
+  let line = tone(theme, "title", brand);
+  if (action !== undefined) line += tone(theme, "muted", ` · ${action} `);
+  if (target !== undefined) line += tone(theme, "accent", target);
   return line;
+}
+
+/**
+ * Single-line, control-safe title segment: line breaks and tabs fold to a
+ * single space, every other C0/C1 control character (ESC, BEL, CSI/OSC
+ * introducers, …) is dropped, so escape sequences from tool arguments cannot
+ * reach the TUI. No-op on ordinary input, keeping consumer snapshots
+ * byte-identical.
+ */
+function sanitizeTitleSegment(text: string): string {
+  return text
+    .replace(/[\t\r\n\u2028\u2029]+/g, " ")
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
 }
 
 /**

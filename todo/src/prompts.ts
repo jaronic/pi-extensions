@@ -1,4 +1,5 @@
 import {
+  MAX_PROMPT_BYTES,
   MAX_PROMPT_OPEN_TASKS,
   allTodoTasks,
   todoBoardStatus,
@@ -52,22 +53,32 @@ export function todoSystemPrompt(state: TodoState | null): string | undefined {
     `<untrusted_todo_state board_id="${escapeXml(state.boardId)}" revision="${state.revision}">`,
     `Counts: total=${counts.total} pending=${counts.pending} inProgress=${counts.inProgress} blocked=${counts.blocked} completed=${counts.completed} dropped=${counts.dropped}`,
   ];
+  const footer = [
+    "</untrusted_todo_state>",
+    "",
+    "Keep this list current. Do not mark work completed without current evidence.",
+  ];
+  const moreHint = (omitted: number): string[] =>
+    omitted > 0 ? [`... ${omitted} more open tasks; call todo view`] : [];
   let previousPhase: string | undefined;
+  let appended = 0;
   for (const { phase, task } of displayed) {
-    if (phase !== previousPhase) {
-      lines.push(`Phase: ${escapeXml(phase)}`);
-      previousPhase = phase;
-    }
+    const phaseLine = phase !== previousPhase ? `Phase: ${escapeXml(phase)}` : undefined;
     const detail = task.statusDetail === undefined ? "" : ` — ${escapeXml(task.statusDetail)}`;
-    lines.push(`#${task.id} [${task.status}] ${escapeXml(task.content)}${detail}`);
+    const candidate = phaseLine === undefined ? [] : [phaseLine];
+    candidate.push(`#${task.id} [${task.status}] ${escapeXml(task.content)}${detail}`);
+    // XML entity expansion can inflate hostile text severalfold, so the
+    // escaped UTF-8 output itself is bounded. Stop at task boundaries while
+    // keeping the "more open tasks" hint and the closing footer.
+    const omittedIfAppended = open.length - (appended + 1);
+    const projected = [...lines, ...candidate, ...moreHint(omittedIfAppended), ...footer].join("\n");
+    if (Buffer.byteLength(projected, "utf8") > MAX_PROMPT_BYTES) break;
+    lines.push(...candidate);
+    if (phaseLine !== undefined) previousPhase = phase;
+    appended += 1;
   }
-  if (open.length > displayed.length) {
-    lines.push(`... ${open.length - displayed.length} more open tasks; call todo view`);
-  }
-  lines.push("</untrusted_todo_state>");
-  lines.push("");
-  lines.push("Keep this list current. Do not mark work completed without current evidence.");
-  return lines.join("\n");
+  const omitted = open.length - appended;
+  return [...lines, ...moreHint(omitted), ...footer].join("\n");
 }
 
 export function todoPromptContainsClosedText(state: TodoState, prompt: string): boolean {

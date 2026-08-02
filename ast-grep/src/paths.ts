@@ -3,6 +3,7 @@ import { lstat, open, realpath, stat, type FileHandle } from "node:fs/promises";
 import {
   dirname,
   isAbsolute,
+  join,
   relative,
   resolve,
   sep,
@@ -85,6 +86,24 @@ async function stableStats(path: string): Promise<{ stats: BigIntStats; identity
   return { stats, identity: fileIdentity(stats) };
 }
 
+async function assertNoSymlinkComponents(workspace: string, candidate: string): Promise<void> {
+  const relation = relative(workspace, candidate);
+  if (relation === "" || relation === ".") {
+    return;
+  }
+  let current = workspace;
+  for (const component of relation.split(sep)) {
+    if (component === "" || component === "." || component === "..") {
+      continue;
+    }
+    current = join(current, component);
+    const stats = await lstat(current, { bigint: true });
+    if (stats.isSymbolicLink()) {
+      throw new Error("path contains a symbolic link or junction inside the workspace.");
+    }
+  }
+}
+
 export async function resolveWorkspaceTarget(
   raw: string,
   cwd: string,
@@ -103,6 +122,7 @@ export async function resolveWorkspaceTarget(
   if (!workspace.stats.isDirectory()) {
     throw new Error("current workspace is not a directory.");
   }
+  await assertNoSymlinkComponents(lexicalWorkspace, lexicalCandidate);
   const canonicalPath = await realpath(lexicalCandidate);
   if (!isPathContained(canonicalWorkspace, canonicalPath)) {
     throw new Error("path resolves outside the current workspace.");

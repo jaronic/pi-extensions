@@ -12,7 +12,8 @@ import { resolveExportPath, writeExportFile } from "./export.ts";
 
 export interface TelemetryCommandRuntime {
   getState(): TelemetryState;
-  resetTelemetry(ctx: ExtensionCommandContext): void;
+  /** Reset in-memory state and persist the empty snapshot. Returns false when the append failed. */
+  resetTelemetry(ctx: ExtensionCommandContext): boolean;
 }
 
 function errorMessage(error: unknown): string {
@@ -70,8 +71,15 @@ export function registerTelemetryCommand(pi: ExtensionAPI, runtime: TelemetryCom
           );
           if (!confirmed) return;
         }
-        runtime.resetTelemetry(ctx);
-        ctx.ui.notify("Telemetry reset.", "info");
+        const persisted = runtime.resetTelemetry(ctx);
+        if (persisted) {
+          ctx.ui.notify("Telemetry reset.", "info");
+        } else {
+          ctx.ui.notify(
+            "Telemetry reset failed: the empty snapshot could not be persisted; it will be retried on the next turn_end.",
+            "error",
+          );
+        }
         return;
       }
 

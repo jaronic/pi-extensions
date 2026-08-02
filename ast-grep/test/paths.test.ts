@@ -23,7 +23,7 @@ test("workspace targets canonicalize inside paths and reject lexical escapes", a
   await assert.rejects(resolveWorkspaceTarget("src", root, "file"), /existing file/u);
 });
 
-test("workspace targets reject symlink escape and hard-linked edit targets", async (t) => {
+test("workspace targets fail closed on symlink components and hard-linked edit targets", async (t) => {
   const root = await temporaryWorkspace(t, "pi-ast-grep-links-");
   const outside = await temporaryWorkspace(t, "pi-ast-grep-links-outside-");
   await mkdir(join(root, "src"));
@@ -31,7 +31,7 @@ test("workspace targets reject symlink escape and hard-linked edit targets", asy
   await writeFile(join(outside, "secret.ts"), "secret\n", "utf8");
   if (process.platform !== "win32") {
     await symlink(join(outside, "secret.ts"), join(root, "src", "escape.ts"));
-    await assert.rejects(resolveWorkspaceTarget("src/escape.ts", root, "file"), /resolves outside/u);
+    await assert.rejects(resolveWorkspaceTarget("src/escape.ts", root, "file"), /symbolic link or junction/u);
   }
   await link(join(root, "src", "target.ts"), join(root, "src", "alias.ts"));
   await assert.rejects(resolveWorkspaceTarget("src/target.ts", root, "file"), /refuses hard-linked files/u);
@@ -76,4 +76,25 @@ test("bounded file reads detect truncate, append, and same-size mutation after f
       );
     });
   }
+});
+
+test("workspace targets reject in-workspace file and directory symlinks without touching their targets", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("unprivileged Windows symlink creation is not portable");
+    return;
+  }
+  const root = await temporaryWorkspace(t, "pi-ast-grep-inlink-");
+  await mkdir(join(root, "src"));
+  await mkdir(join(root, "real"));
+  await writeFile(join(root, "real", "target.ts"), "foo(x)\n", "utf8");
+  await writeFile(join(root, "src", "plain.ts"), "bar(y)\n", "utf8");
+  await symlink(join(root, "real", "target.ts"), join(root, "src", "alias.ts"));
+  await symlink(join(root, "real"), join(root, "linked"));
+
+  await assert.rejects(resolveWorkspaceTarget("src/alias.ts", root, "file"), /symbolic link or junction/u);
+  await assert.rejects(resolveWorkspaceTarget("linked", root, "directory"), /symbolic link or junction/u);
+  await assert.rejects(resolveWorkspaceTarget("linked/target.ts", root, "file"), /symbolic link or junction/u);
+
+  const plain = await resolveWorkspaceTarget("src/plain.ts", root, "file");
+  assert.equal(plain.displayPath, "src/plain.ts");
 });

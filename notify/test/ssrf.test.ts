@@ -30,6 +30,14 @@ describe("isPrivateIp", () => {
     assert.equal(isPrivateIp("2606:4700:4700::1111"), false);
   });
 
+  test("flags IPv4-mapped IPv6 in both dotted and hexadecimal form", () => {
+    for (const ip of ["::ffff:127.0.0.1", "::ffff:7f00:1", "0:0:0:0:0:ffff:7f00:1", "::ffff:c0a8:010a"]) {
+      assert.equal(isPrivateIp(ip), true, ip);
+    }
+    assert.equal(isPrivateIp("::ffff:8.8.8.8"), false);
+    assert.equal(isPrivateIp("::ffff:808:808"), false);
+  });
+
   test("non-IP strings are not flagged here", () => {
     assert.equal(isPrivateIp("ntfy.sh"), false);
   });
@@ -68,6 +76,18 @@ describe("validatePublicHttpsUrl", () => {
       assert.equal(validatePublicHttpsUrl(raw).ok, false, raw);
     }
     assert.equal(validatePublicHttpsUrl("https://8.8.8.8").ok, true);
+  });
+
+  test("rejects IPv4-mapped IPv6 literals as WHATWG normalizes them to hexadecimal", () => {
+    for (const raw of [
+      "https://[::ffff:127.0.0.1]/",
+      "https://[::ffff:7f00:1]/",
+      "https://[0:0:0:0:0:ffff:7f00:1]/",
+      "https://[::ffff:c0a8:010a]/",
+    ]) {
+      assert.equal(validatePublicHttpsUrl(raw).ok, false, raw);
+    }
+    assert.equal(validatePublicHttpsUrl("https://[::ffff:808:808]/").ok, true);
   });
 });
 
@@ -109,4 +129,34 @@ describe("assertPublicHostname", () => {
     await assert.rejects(() => assertPublicHostname(new URL("https://127.0.0.1"), countingLookup), /private\/reserved/);
     assert.equal(lookups, 0);
   });
+
+  test("releases a never-settling lookup on abort", async () => {
+    const controller = new AbortController();
+    const pending = assertPublicHostname(new URL("https://ntfy.sh"), neverLookup, { signal: controller.signal });
+    controller.abort();
+    await assert.rejects(settledWithin(pending, 500, "lookup was not released by abort"), /aborted/);
+  });
+
+  test("rejects a never-settling lookup on an already-aborted signal", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const pending = assertPublicHostname(new URL("https://ntfy.sh"), neverLookup, { signal: controller.signal });
+    await assert.rejects(settledWithin(pending, 500, "lookup did not settle on the pre-cancelled signal"), /aborted/);
+  });
+
+  test("releases a never-settling lookup on timeout", async () => {
+    const pending = assertPublicHostname(new URL("https://ntfy.sh"), neverLookup, { timeoutMs: 30 });
+    await assert.rejects(settledWithin(pending, 500, "lookup was not released by the timeout"), /timed out/);
+  });
 });
+
+/** A lookup that never settles, for timeout/abort regression tests. */
+const neverLookup = (): Promise<LookupAddress[]> => new Promise(() => {});
+
+/** Reject when the promise does not settle within the guard, so regressions fail fast instead of hanging. */
+function settledWithin<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
+}

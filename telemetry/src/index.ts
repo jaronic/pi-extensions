@@ -39,7 +39,8 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     pending.set(toolCallId, call);
   }
 
-  function persistSnapshot(): void {
+  /** Persist the current state. Returns false when appendEntry throws (dirty flag survives for the next turn_end retry). */
+  function persistSnapshot(): boolean {
     const snapshot: TelemetrySnapshot = {
       version: 1,
       aggregates: state.aggregates.map((aggregate) => ({ ...aggregate })),
@@ -47,8 +48,10 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     try {
       pi.appendEntry<TelemetrySnapshot>(TELEMETRY_STATE_TYPE, snapshot);
       dirty = false;
+      return true;
     } catch {
       // Keep the dirty flag; persistence is retried on the next turn_end.
+      return false;
     }
   }
 
@@ -61,7 +64,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       if (entry.type !== "custom" || entry.customType !== TELEMETRY_STATE_TYPE) continue;
       const decoded = decodeTelemetrySnapshot(entry.data);
       if (!decoded.ok) {
-        state = emptyTelemetryState();
+        // Skip the invalid entry; the last valid snapshot stays in effect.
         restoreWarning = decoded.reason;
         continue;
       }
@@ -80,7 +83,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       pending.clear();
       dirty = true;
       // A reset must append an empty snapshot so branch restore replays to empty.
-      persistSnapshot();
+      return persistSnapshot();
     },
   });
 

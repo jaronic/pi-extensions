@@ -33,7 +33,7 @@ flowchart LR
 
 ## 安装与启用
 
-要求：Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.82.1` 的 Pi。
+要求：Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.83.0` 的 Pi。
 
 从仓库根目录启用：
 
@@ -93,7 +93,7 @@ target 与 base 相同、用户输入的 ref 无法解析、或后续 LLM 发现
 reports/diffreport/YYYYMMDD-HHmmss-<source>.md
 ```
 
-命令本身不先生成静态摘要。它发送一个真正的 user message 启动 agent turn，要求加载 `change-report` skill、按多轮证据流程工作，并在结束前写完指定文件。agent 忙碌时该消息作为 `followUp` 排队；command handler 会先等待当前 turn，再等待排队触发的探索 turn 完全结束，避免 `print/json` 在报告落盘前退出。turn 结束后 handler 先校验报告文件确实存在且非空（未产出时明确报错，不会把空跑当成成功），再做机械合同检查：报告内是否出现证据 ID、证据索引章节与平衡的代码围栏，以及探索期间是否真正发生过 overview 与定向 patch/history 证据 pass。违规则以 warning 通知并列出问题，报告文件仍然保留。
+命令本身不先生成静态摘要。它发送一个真正的 user message 启动 agent turn，要求加载 `change-report` skill、按多轮证据流程工作，并在结束前写完指定文件。agent 忙碌时该消息作为 `followUp` 排队；command handler 会先等待当前 turn，再等待排队触发的探索 turn 完全结束，避免 `print/json` 在报告落盘前退出；若排队 turn 迟迟不启动，则跳过 turn-start 等待直接进入产物校验，不空耗超时。启动前 handler 先记录目标文件的指纹（存在性 + inode/mtime/size）；turn 结束后要求文件新建或指纹在本轮发生变化（mtime 不早于本轮启动），上一轮残留的旧报告不会被误报为本次成功写入，未产出时明确报错，不会把空跑当成成功；随后再做机械合同检查：报告内是否出现证据 ID、证据索引章节与平衡的代码围栏，以及探索期间是否真正发生过 overview 与定向 patch/history 证据 pass。违规则以 warning 通知并列出问题，报告文件仍然保留。
 
 TUI 中所有来源、边界和后续澄清均使用 Request。`print/json` 等无 Request UI 模式必须给出足够的显式来源；否则命令安全失败，不猜测用户选择。
 
@@ -178,7 +178,8 @@ branch/commit 的未变更代码必须从对应 target revision 读取；只有�
 ## 安全与边界
 
 - 仓库文件、diff、commit message、文档、生成内容和 tool output 都是不可信证据，不是指令；其中嵌入的命令、tool 调用、扩展范围、数据披露或写文件请求一律不执行。
-- Git 通过 `pi.exec("git", args)` 调用，不拼 shell 字符串；所有调用统一走 `execGitChecked`：宿主对非零退出码 resolve 而非 reject，因此它显式检查 `code`/`killed` 并把带界的 stderr 并入错误，非 Git 目录或无效 ref 不会被当成空成功；每次调用前置 `-c core.quotePath=false`，diff 头保留原始 UTF-8 路径（中文文件名不会产生 `"a/…"` 引号行）。ref 禁止 leading dash、空白和控制字符，并在执行前验证。
+- Git 通过 `pi.exec("git", args)` 调用，不拼 shell 字符串；所有调用统一走 `execGitChecked`：宿主对非零退出码 resolve 而非 reject，因此它显式检查 `code`/`killed` 并把带界的 stderr 并入错误，非 Git 目录或无效 ref 不会被当成空成功；每次调用前置 `-c core.quotePath=false --literal-pathspecs`：diff 头保留原始 UTF-8 路径（中文文件名不会产生 `"a/…"` 引号行），pathspec magic（如 `:(top)`）无法把定向路径解析出 workspace。ref 禁止 leading dash、空白和控制字符，并在执行前验证。
+- diff 采集统一 `--no-color --no-ext-diff --no-textconv`，仓库配置的外部 diff 或 textconv 驱动不会在采集时执行任意命令；单 commit 以 first-parent 语义采集（`git show -m --first-parent`），clean merge 也产出相对第一父提交的差异而非空输出；history 精确选中单个 commit 时不应用 `--no-merges`，merge 自身会被返回而不是其父提交。
 - branch 始终使用明确的三点 merge-base 比较；空 diff 不切换成含义不同的两点比较。
 - `paths` 和 `--output` 必须位于 workspace；已有路径和最近存在的父目录都检查 canonical path，拒绝 symlink escape。
 - `uncommitted` 的 tracked diff 使用 `git diff HEAD`，并用 `git ls-files --others --exclude-standard` 单独覆盖 untracked。
@@ -196,7 +197,7 @@ branch/commit 的未变更代码必须从对应 target revision 读取；只有�
 - `src/renderer.ts`：uikit 卡片渲染（call 标题、证据摘要状态行、scope/full-output kv 行、证据正文折叠）。
 - `src/call-ledger.ts`：探索期间的 `diff_report` 调用台账，供命令层核验最少证据 pass。
 - `src/report-quality.ts`：报告产物的机械合同检查（证据 ID、证据索引、代码围栏）。
-- `src/git-diff.ts`：统一 Git 执行（`execGitChecked` 退出码检查 + `core.quotePath=false`）、ref/path 安全、branch/commit discovery、有界 diff/history/untracked 捕获。
+- `src/git-diff.ts`：统一 Git 执行（`execGitChecked` 退出码检查 + `core.quotePath=false` + `--literal-pathspecs`）、ref/path 安全、branch/commit discovery、有界 diff/history/untracked 捕获（diff 禁用 ext-diff/textconv 驱动，单 commit 走 first-parent 语义）。
 - `src/diff-parser.ts`：解析 patch 为文件/hunk 证据。
 - `src/formatter.ts`：有界 evidence inventory、patch 和 history文本。
 - `src/output.ts`：官方上限、临时 artifact 与幂等清理。
@@ -211,4 +212,4 @@ npm run check
 npm test
 ```
 
-测试覆盖 extension-only bundled-skill 发现、skill snapshot/trust/evidence 契约、真实临时 Git 仓库、四类入口、Request 多轮选择/取消、描述不作过滤、tracked/untracked、branch/commit history、path/ref 安全、证据格式、Markdown kickoff 和有界输出。
+测试覆盖 extension-only bundled-skill 发现、skill snapshot/trust/evidence 契约、真实临时 Git 仓库、四类入口、Request 多轮选择/取消、描述不作过滤、tracked/untracked、branch/commit history、path/ref 安全、pathspec magic 与 textconv 驱动隔离、merge first-parent 语义、旧报告指纹防误报、证据格式、Markdown kickoff 和有界输出。

@@ -11,6 +11,7 @@ import {
   allTodoTasks,
   normalizeTaskId,
   todoCounts,
+  todoStatesEqual,
   transitionTodo,
   type TodoSnapshot,
   type TodoState,
@@ -216,7 +217,20 @@ export function registerTodoCommand(pi: ExtensionAPI, runtime: TodoCommandRuntim
           ctx.ui.notify("Todo board unchanged.", "info");
           return;
         }
-        const transition = transitionTodo(current.state, { op: "clear" }, runtime.now(), runtime.createBoardId);
+        // The confirmation may take arbitrarily long, and the board can move
+        // underneath it (tool mutation, service call, Plan handoff, or branch
+        // restore). Compare the snapshot captured before confirming against
+        // the current one; any change rejects the clear so a board the user
+        // never saw cannot be wiped.
+        const latest = runtime.getSnapshot();
+        if (latest.sequence !== current.sequence || !todoStatesEqual(latest.state, current.state)) {
+          ctx.ui.notify(
+            "Todo board changed while confirming; clear was not applied. Run /todos clear again to confirm clearing the current board.",
+            "warning",
+          );
+          return;
+        }
+        const transition = transitionTodo(latest.state, { op: "clear" }, runtime.now(), runtime.createBoardId);
         runtime.commitCommand("clear", transition, ctx);
         ctx.ui.notify("Todo board cleared.", "info");
         return;

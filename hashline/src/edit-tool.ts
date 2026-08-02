@@ -97,10 +97,18 @@ function refusalEditResult(text: string): AgentToolResult<EditToolDetails> {
 }
 
 function buildDefaultDetails(path: string, oldText: string, newText: string): EditToolDetails {
-  const diffResult = generateDiffString(oldText, newText);
+  // jsdiff's diffLines splits on "\n" only, so raw CR/CRLF text collapses into
+  // single giant lines: firstChangedLine would point at line 1 and the patch
+  // would carry the whole file as one line, blowing the details budget on
+  // CR-only files. Compute details against an LF-normalized logical view (the
+  // host edit tool's normalizeToLF approach); raw bytes stay authoritative for
+  // CAS, the write and EOL preservation.
+  const logicalOldText = oldText.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const logicalNewText = newText.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const diffResult = generateDiffString(logicalOldText, logicalNewText);
   return Object.freeze({
     diff: diffResult.diff,
-    patch: generateUnifiedPatch(path, oldText, newText),
+    patch: generateUnifiedPatch(path, logicalOldText, logicalNewText),
     ...(diffResult.firstChangedLine === undefined ? {} : { firstChangedLine: diffResult.firstChangedLine }),
   });
 }

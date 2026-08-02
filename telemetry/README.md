@@ -21,7 +21,7 @@ flowchart LR
 - 宿主对每次工具尝试都会发 `tool_execution_start`/`tool_execution_end` 一对事件，Telemetry 据此按 `{tool, provider, model}` 维度计数；`tool_execution_end` 补记失败与耗时（从 start 到 end 的墙钟时间）。未知工具、schema 校验失败、输出截断与 gate 阻断等即时失败路径只发这一对事件（从不触发 `tool_call`/`tool_result` 钩子），同样计入调用与失败。provider/model 取自事件发生时 `ctx.model`，模型缺失时降级为 `unknown`。
 - 聚合数据有界：最多 256 个 `{tool, provider, model}` 分组，超出时淘汰最久未使用的分组；单个维度值最长 128 个 Unicode 字符；pending 表上限 128（FIFO）。
 - 每个 turn 结束且数据有变化时，把完整快照作为 Pi session journal 的 custom entry（`telemetry-state-v1`）持久化；`session_start` 与 `session_tree` 都按当前分支重放恢复，最后一条有效快照生效。
-- 恢复不信任反序列化数据：版本不符或结构非法的快照整体丢弃，单条非法聚合（计数为负、failures > calls、重复维度等）逐条跳过并告警。
+- 恢复不信任反序列化数据：版本不符或结构非法的快照跳过不采用（不影响之前已恢复的有效状态，最后一条有效快照仍然生效），单条非法聚合（计数为负、failures > calls、重复维度等）逐条跳过并告警。
 - handler 返回 `undefined`，永不阻塞或改写工具调用；观察逻辑失败不会影响原工具协议。
 
 ## 适用场景与效果
@@ -77,7 +77,7 @@ Telemetry **只**记录工具名、provider ID、model ID、计数与耗时。�
 
 ## 安装与启用
 
-要求：Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.82.1` 的 Pi。
+要求：Node.js `>=22.19.0`、npm，以及兼容 `@earendil-works/pi-coding-agent >=0.83.0` 的 Pi。
 
 ```bash
 cd /path/to/pi-extensions/telemetry
@@ -108,7 +108,7 @@ pi --extension ./src/index.ts
 | --- | --- |
 | `/telemetry`、`/telemetry status` | 显示总调用数、失败数、成功率、分组占用，以及按调用数排序的前 10 个 `{tool @ provider/model}` 分组（调用数、失败数、成功率、平均耗时）。 |
 | `/telemetry export [file]` | 把完整聚合数据导出为 JSON（默认 `telemetry-export.json`，写入会话 cwd）。路径必须是 cwd 内的相对路径：绝对路径、`..` 逃逸、符号链接逃逸一律拒绝；目标目录必须已存在；已存在的文件不会被覆盖。 |
-| `/telemetry reset` | 清空全部聚合数据并追加一条空快照（保证分支重放后仍为空）。有对话框 UI 时先要求确认；无 UI 路径直接执行。 |
+| `/telemetry reset` | 清空全部聚合数据并追加一条空快照（保证分支重放后仍为空）。有对话框 UI 时先要求确认；无 UI 路径直接执行。空快照追加失败时报告失败（不报成功），内存态已清空并保持 dirty 标记，由下一个 `turn_end` 重试持久化。 |
 
 命令仅注册 `telemetry` 一个；扩展不注册任何 agent 工具，也不修改 active tools。
 
@@ -144,7 +144,7 @@ pi --extension ./src/index.ts
 ## 状态与生命周期
 
 - 观察：`tool_execution_start` 记录一次调用并把 `{dims, startedAt}` 按 `toolCallId` 存入有界 pending 表（上限 128，FIFO 淘汰）；`tool_execution_end` 匹配 pending 计算耗时并结算失败。未知工具、schema 校验失败、输出截断与 gate 阻断等路径宿主只发 start/end 一对事件（从不触发 `tool_call`/`tool_result` 钩子），因此也被完整计入调用与失败。无匹配 start 的孤儿 end（跨 restore 丢失或超过 pending 上限）按一次隐含调用计数——即使该维度已有聚合——只是没有耗时样本。
-- 持久化：`turn_end` 时如有变化则追加完整快照；reset 追加空快照。恢复时从 `ctx.sessionManager.getBranch()` 顺序重放，最后一条有效快照生效；解码失败恢复快照为空并在有 UI 时告警。
+- 持久化：`turn_end` 时如有变化则追加完整快照；reset 追加空快照（追加失败时 reset 报失败，内存态已清空并保持 dirty 标记，下个 `turn_end` 重试）。恢复时从 `ctx.sessionManager.getBranch()` 顺序重放，最后一条有效快照生效；解码失败跳过该条并在有 UI 时告警，保留之前恢复的有效状态。
 - `session_start` 与 `session_tree` 都会清空内存与 pending 表后重放，保证分支切换后数据与当前分支一致；restore 后到达的无匹配 end 按一次隐含调用计数。
 - `session_shutdown` 幂等清空 pending 表；本扩展没有 timer、子进程或监听器需要释放。
 - 四种模式：TUI/RPC 下命令通过 `ctx.ui.notify`/`confirm` 交互；JSON/print 模式下观察与持久化照常工作（不依赖任何 UI），slash 命令本身不可调用，也不会因为没有 UI 而崩溃。

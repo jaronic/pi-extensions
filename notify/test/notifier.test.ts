@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { DEFAULT_NOTIFY_CONFIG, mergeNotifyConfig } from "../src/config.ts";
-import type { ChannelAdapter } from "../src/channels.ts";
+import { createChannels, type ChannelAdapter } from "../src/channels.ts";
 import { createNotifier } from "../src/notifier.ts";
+import type { LookupAddress } from "../src/ssrf.ts";
 import { fakeChannel } from "./harness.ts";
 
 const T0 = 1_700_000_000_000;
@@ -110,4 +111,49 @@ describe("createNotifier", () => {
     assert.equal(report.outcomes[0].ok, false);
     assert.match(report.outcomes[0].error ?? "", /adapter exploded/);
   });
+
+  test("shutdown releases a dispatch stuck in a hanging DNS lookup", async () => {
+    const notifier = createNotifier({ channels: [hangingLookupNtfyChannel()], now: () => T0 });
+    notifier.agentStarted();
+    const pending = notifier.settled(configWith({ channels: { ntfy: { enabled: true, topic: "t" } } }), true, CWD);
+    notifier.shutdown();
+    const report = await settledWithin(pending, 500, "dispatch was not released by shutdown");
+    const ntfyOutcome = report.outcomes.find((outcome) => outcome.channel === "ntfy");
+    assert.equal(ntfyOutcome?.ok, false);
+    assert.match(ntfyOutcome?.error ?? "", /aborted/);
+  });
+
+  test("the dispatch timeout releases a dispatch stuck in a hanging DNS lookup", async () => {
+    const notifier = createNotifier({ channels: [hangingLookupNtfyChannel()], dispatchTimeoutMs: 30, now: () => T0 });
+    notifier.agentStarted();
+    const report = await settledWithin(
+      notifier.settled(configWith({ channels: { ntfy: { enabled: true, topic: "t" } } }), true, CWD),
+      500,
+      "dispatch was not released by the dispatch timeout",
+    );
+    const ntfyOutcome = report.outcomes.find((outcome) => outcome.channel === "ntfy");
+    assert.equal(ntfyOutcome?.ok, false);
+    assert.match(ntfyOutcome?.error ?? "", /abort/);
+  });
 });
+
+/** The real ntfy adapter wired to a lookup that never settles. */
+function hangingLookupNtfyChannel(): ChannelAdapter {
+  const adapter = createChannels({
+    platform: "linux",
+    exec: async () => ({ stdout: "", stderr: "", code: 0, killed: false }),
+    writeBell: () => {},
+    fetchImpl: (async () => new Response("ok", { status: 200 })) as typeof fetch,
+    lookup: () => new Promise<LookupAddress[]>(() => {}),
+  }).find((candidate) => candidate.id === "ntfy");
+  assert.ok(adapter, "ntfy channel exists");
+  return adapter;
+}
+
+/** Reject when the promise does not settle within the guard, so regressions fail fast instead of hanging. */
+function settledWithin<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
+}

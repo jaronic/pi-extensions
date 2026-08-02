@@ -5,7 +5,8 @@ import type {
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { EditInput, SearchInput } from "./schema.ts";
+import type { EditInput } from "./schema.ts";
+import { SUPPORTED_LANGUAGES } from "./languages.ts";
 import type {
   AstEditApplyDetailsV1,
   AstEditPreviewDetailsV1,
@@ -105,11 +106,16 @@ function fallbackText(result: AgentToolResult<unknown>, isError: boolean, theme:
   return new Text(tone(theme, isError ? "error" : "output", text), 0, 0);
 }
 
-export function renderSearchCall(args: SearchInput, theme: Theme): Text {
-  const scope = formatPathForDisplay(args.path ?? ".", 256).text;
-  const pattern = sanitizeAndCap(args.pattern ?? "", 256, 1).text;
+export function renderSearchCall(args: unknown, theme: Theme): Text {
+  const raw = isObject(args) ? args : {};
+  const scope = formatPathForDisplay(typeof raw.path === "string" ? raw.path : ".", 256).text;
+  const pattern = sanitizeAndCap(typeof raw.pattern === "string" ? raw.pattern : "", 256, 1).text;
+  const language = typeof raw.language === "string"
+    && (SUPPORTED_LANGUAGES as readonly string[]).includes(raw.language)
+    ? raw.language
+    : "?";
   return new Text(
-    `${tone(theme, "title", "ast_grep_search", { bold: false })} ${tone(theme, "accent", args.language ?? "?")} ${tone(theme, "muted", scope)}\n${tone(theme, "output", pattern)}`,
+    `${tone(theme, "title", "ast_grep_search", { bold: false })} ${tone(theme, "accent", language)} ${tone(theme, "muted", scope)}\n${tone(theme, "output", pattern)}`,
     0,
     0,
   );
