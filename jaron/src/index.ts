@@ -254,6 +254,18 @@ export default function jaronEditor(pi: ExtensionAPI): void {
 			),
 		);
 
+		const thm = ctx.ui.theme;
+		ctx.ui.setWorkingIndicator({
+			frames: [
+				thm.fg("warning", "◐"),
+				thm.fg("warning", "◓"),
+				thm.fg("warning", "◑"),
+				thm.fg("warning", "◒"),
+			],
+			intervalMs: 120,
+		});
+		ctx.ui.setHiddenThinkingLabel("⋯ thinking (expand to view)");
+
 		loadRecentSessions = () => {
 			SessionManager.list(ctx.cwd)
 				.then((sessions) => {
