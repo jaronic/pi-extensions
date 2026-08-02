@@ -4,43 +4,31 @@ import {
 	type ExtensionContext,
 	type KeybindingsManager,
 	type ReadonlyFooterDataProvider,
+	SessionManager,
+	VERSION,
+	keyHint,
+	keyText,
+	rawKeyHint,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+	buildHeaderLines,
+	compactCwd,
+	fitToWidth,
+	formatSessionTime,
+	stripAnsi,
+	type HeaderOptions,
+	type RecentSession,
+} from "./banner.ts";
 import { BranchMonitor } from "./branch.ts";
 
 const SPINNER = ["◐", "◓", "◑", "◒"];
-
-function cwdDisplay(cwd: string): string {
-	const home = process.env.HOME;
-	if (home && cwd.startsWith(home)) return `~${cwd.slice(home.length)}`;
-	return cwd;
-}
-
-function compactCwd(cwd: string): string {
-	const display = cwdDisplay(cwd);
-	const parts = display.split("/").filter(Boolean);
-	if (display.startsWith("~/") && parts.length > 3)
-		return `~/${parts.slice(-3).join("/")}`;
-	if (parts.length > 4) return `…/${parts.slice(-4).join("/")}`;
-	return display;
-}
-
-function stripAnsi(text: string): string {
-	return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
-}
 
 function isHorizontalBorderLine(line: string, width: number): boolean {
 	const plain = stripAnsi(line);
 	if (visibleWidth(plain) !== width) return false;
 	return /^─+$/.test(plain) || /^─── [↑↓] \d+ more ─*$/.test(plain);
-}
-
-function fitToWidth(text: string, width: number): string {
-	if (width <= 0) return "";
-	const fitted =
-		visibleWidth(text) > width ? truncateToWidth(text, width, "") : text;
-	return `${fitted}${" ".repeat(Math.max(0, width - visibleWidth(fitted)))}`;
 }
 
 interface StatusLineLayout {
@@ -138,6 +126,33 @@ class EmptyFooter implements Component {
 	invalidate(): void {}
 }
 
+/**
+ * Startup banner above the chat: brand in the top border, hint chips in
+ * the body, path/branch in the bottom border, recent sessions as a list.
+ * Implements `setExpanded` so the core `app.tools.expand` toggle drives
+ * collapsed/expanded variants.
+ */
+class JaronHeader implements Component {
+	private expanded = false;
+
+	constructor(
+		private readonly getOptions: () => HeaderOptions,
+		private readonly tui: TUI,
+	) {}
+
+	render(width: number): string[] {
+		const lines = buildHeaderLines(this.getOptions(), width);
+		return this.expanded ? lines.expanded : lines.collapsed;
+	}
+
+	setExpanded(expanded: boolean): void {
+		this.expanded = expanded;
+		this.tui.requestRender();
+	}
+
+	invalidate(): void {}
+}
+
 export default function jaronEditor(pi: ExtensionAPI): void {
 	let activeTui: TUI | undefined;
 	let working = false;
@@ -146,6 +161,8 @@ export default function jaronEditor(pi: ExtensionAPI): void {
 	let branch: string | undefined;
 	let branchMonitor: BranchMonitor | undefined;
 	let footerData: ReadonlyFooterDataProvider | undefined;
+	let loadRecentSessions: (() => void) | undefined;
+	let recentSessions: RecentSession[] = [];
 
 	function stopTimer(): void {
 		if (!timer) return;
@@ -176,10 +193,17 @@ export default function jaronEditor(pi: ExtensionAPI): void {
 	pi.on("model_select", () => requestRender());
 	pi.on("thinking_level_select", () => requestRender());
 
+	pi.on("session_info_changed", () => {
+		loadRecentSessions?.();
+		requestRender();
+	});
+
 	pi.on("session_shutdown", () => {
 		branchMonitor?.stop();
 		branchMonitor = undefined;
 		branch = undefined;
+		recentSessions = [];
+		loadRecentSessions = undefined;
 		stopTimer();
 		activeTui = undefined;
 		footerData = undefined;
@@ -190,6 +214,64 @@ export default function jaronEditor(pi: ExtensionAPI): void {
 			footerData = data;
 			return new EmptyFooter();
 		});
+
+		ctx.ui.setHeader((tui, theme) =>
+			new JaronHeader(
+				() => ({
+					brand: `${theme.bold(theme.fg("accent", "pi"))}${theme.fg("dim", ` v${VERSION}`)}`,
+					cwd: compactCwd(ctx.cwd),
+					branch,
+					collapsedHints: [
+						keyHint("tui.input.submit", "to send"),
+						rawKeyHint("/", "for commands"),
+						rawKeyHint("!", "to run bash"),
+					],
+					expandedHints: [
+						keyHint("app.interrupt", "to interrupt"),
+						keyHint("app.clear", "to clear"),
+						keyHint("app.exit", "to exit (empty)"),
+						keyHint("app.suspend", "to suspend"),
+						keyHint("app.thinking.cycle", "to cycle thinking"),
+						keyHint("app.model.cycleForward", "to cycle models"),
+						keyHint("app.model.select", "to select model"),
+						keyHint("app.tools.expand", "to expand tools"),
+						keyHint("app.thinking.toggle", "to expand thinking"),
+						keyHint("app.editor.external", "for external editor"),
+						keyHint("app.message.followUp", "to queue follow-up"),
+						keyHint("app.clipboard.pasteImage", "to paste image"),
+					],
+					expandHint: theme.fg(
+						"dim",
+						`press ${keyText("app.tools.expand")} to show full startup help`,
+					),
+					recentSessions,
+					border: (value) => theme.fg("warning", value),
+					dim: (value) => theme.fg("dim", value),
+					muted: (value) => theme.fg("muted", value),
+					accent: (value) => theme.fg("accent", value),
+				}),
+				tui,
+			),
+		);
+
+		loadRecentSessions = () => {
+			SessionManager.list(ctx.cwd)
+				.then((sessions) => {
+					const current = ctx.sessionManager.getSessionFile();
+					recentSessions = sessions
+						.filter((session) => session.path !== current)
+						.slice(0, 5)
+						.map((session) => ({
+							time: formatSessionTime(session.modified),
+							summary: session.firstMessage || session.name || "",
+						}));
+					requestRender();
+				})
+				.catch(() => {
+					recentSessions = [];
+				});
+		};
+		loadRecentSessions();
 
 		branchMonitor?.stop();
 		branchMonitor = new BranchMonitor({
