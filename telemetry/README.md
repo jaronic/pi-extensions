@@ -1,8 +1,28 @@
 # Telemetry 插件
 
-`telemetry` 是一个纯观察型 Pi 扩展：它统计模型在会话中实际调用了哪些工具、成功率如何、随 provider/model 如何变化，为排查“工具不活跃”类问题和离线评测提供数据基础。它不注册任何模型工具、不注入 prompt、不拦截或修改任何工具调用，对 agent 行为零干预。
+`telemetry` 是一个纯观察型 Pi 扩展：它统计模型在会话中实际调用了哪些工具、成功率如何、随 provider/model 如何变化，为排查"工具不活跃"类问题和离线评测提供数据基础。它不注册任何模型工具、不注入 prompt、不拦截或修改任何工具调用，对 agent 行为零干预。
 
 > 维护约束：凡是改变 Telemetry 的行为、命令、数据维度、持久化格式、隐私边界或安装方式，都必须在同一改动中同步本 README。
+
+## 它解决什么问题
+
+"哪些工具装了但模型从来不用"过去只能靠感觉猜。模型工具调用率高度依赖 provider/模型（上游 earendil-works/pi#6717：同一工具在一个 provider 下 23 次响应 0 调用，换一个 provider 就 45/83），凭印象下结论经常是错的。Telemetry 把这个问题变成可查的数据：装了哪些工具不重要，**被调用了多少次、成功了多少、在哪个模型下**，一目了然。它是 enforce（促活层）、prompt 元数据调优等一切"提利用率"动作的测量基础。
+
+## 工作原理
+
+```mermaid
+flowchart LR
+    Call[tool_call 事件] --> Pending[按 toolCallId 记入 pending 表<br/>计数 +1,记下开始时间]
+    Result[tool_result 事件] --> Settle[匹配 pending,结算失败数与耗时<br/>孤儿 result 计一次隐含调用]
+    TurnEnd[turn_end] -->|有变化| Journal[appendEntry 追加完整快照<br/>telemetry-state-v1]
+    Start[session_start / session_tree] --> Replay[按当前分支重放快照恢复]
+```
+
+- 每次 `tool_call` 按 `{tool, provider, model}` 维度计数；`tool_result` 补记失败与耗时（从 call 到 result 的墙钟时间）。provider/model 取自事件发生时 `ctx.model`，模型缺失时降级为 `unknown`。
+- 聚合数据有界：最多 256 个 `{tool, provider, model}` 分组，超出时淘汰最久未使用的分组；单个维度值最长 128 个 Unicode 字符；pending 表上限 128（FIFO）。
+- 每个 turn 结束且数据有变化时，把完整快照作为 Pi session journal 的 custom entry（`telemetry-state-v1`）持久化；`session_start` 与 `session_tree` 都按当前分支重放恢复，最后一条有效快照生效。
+- 恢复不信任反序列化数据：版本不符或结构非法的快照整体丢弃，单条非法聚合（计数为负、failures > calls、重复维度等）逐条跳过并告警。
+- handler 对 `tool_call` 返回 `undefined`，永不阻塞或改写工具调用；观察逻辑失败不会影响原工具协议。
 
 ## 适用场景与效果
 
@@ -12,17 +32,48 @@
 - 某个工具的失败率是否异常偏高（例如 schema 不兼容导致模型反复调用失败）？
 - 切换 provider/model 后，工具使用分布和成功率如何变化？
 
-启用后：
+### 效果示例：`/telemetry status`
 
-- 每次 `tool_call` 按 `{tool, provider, model}` 维度计数；`tool_result` 补记失败与耗时（从 call 到 result 的墙钟时间）。provider/model 取自事件发生时 `ctx.model`，模型缺失时降级为 `unknown`。
-- 聚合数据有界：最多 256 个 `{tool, provider, model}` 分组，超出时淘汰最久未使用的分组；单个维度值最长 128 个 Unicode 字符。
-- 每个 turn 结束且数据有变化时，把完整快照作为 Pi session journal 的 custom entry（`telemetry-state-v1`）持久化；`session_start` 与 `session_tree` 都按当前分支重放恢复，最后一条有效快照生效。
-- 恢复不信任反序列化数据：版本不符或结构非法的快照整体丢弃，单条非法聚合（计数为负、failures > calls、重复维度等）逐条跳过并告警，维度值未规范化的条目同样丢弃。
-- handler 对 `tool_call` 返回 `undefined`，永不阻塞或改写工具调用；观察逻辑失败不会影响原工具协议。
+正常开发一段时间后执行 `/telemetry`，得到（notify 弹出的实际格式）：
+
+```text
+Tool calls: 137 · failures: 4 · success: 97% · groups: 9/256
+- read @ anthropic/claude-sonnet-4: 48 calls, 0 failed (100% ok), avg 320ms
+- edit @ anthropic/claude-sonnet-4: 31 calls, 2 failed (94% ok), avg 1.1s
+- rg @ anthropic/claude-sonnet-4: 22 calls, 0 failed (100% ok), avg 450ms
+- bash @ anthropic/claude-sonnet-4: 18 calls, 1 failed (94% ok), avg 4.2s
+- todo @ anthropic/claude-sonnet-4: 12 calls, 1 failed (92% ok), avg 80ms
+- lsp @ anthropic/claude-sonnet-4: 3 calls, 0 failed (100% ok), avg 2.8s
+- ask @ anthropic/claude-sonnet-4: 2 calls, 0 failed (100% ok), avg n/a
+… 2 more group(s). Use /telemetry export for the full data.
+```
+
+判读示例：`lsp` 只有 3 次调用而 `rg` 有 22 次——如果其中大量是符号导航，说明 lsp 活跃度低，值得用 enforce 的 nudge/gate 或 prompt guideline 干预；干预后再看同一张表，占比变化就是干预效果的直接度量。
+
+### 场景示例
+
+**场景 1：找出"装了没人用"的工具。** 对比 status 列表与你全局启用的扩展清单：注册了但完全不出现在聚合里的工具就是零调用工具。零调用不等于该删——`report_plan_blocked` 这类边缘路径工具设计上低频——但它告诉你促活资源该投给谁。
+
+**场景 2：provider/模型切换对比。** 同一套扩展，上午用 `anthropic/claude-sonnet-4`、下午切到另一个 model，export 后按 `provider`/`model` 字段切片对比：某工具在 A 模型成功率 98%、在 B 模型 60%，说明是模型/B 的 schema 兼容问题而非工具本身的问题，可以向 enforce 加模型维度的应对或换模型。
+
+**场景 3：与 enforce 的评测闭环（推荐工作流）。**
+
+1. 两个扩展都启用，正常使用一到两周，攒基线数据。
+2. `/telemetry export baseline.json`，看目标工具（如 `lsp`、`ast_grep_search`）的调用占比。
+3. 用 enforce 干预（先默认 nudge，不够再配置 gate），同时按需调整目标工具的 promptGuidelines。
+4. 再运行相同时长，`/telemetry export after.json` 对比：调用占比上升 = 干预有效；占比没变但 nudge 命中多次（`/enforce status` 可见） = 提示被无视，该升 gate。
+5. 数据驱动地决定每条规则停留在 nudge 还是升级 gate，而不是凭感觉一次到位。
 
 ## 隐私边界
 
 Telemetry **只**记录工具名、provider ID、model ID、计数与耗时。它绝不读取、记录或导出工具参数（`input`）、工具输出（`content`/`details`）、prompt 文本或任何会话内容。`tool_call`/`tool_result` 事件中的参数与结果对象从不进入聚合状态、journal 快照或 export 文件。导出 JSON 可安全地离开本机用于离线评测，但仍包含你使用的 provider/model 名称，分享前请自行确认。
+
+## 如何接入
+
+1. **启用**：`make pi-extensions-on` + `/reload`（或按下节手动链接）。零配置，即刻开始统计。
+2. **日常**：不需要任何操作，它纯被动观察。偶尔 `/telemetry status` 扫一眼。
+3. **评测**：需要正式对比（provider 切换、促活干预前后）时，用 `/telemetry reset` 清出干净起点，干预后 `/telemetry export` 留档。
+4. **清理**：换实验轮次用 `reset`；数据跟随 session 分支，不写独立状态文件，无磁盘残留需要清理。
 
 ## 安装与启用
 
@@ -100,7 +151,7 @@ pi --extension ./src/index.ts
 
 ## 与其他插件协作
 
-Telemetry 是纯观察者：不注册工具、不接管 active tools、不使用跨插件事件 channel，也不读取其他扩展的 custom entry。它与 Goal/Plan/Todo/Request 等插件可任意组合加载，互不影响；其他扩展注册的自定义工具同样以 `{tool, provider, model}` 维度被统计。工具调用若被 Plan 等门禁阻止（`tool_call` 返回 block），该次调用仍计入“模型尝试调用”，但不会产生 result——这正是评测“模型想用什么”与“实际能用什么”差异所需的数据。
+Telemetry 是纯观察者：不注册工具、不接管 active tools、不使用跨插件事件 channel，也不读取其他扩展的 custom entry。它与 Goal/Plan/Todo/Request 等插件可任意组合加载，互不影响；其他扩展注册的自定义工具同样以 `{tool, provider, model}` 维度被统计。工具调用若被 Plan 等门禁阻止（`tool_call` 返回 block），该次调用仍计入"模型尝试调用"，但不会产生 result——这正是评测"模型想用什么"与"实际能用什么"差异所需的数据。
 
 ## 配置
 
