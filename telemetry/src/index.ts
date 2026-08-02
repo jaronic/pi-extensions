@@ -92,14 +92,17 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     restoreFromBranch(ctx);
   });
 
-  pi.on("tool_call", (event, ctx) => {
+  // The host emits tool_execution_start/end for every attempted tool call,
+  // including immediate-failure paths (unknown tool, schema validation error,
+  // gate block, truncation) that never reach the tool_call/tool_result hooks.
+  pi.on("tool_execution_start", (event, ctx) => {
     const dims = dimensionsFor(event.toolName, ctx);
     state = recordCallStart(state, dims, Date.now());
     dirty = true;
     trackPending(event.toolCallId, { dims, startedAt: Date.now() });
   });
 
-  pi.on("tool_result", (event, ctx) => {
+  pi.on("tool_execution_end", (event, ctx) => {
     const now = Date.now();
     const started = pending.get(event.toolCallId);
     if (started) pending.delete(event.toolCallId);
@@ -107,7 +110,14 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     state = recordCallEnd(
       state,
       dims,
-      { isError: event.isError, durationMs: started ? now - started.startedAt : undefined },
+      {
+        isError: event.isError,
+        durationMs: started ? now - started.startedAt : undefined,
+        // An end without its start (restore cleared pending, or the start was
+        // evicted by the pending cap) still implies one call; recordCallEnd
+        // adds the call even when an aggregate already exists.
+        impliesCall: started === undefined,
+      },
       now,
     );
     dirty = true;

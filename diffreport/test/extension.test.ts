@@ -349,3 +349,77 @@ test("extension reports contract warnings when the artifact skips evidence disci
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+test("tool truncates an oversized overview diff and reports it in details and text", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "diffreport-toolcap-"));
+  const tools = new Map<string, RegisteredTool>();
+  const shutdownHandlers: Array<() => Promise<void>> = [];
+
+  try {
+    await run("git", ["init", "-b", "main"], workspace);
+    await run("git", ["config", "user.email", "diffreport@example.com"], workspace);
+    await run("git", ["config", "user.name", "Diffreport Test"], workspace);
+    const original = Array.from({ length: 4_000 }, (_, index) => `const line${index} = "${"x".repeat(60)}";`).join("\n") + "\n";
+    await writeFile(join(workspace, "huge.ts"), original);
+    await run("git", ["add", "huge.ts"], workspace);
+    await run("git", ["commit", "-m", "baseline"], workspace);
+    const changed = Array.from({ length: 4_000 }, (_, index) => `const line${index} = "${"y".repeat(60)}"; // changed`).join("\n") + "\n";
+    await writeFile(join(workspace, "huge.ts"), changed);
+
+    const pi = {
+      events: {},
+      registerTool(tool: RegisteredTool & { name: string }) {
+        tools.set(tool.name, tool);
+      },
+      registerCommand() {},
+      on(event: string, handler: () => Promise<void>) {
+        if (event === "session_shutdown") shutdownHandlers.push(handler);
+      },
+      async exec(command: string, args: string[], options: { cwd: string; signal?: AbortSignal; timeout?: number }) {
+        const result = await run(command, args, options.cwd, options.signal, options.timeout);
+        return { ...result, code: 0, killed: false };
+      },
+      sendUserMessage() {},
+    } as unknown as ExtensionAPI;
+    const requestService: RequestService = {
+      lifetime: new AbortController().signal,
+      async request() {
+        throw new Error("Explicit command input must not open Request.");
+      },
+    };
+    diffreportExtension(pi, {
+      requestService,
+      now: () => new Date("2026-07-29T12:34:56.000Z"),
+    });
+
+    const tool = tools.get("diff_report");
+    assert.ok(tool);
+    const overview = await tool.execute(
+      "cap",
+      { source: "uncommitted", view: "overview" },
+      undefined,
+      undefined,
+      { cwd: workspace },
+    );
+    assert.equal(overview.details.truncated, true);
+    assert.equal(overview.details.totalFiles, 1);
+    assert.match(overview.content[0]?.text ?? "", /Evidence collection truncated/);
+    assert.match(overview.content[0]?.text ?? "", /tracked diff capped at 512\.0KB/);
+
+    // The patch view uses a larger cap; the same diff fits the collection cap
+    // (no collection-truncation notice), even though the formatted output may
+    // still hit the host's own 50KB output bound.
+    const patch = await tool.execute(
+      "cap-patch",
+      { source: "uncommitted", view: "patch" },
+      undefined,
+      undefined,
+      { cwd: workspace },
+    );
+    assert.doesNotMatch(patch.content[0]?.text ?? "", /Evidence collection truncated/);
+    assert.match(patch.content[0]?.text ?? "", /-const line0 = "/);
+  } finally {
+    await Promise.all(shutdownHandlers.map((handler) => handler()));
+    await rm(workspace, { recursive: true, force: true });
+  }
+});

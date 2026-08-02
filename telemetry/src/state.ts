@@ -125,12 +125,19 @@ export function recordCallStart(
 export interface TelemetryOutcome {
   isError: boolean;
   durationMs?: number;
+  /**
+   * True when the outcome arrived without its start event (for example an end
+   * after a restore cleared the pending table). The outcome then implies one
+   * call even when an aggregate for these dimensions already exists.
+   */
+  impliesCall?: boolean;
 }
 
 /**
  * Record the outcome of one tool call. When the dimensions have no aggregate
- * yet (for example a result observed without its call event after a restore),
- * the outcome implies one call. Returns a new state.
+ * yet (for example an end observed without its start event after a restore),
+ * the outcome implies one call; the same applies to an existing aggregate when
+ * `impliesCall` is set. Returns a new state.
  */
 export function recordCallEnd(
   state: TelemetryState,
@@ -158,6 +165,7 @@ export function recordCallEnd(
   }
   const updated: ToolAggregate = {
     ...existing,
+    calls: existing.calls + (outcome.impliesCall ? 1 : 0),
     failures: existing.failures + (outcome.isError ? 1 : 0),
     totalDurationMs: durationMs === undefined ? existing.totalDurationMs : existing.totalDurationMs + durationMs,
     timedCalls: durationMs === undefined ? existing.timedCalls : existing.timedCalls + 1,

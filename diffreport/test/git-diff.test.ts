@@ -4,10 +4,17 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { parseDiff } from "../src/diff-parser.ts";
 import {
   buildGitDiffArgs,
   discoverDefaultBase,
+  ensureGitRepository,
+  execGitChecked,
+  isValidGitRevision,
+  listUntrackedFiles,
+  MAX_UNTRACKED_FILES,
   parseCommitLog,
+  runGitDiff,
   validateWorkspacePath,
   validateWorkspacePaths,
 } from "../src/git-diff.ts";
@@ -128,7 +135,7 @@ test("parseCommitLog preserves body text and separators in ordinary prose", () =
 test("discoverDefaultBase returns undefined when no unambiguous default exists", async () => {
   const pi = {
     async exec(_command: string, args: string[]) {
-      if (args[0] === "symbolic-ref") throw new Error("no origin/HEAD");
+      if (args[2] === "symbolic-ref") throw new Error("no origin/HEAD");
       throw new Error(`unexpected git call: ${args.join(" ")}`);
     },
   } as unknown as ExtensionAPI;
@@ -147,7 +154,7 @@ test("discoverDefaultBase returns undefined when no unambiguous default exists",
 test("discoverDefaultBase still prefers a conventional default branch", async () => {
   const pi = {
     async exec(_command: string, args: string[]) {
-      if (args[0] === "symbolic-ref") throw new Error("no origin/HEAD");
+      if (args[2] === "symbolic-ref") throw new Error("no origin/HEAD");
       throw new Error(`unexpected git call: ${args.join(" ")}`);
     },
   } as unknown as ExtensionAPI;
@@ -161,4 +168,111 @@ test("discoverDefaultBase still prefers a conventional default branch", async ()
     await discoverDefaultBase(pi, "/tmp", "feature/payment", undefined, branches),
     "main",
   );
+});
+
+// ── exit-code handling ────────────────────────────────────────────────────────
+
+test("execGitChecked prepends the quotePath config and returns stdout on success", async () => {
+  const pi = {
+    async exec(command: string, args: string[], options: { cwd: string; timeout?: number }) {
+      assert.equal(command, "git");
+      assert.equal(args[0], "-c");
+      assert.equal(args[1], "core.quotePath=false");
+      assert.equal(args[2], "diff");
+      assert.equal(options.cwd, "/tmp");
+      return { stdout: "out\n", stderr: "", code: 0, killed: false };
+    },
+  } as unknown as ExtensionAPI;
+  const result = await execGitChecked(pi, ["diff", "HEAD"], { cwd: "/tmp", timeout: 10_000 });
+  assert.equal(result.stdout, "out\n");
+});
+
+test("execGitChecked rejects non-zero exit codes and embeds bounded stderr", async () => {
+  const pi = {
+    async exec() {
+      return {
+        stdout: "",
+        stderr: "fatal: not a git repository (or any of the parent directories): .git\n",
+        code: 128,
+        killed: false,
+      };
+    },
+  } as unknown as ExtensionAPI;
+  await assert.rejects(
+    execGitChecked(pi, ["rev-parse", "--is-inside-work-tree"], { cwd: "/tmp" }),
+    /exited with code 128: fatal: not a git repository/,
+  );
+});
+
+test("execGitChecked rejects killed results", async () => {
+  const pi = {
+    async exec() {
+      return { stdout: "", stderr: "", code: 0, killed: true };
+    },
+  } as unknown as ExtensionAPI;
+  await assert.rejects(execGitChecked(pi, ["diff"], { cwd: "/tmp" }), /was killed \(timeout or abort\)/);
+});
+
+test("ensureGitRepository throws when git exits non-zero instead of treating it as a repo", async () => {
+  const pi = {
+    async exec() {
+      return { stdout: "", stderr: "fatal: not a git repository", code: 128, killed: false };
+    },
+  } as unknown as ExtensionAPI;
+  await assert.rejects(ensureGitRepository(pi, "/tmp"), /Not a git repository/);
+});
+
+test("isValidGitRevision returns false on non-zero exit instead of a phantom success", async () => {
+  const pi = {
+    async exec() {
+      return { stdout: "", stderr: "", code: 128, killed: false };
+    },
+  } as unknown as ExtensionAPI;
+  assert.equal(await isValidGitRevision(pi, "/tmp", "main", true), false);
+  assert.equal(await isValidGitRevision(pi, "/tmp", "main", false), false);
+});
+
+// ── collection caps ───────────────────────────────────────────────────────────
+
+test("runGitDiff truncates oversized diffs at a line boundary and marks truncated", async () => {
+  const lines = Array.from({ length: 5_000 }, (_, index) => `+padded content line ${index} of the diff`).join("\n");
+  const bigDiff = `diff --git a/src/big.ts b/src/big.ts
+index abc1234..def5678 100644
+--- a/src/big.ts
++++ b/src/big.ts
+@@ -1,5000 +1,5000 @@
+${lines}\n`;
+  const pi = {
+    async exec() {
+      return { stdout: bigDiff, stderr: "", code: 0, killed: false };
+    },
+  } as unknown as ExtensionAPI;
+
+  const capped = await runGitDiff(pi, "/tmp", { source: "uncommitted" }, [], 0, undefined, 8 * 1024);
+  assert.equal(capped.truncated, true);
+  assert.ok(Buffer.byteLength(capped.content, "utf8") <= 8 * 1024);
+  assert.ok(capped.content.endsWith("\n"), "truncated content must end at a line boundary");
+  // The cut can land inside the hunk; parseDiff must tolerate the unclosed hunk.
+  assert.equal(parseDiff(capped.content).totalFiles, 1);
+
+  const full = await runGitDiff(pi, "/tmp", { source: "uncommitted" }, [], 0, undefined);
+  assert.equal(full.truncated, false);
+  assert.equal(full.content, bigDiff);
+});
+
+test("listUntrackedFiles caps the listing at maxFiles and marks truncated", async () => {
+  const entries = Array.from({ length: 12_000 }, (_, index) => `untracked-${index}.ts`).join("\0") + "\0";
+  const pi = {
+    async exec() {
+      return { stdout: entries, stderr: "", code: 0, killed: false };
+    },
+  } as unknown as ExtensionAPI;
+
+  const defaulted = await listUntrackedFiles(pi, "/tmp", []);
+  assert.equal(defaulted.truncated, true);
+  assert.equal(defaulted.files.length, MAX_UNTRACKED_FILES);
+
+  const capped = await listUntrackedFiles(pi, "/tmp", [], undefined, 3);
+  assert.equal(capped.truncated, true);
+  assert.deepEqual(capped.files, ["untracked-0.ts", "untracked-1.ts", "untracked-2.ts"]);
 });

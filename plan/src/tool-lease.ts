@@ -21,6 +21,17 @@ export class PlanToolLease {
     this.externalRemovals.clear();
   }
 
+  /**
+   * Re-baselines the lease after an internal tool-set switch (branch restore)
+   * without observing the switch: the current host tools are recorded as the
+   * lease's own last application, so the next reconcile does not treat the
+   * still-applied Plan tool set as external additions or removals.
+   */
+  rebase(tools: readonly string[], currentTools: readonly string[]): void {
+    this.begin(tools);
+    this.lastApplied = new Set(currentTools);
+  }
+
   reconcile(currentTools: readonly string[]): string[] {
     this.observe(currentTools);
     return this.effectiveTools();

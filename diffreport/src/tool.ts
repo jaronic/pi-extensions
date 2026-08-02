@@ -1,11 +1,14 @@
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { formatSize, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { parseDiff } from "./diff-parser.ts";
 import type { DiffReportCallLedger } from "./call-ledger.ts";
 import {
   getCommitHistory,
   listUntrackedFiles,
+  MAX_DIFF_BYTES,
+  MAX_OVERVIEW_DIFF_BYTES,
+  MAX_UNTRACKED_FILES,
   resolveEvidenceScope,
   runGitDiff,
   validateWorkspacePaths,
@@ -116,6 +119,7 @@ export function registerDiffReportTool(pi: ExtensionAPI, outputStore: DiffReport
       });
 
       let text: string;
+      let collectionTruncated = false;
       let totalFiles = 0;
       let totalAdditions = 0;
       let totalDeletions = 0;
@@ -136,34 +140,43 @@ export function registerDiffReportTool(pi: ExtensionAPI, outputStore: DiffReport
         commitCount = commits.length;
         text = formatHistoryEvidence(commits, scope, params.query, { maxCommits: limit });
       } else {
-        const diffPromise = runGitDiff(pi, ctx.cwd, scope, paths, contextLines, signal);
+        const diffMaxBytes = view === "overview" ? MAX_OVERVIEW_DIFF_BYTES : MAX_DIFF_BYTES;
+        const diffPromise = runGitDiff(pi, ctx.cwd, scope, paths, contextLines, signal, diffMaxBytes);
         const untrackedPromise = scope.source === "uncommitted"
           ? listUntrackedFiles(pi, ctx.cwd, paths, signal)
-          : Promise.resolve<string[]>([]);
+          : Promise.resolve({ files: [] as string[], truncated: false });
         const commitsPromise = view === "overview" && scope.source !== "uncommitted"
           ? getCommitHistory(pi, ctx.cwd, scope, paths, undefined, limit, true, signal)
           : Promise.resolve([]);
-        const [rawDiff, untrackedFiles, commits] = await Promise.all([
+        const [diffResult, untrackedResult, commits] = await Promise.all([
           diffPromise,
           untrackedPromise,
           commitsPromise,
         ]);
-        const summary = parseDiff(rawDiff);
+        const summary = parseDiff(diffResult.content);
         totalFiles = summary.totalFiles;
         totalAdditions = summary.totalAdditions;
         totalDeletions = summary.totalDeletions;
         commitCount = commits.length;
-        untrackedCount = untrackedFiles.length;
+        untrackedCount = untrackedResult.files.length;
+        collectionTruncated = diffResult.truncated || untrackedResult.truncated;
         text = view === "overview"
-          ? formatEvidenceOverview(summary, scope, commits, untrackedFiles, {
+          ? formatEvidenceOverview(summary, scope, commits, untrackedResult.files, {
               maxFiles: limit,
               maxCommits: limit,
               maxUntrackedFiles: limit,
             })
-          : formatPatchEvidence(summary, scope, untrackedFiles, {
+          : formatPatchEvidence(summary, scope, untrackedResult.files, {
               maxFiles: limit,
               maxUntrackedFiles: limit,
             });
+        if (collectionTruncated) {
+          const notices: string[] = [];
+          if (diffResult.truncated) notices.push(`tracked diff capped at ${formatSize(diffMaxBytes)}`);
+          if (untrackedResult.truncated) notices.push(`untracked listing capped at ${MAX_UNTRACKED_FILES} paths`);
+          text = `> Evidence collection truncated: ${notices.join("; ")}; counts above are partial. ` +
+            `Narrow with \`paths\` for the remainder.\n\n${text}`;
+        }
       }
 
       const bounded = await outputStore.bound(text);
@@ -177,7 +190,7 @@ export function registerDiffReportTool(pi: ExtensionAPI, outputStore: DiffReport
         totalDeletions,
         commitCount,
         untrackedCount,
-        truncated: bounded.truncation !== undefined,
+        truncated: collectionTruncated || bounded.truncation !== undefined,
         ...(bounded.fullOutputPath ? { fullOutputPath: bounded.fullOutputPath } : {}),
       };
       callLedger?.record(scope.source, view);

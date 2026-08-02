@@ -36,16 +36,18 @@ function makeGitPi(commitLog = ""): { pi: ExtensionAPI; calls: string[][] } {
   const pi = {
     async exec(command: string, args: string[]) {
       assert.equal(command, "git");
+      assert.equal(args[0], "-c");
+      assert.equal(args[1], "core.quotePath=false");
       calls.push(args);
       let stdout = "";
-      if (args[0] === "rev-parse" && args[1] === "--is-inside-work-tree") stdout = "true\n";
-      else if (args[0] === "for-each-ref") {
+      if (args[2] === "rev-parse" && args[3] === "--is-inside-work-tree") stdout = "true\n";
+      else if (args[2] === "for-each-ref") {
         stdout = "feature/payment\t*\t2026-07-29T12:00:00Z\nmain\t \t2026-07-28T12:00:00Z\n";
-      } else if (args[0] === "symbolic-ref") stdout = "origin/main\n";
-      else if (args[0] === "branch") stdout = "feature/payment\n";
-      else if (args[0] === "rev-parse" && args.includes("--verify")) stdout = "0123456789abcdef\n";
-      else if (args[0] === "rev-list") stdout = "0123456789abcdef\n";
-      else if (args[0] === "log") stdout = commitLog;
+      } else if (args[2] === "symbolic-ref") stdout = "origin/main\n";
+      else if (args[2] === "branch") stdout = "feature/payment\n";
+      else if (args[2] === "rev-parse" && args.includes("--verify")) stdout = "0123456789abcdef\n";
+      else if (args[2] === "rev-list") stdout = "0123456789abcdef\n";
+      else if (args[2] === "log") stdout = commitLog;
       return { stdout, stderr: "", code: 0, killed: false };
     },
   } as unknown as ExtensionAPI;
@@ -223,12 +225,14 @@ test("branch options keep the recommended branch selectable beyond the recent sl
   const pi = {
     async exec(command: string, args: string[]) {
       assert.equal(command, "git");
+      assert.equal(args[0], "-c");
+      assert.equal(args[1], "core.quotePath=false");
       let stdout = "";
-      if (args[0] === "rev-parse" && args[1] === "--is-inside-work-tree") stdout = "true\n";
-      else if (args[0] === "for-each-ref") stdout = branchRows;
-      else if (args[0] === "symbolic-ref") stdout = "origin/main\n";
-      else if (args[0] === "branch") stdout = "feature/old\n";
-      else if (args[0] === "rev-parse" && args.includes("--verify")) stdout = "0123456789abcdef\n";
+      if (args[2] === "rev-parse" && args[3] === "--is-inside-work-tree") stdout = "true\n";
+      else if (args[2] === "for-each-ref") stdout = branchRows;
+      else if (args[2] === "symbolic-ref") stdout = "origin/main\n";
+      else if (args[2] === "branch") stdout = "feature/old\n";
+      else if (args[2] === "rev-parse" && args.includes("--verify")) stdout = "0123456789abcdef\n";
       return { stdout, stderr: "", code: 0, killed: false };
     },
   } as unknown as ExtensionAPI;

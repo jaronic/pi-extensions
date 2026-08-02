@@ -24,6 +24,11 @@ import {
 	type RecentSession,
 } from "./banner.ts";
 import { BranchMonitor } from "./branch.ts";
+import {
+	detectEditorInputMode,
+	editorInputModeLabel,
+	renderEditorTopBorder,
+} from "./editor-mode.ts";
 
 const SPINNER = ["◐", "◓", "◑", "◒"];
 
@@ -105,19 +110,6 @@ function getModeStatus(
 ): string | undefined {
 	const text = footerData?.getExtensionStatuses().get(key)?.trim();
 	return text || undefined;
-}
-
-function renderTopBorder(
-	status: string | undefined,
-	width: number,
-	border: (value: string) => string,
-): string {
-	const requestedLabel = status ? `${border("─")} ${status} ` : "";
-	const label = visibleWidth(requestedLabel) > width
-		? truncateToWidth(requestedLabel, width, "")
-		: requestedLabel;
-	const fill = border("─".repeat(Math.max(0, width - visibleWidth(label))));
-	return `${border("╭")}${label}${fill}${border("╮")}`;
 }
 
 class EmptyFooter implements Component {
@@ -364,7 +356,14 @@ export default function jaronEditor(pi: ExtensionAPI): void {
 
 				const planStatus = getModeStatus(footerData, "plan");
 				const goalStatus = getModeStatus(footerData, "goal");
-				lines[0] = renderTopBorder(goalStatus, innerWidth, border);
+				const inputMode = detectEditorInputMode(this.getText());
+				const inputModeStatus = inputMode
+					? tone(thm, "strong", border(editorInputModeLabel(inputMode)))
+					: undefined;
+				const modeStatus = [inputModeStatus, goalStatus, planStatus]
+					.filter((status): status is string => status !== undefined)
+					.join(dim(" · "));
+				lines[0] = renderEditorTopBorder(modeStatus || undefined, innerWidth, border);
 				for (let index = 1; index < bottomBorderIndex; index += 1) {
 					lines[index] =
 						`${border("│")}${fitToWidth(lines[index], innerWidth)}${border("│")}`;
@@ -389,7 +388,6 @@ export default function jaronEditor(pi: ExtensionAPI): void {
 				const statusLeft = [
 					amber(`⬢ ${formatModel(ctx)}`),
 					amber(pi.getThinkingLevel()),
-					...(planStatus ? [planStatus] : []),
 				].join(statusSeparator);
 				lines.splice(
 					bottomBorderIndex + 1,

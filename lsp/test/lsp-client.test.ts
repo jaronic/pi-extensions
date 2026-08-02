@@ -184,6 +184,40 @@ test("LspClient shutdown is bounded and idempotent when shutdown is ignored", as
   assert.ok(Date.now() - startedAt < 2_000);
 });
 
+test("LspClient keeps newer publish diagnostics when an older version arrives late", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "pi-lsp-stale-diagnostics-"));
+  context.after(async () => await rm(root, { recursive: true, force: true }));
+  const file = join(root, "sample.ts");
+  await writeFile(file, "const alpha = 1;\n", "utf8");
+  const client = await LspClient.start(fakeServerConfig("stale-diagnostics"), root, 3_000, () => {});
+  context.after(async () => await client.shutdown());
+  // The server publishes version 2 then a late version 1; both arrive within
+  // the settle window, so a fix that blindly keeps the last notification
+  // would return the stale one.
+  const first = await client.getDiagnostics(file, "typescript", 200, 1_000);
+  assert.equal(first.length, 1);
+  assert.equal(first[0].message, "current diagnostic");
+  const second = await client.getDiagnostics(file, "typescript", 10, 1_000);
+  assert.equal(second.length, 1);
+  assert.equal(second[0].message, "current diagnostic");
+});
+
+test("LspClient drops publish diagnostics older than the document version", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "pi-lsp-stale-version-"));
+  context.after(async () => await rm(root, { recursive: true, force: true }));
+  const file = join(root, "sample.ts");
+  await writeFile(file, "const alpha = 1;\n", "utf8");
+  const client = await LspClient.start(fakeServerConfig("stale-only-diagnostics"), root, 3_000, () => {});
+  context.after(async () => await client.shutdown());
+  // The only publish carries a version below the synced document version, so
+  // it is rejected without waking the settle wait; without the version guard
+  // the stale items would be returned instead of timing out.
+  await assert.rejects(
+    client.getDiagnostics(file, "typescript", 10, 150),
+    /Timed out waiting for diagnostics/,
+  );
+});
+
 test("LspClient stops a stubborn server process tree before shutdown resolves", async (context) => {
   const root = await mkdtemp(join(tmpdir(), "pi-lsp-process-tree-"));
   const pidPath = join(root, "pids.json");

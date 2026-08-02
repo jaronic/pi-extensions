@@ -7,6 +7,11 @@ const SAFE_REVISION_PATTERN = /^[^\s\-\u0000-\u001f\u007f][^\s\u0000-\u001f\u007
 const FIELD_SEPARATOR = "\u001f";
 const RECORD_SEPARATOR = "\u001e";
 const LOG_FORMAT = "%H%x1f%s%x1f%an%x1f%aI%x1f%b%x1e";
+const MAX_ERROR_STDERR_CHARS = 2_000;
+
+export const MAX_DIFF_BYTES = 4 * 1024 * 1024;
+export const MAX_OVERVIEW_DIFF_BYTES = 512 * 1024;
+export const MAX_UNTRACKED_FILES = 10_000;
 
 function assertSafeRevision(revision: string, label: string): void {
   if (!SAFE_REVISION_PATTERN.test(revision)) {
@@ -14,6 +19,43 @@ function assertSafeRevision(revision: string, label: string): void {
   }
 }
 
+export interface GitExecOptions {
+  cwd: string;
+  signal?: AbortSignal;
+  timeout?: number;
+}
+
+export interface GitExecResult {
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * Run a git subcommand through the host and treat every failure as an error.
+ * The host resolves non-zero exit codes instead of rejecting, so a diff that
+ * fails (not a repository, invalid ref) must not look like an empty success.
+ * `-c core.quotePath=false` is prepended so diff headers keep raw UTF-8 paths
+ * that the diff parser can match, even for non-ASCII file names.
+ */
+export async function execGitChecked(
+  pi: ExtensionAPI,
+  args: readonly string[],
+  options: GitExecOptions,
+): Promise<GitExecResult> {
+  const result = await pi.exec("git", ["-c", "core.quotePath=false", ...args], {
+    cwd: options.cwd,
+    signal: options.signal,
+    timeout: options.timeout,
+  });
+  if (result.killed || result.code !== 0) {
+    const stderr = (result.stderr ?? "").trim().slice(0, MAX_ERROR_STDERR_CHARS);
+    throw new Error(
+      `git ${args[0] ?? "command"} ${result.killed ? "was killed (timeout or abort)" : `exited with code ${result.code}`}` +
+      (stderr ? `: ${stderr}` : ""),
+    );
+  }
+  return { stdout: result.stdout, stderr: result.stderr };
+}
 
 function isWithin(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
@@ -100,7 +142,7 @@ export async function ensureGitRepository(
   signal?: AbortSignal,
 ): Promise<void> {
   try {
-    await pi.exec("git", ["rev-parse", "--is-inside-work-tree"], { cwd, signal, timeout: 10_000 });
+    await execGitChecked(pi, ["rev-parse", "--is-inside-work-tree"], { cwd, signal, timeout: 10_000 });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Not a git repository (or git is unavailable): ${message}`);
@@ -116,7 +158,7 @@ async function verifyCommitish(
 ): Promise<void> {
   assertSafeRevision(revision, label);
   try {
-    await pi.exec("git", ["rev-parse", "--verify", "--quiet", `${revision}^{commit}`], {
+    await execGitChecked(pi, ["rev-parse", "--verify", "--quiet", `${revision}^{commit}`], {
       cwd,
       signal,
       timeout: 5_000,
@@ -134,7 +176,7 @@ async function verifyRevisionSelection(
 ): Promise<void> {
   assertSafeRevision(revision, "Commit selection");
   try {
-    await pi.exec("git", ["rev-list", "--max-count=1", revision], { cwd, signal, timeout: 5_000 });
+    await execGitChecked(pi, ["rev-list", "--max-count=1", revision], { cwd, signal, timeout: 5_000 });
   } catch {
     throw new Error(`Commit selection '${revision}' is not a valid commit, ref, or revision range.`);
   }
@@ -184,6 +226,26 @@ export async function resolveEvidenceScope(
   return { source: "commits", target };
 }
 
+export interface GitDiffResult {
+  content: string;
+  truncated: boolean;
+}
+
+function truncateDiffHead(content: string, maxBytes: number): string | null {
+  if (Buffer.byteLength(content, "utf8") <= maxBytes) return null;
+  // Keep whole lines only, so a cut never splits a diff line in half.
+  let byteCount = 0;
+  let lineStart = 0;
+  while (lineStart < content.length) {
+    const newline = content.indexOf("\n", lineStart);
+    const lineEnd = newline === -1 ? content.length : newline + 1;
+    byteCount += Buffer.byteLength(content.slice(lineStart, lineEnd), "utf8");
+    if (byteCount > maxBytes) break;
+    lineStart = lineEnd;
+  }
+  return content.slice(0, lineStart);
+}
+
 export async function runGitDiff(
   pi: ExtensionAPI,
   cwd: string,
@@ -191,13 +253,22 @@ export async function runGitDiff(
   paths: readonly string[],
   contextLines: number,
   signal?: AbortSignal,
-): Promise<string> {
-  const result = await pi.exec("git", buildGitDiffArgs(scope, paths, contextLines), {
+  maxBytes = MAX_DIFF_BYTES,
+): Promise<GitDiffResult> {
+  const result = await execGitChecked(pi, buildGitDiffArgs(scope, paths, contextLines), {
     cwd,
     signal,
     timeout: 30_000,
   });
-  return result.stdout;
+  const truncatedContent = truncateDiffHead(result.stdout, maxBytes);
+  return truncatedContent === null
+    ? { content: result.stdout, truncated: false }
+    : { content: truncatedContent, truncated: true };
+}
+
+export interface UntrackedListResult {
+  files: string[];
+  truncated: boolean;
 }
 
 export async function listUntrackedFiles(
@@ -205,11 +276,15 @@ export async function listUntrackedFiles(
   cwd: string,
   paths: readonly string[],
   signal?: AbortSignal,
-): Promise<string[]> {
+  maxFiles = MAX_UNTRACKED_FILES,
+): Promise<UntrackedListResult> {
   const args = ["ls-files", "--others", "--exclude-standard", "-z"];
   if (paths.length > 0) args.push("--", ...paths);
-  const result = await pi.exec("git", args, { cwd, signal, timeout: 10_000 });
-  return result.stdout.split("\0").filter(Boolean);
+  const result = await execGitChecked(pi, args, { cwd, signal, timeout: 10_000 });
+  const files = result.stdout.split("\0").filter(Boolean);
+  return files.length > maxFiles
+    ? { files: files.slice(0, maxFiles), truncated: true }
+    : { files, truncated: false };
 }
 
 function cleanGitText(value: string): string {
@@ -264,7 +339,7 @@ export async function getCommitHistory(
   }
 
   if (paths.length > 0) args.push("--", ...paths);
-  const result = await pi.exec("git", args, { cwd, signal, timeout: 15_000 });
+  const result = await execGitChecked(pi, args, { cwd, signal, timeout: 15_000 });
   return parseCommitLog(result.stdout);
 }
 
@@ -274,7 +349,7 @@ export async function getCurrentBranch(
   signal?: AbortSignal,
 ): Promise<string | undefined> {
   try {
-    const result = await pi.exec("git", ["branch", "--show-current"], { cwd, signal, timeout: 5_000 });
+    const result = await execGitChecked(pi, ["branch", "--show-current"], { cwd, signal, timeout: 5_000 });
     return result.stdout.trim() || undefined;
   } catch {
     return undefined;
@@ -286,7 +361,7 @@ export async function listBranches(
   cwd: string,
   signal?: AbortSignal,
 ): Promise<BranchInfo[]> {
-  const result = await pi.exec("git", [
+  const result = await execGitChecked(pi, [
     "for-each-ref",
     "--sort=-committerdate",
     "--format=%(refname:short)%09%(HEAD)%09%(committerdate:iso8601-strict)",
@@ -315,7 +390,7 @@ export async function discoverDefaultBase(
   const names = new Set(branches.map((branch) => branch.name));
   let remoteDefault: string | undefined;
   try {
-    const result = await pi.exec("git", ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
+    const result = await execGitChecked(pi, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
       cwd,
       signal,
       timeout: 5_000,

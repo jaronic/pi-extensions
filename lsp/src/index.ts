@@ -284,7 +284,7 @@ async function executeAction(
     };
   }
 
-  const routed = await manager.clientForAction(file, params.action as LspAction, params.server);
+  const routed = await manager.clientForAction(file, params.action as LspAction, params.server, signal);
   const document = await routed.client.syncFile(file, routed.languageId);
   const textDocument = { uri: document.uri };
   const servers = [routed.server.id];

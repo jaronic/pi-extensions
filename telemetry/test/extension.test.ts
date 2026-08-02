@@ -24,12 +24,12 @@ const VALID_SNAPSHOT = {
   ],
 };
 
-function toolCall(id: string, toolName: string) {
-  return { type: "tool_call", toolCallId: id, toolName, input: {} };
+function toolExecutionStart(id: string, toolName: string) {
+  return { type: "tool_execution_start", toolCallId: id, toolName, args: {} };
 }
 
-function toolResult(id: string, toolName: string, isError = false) {
-  return { type: "tool_result", toolCallId: id, toolName, input: {}, content: [], isError };
+function toolExecutionEnd(id: string, toolName: string, isError = false) {
+  return { type: "tool_execution_end", toolCallId: id, toolName, result: {}, isError };
 }
 
 async function withTempCwd(run: (cwd: string) => Promise<void>): Promise<void> {
@@ -49,16 +49,16 @@ test("factory registers exactly one command and no tools", () => {
   assert.deepEqual(harness.commandCompletions("telemetry", "e"), [{ value: "export", label: "export" }]);
 });
 
-test("tool_call/tool_result pairs aggregate and persist on turn_end without blocking", async () => {
+test("tool_execution_start/end pairs aggregate and persist on turn_end without blocking", async () => {
   const harness = new TelemetryHarness();
   telemetryExtension(harness.api);
   await harness.emit("session_start", { type: "session_start", reason: "startup" });
 
-  const callResults = await harness.emit("tool_call", toolCall("c1", "read"));
+  const callResults = await harness.emit("tool_execution_start", toolExecutionStart("c1", "read"));
   assert.deepEqual(callResults, [undefined], "observer must not block tool calls");
-  await harness.emit("tool_result", toolResult("c1", "read"));
-  await harness.emit("tool_call", toolCall("c2", "read"));
-  await harness.emit("tool_result", toolResult("c2", "read", true));
+  await harness.emit("tool_execution_end", toolExecutionEnd("c1", "read"));
+  await harness.emit("tool_execution_start", toolExecutionStart("c2", "read"));
+  await harness.emit("tool_execution_end", toolExecutionEnd("c2", "read", true));
   assert.equal(harness.entries.length, 0, "nothing persists before turn_end");
 
   await harness.emit("turn_end", { type: "turn_end", turnIndex: 0 });
@@ -83,14 +83,14 @@ test("model dimension changes split aggregates and missing model degrades to unk
   const harness = new TelemetryHarness();
   telemetryExtension(harness.api);
   await harness.emit("session_start", { type: "session_start", reason: "startup" });
-  await harness.emit("tool_call", toolCall("c1", "bash"));
-  await harness.emit("tool_result", toolResult("c1", "bash"));
+  await harness.emit("tool_execution_start", toolExecutionStart("c1", "bash"));
+  await harness.emit("tool_execution_end", toolExecutionEnd("c1", "bash"));
   harness.model = { provider: "openai", id: "gpt-test" };
-  await harness.emit("tool_call", toolCall("c2", "bash"));
-  await harness.emit("tool_result", toolResult("c2", "bash"));
+  await harness.emit("tool_execution_start", toolExecutionStart("c2", "bash"));
+  await harness.emit("tool_execution_end", toolExecutionEnd("c2", "bash"));
   harness.model = undefined;
-  await harness.emit("tool_call", toolCall("c3", "bash"));
-  await harness.emit("tool_result", toolResult("c3", "bash"));
+  await harness.emit("tool_execution_start", toolExecutionStart("c3", "bash"));
+  await harness.emit("tool_execution_end", toolExecutionEnd("c3", "bash"));
   await harness.emit("turn_end", { type: "turn_end", turnIndex: 0 });
 
   const data = harness.entries.at(-1)?.data as { aggregates: Array<Record<string, unknown>> };
@@ -124,19 +124,67 @@ test("malformed persisted snapshots restore to empty with a warning", async () =
   assert.match(harness.notifications.at(-1)?.message ?? "", /No tool calls recorded yet/);
 });
 
-test("restore clears in-flight calls so unmatched results still count once", async () => {
+test("restore clears in-flight calls so unmatched ends still count once", async () => {
   const harness = new TelemetryHarness();
   telemetryExtension(harness.api);
   await harness.emit("session_start", { type: "session_start", reason: "startup" });
-  await harness.emit("tool_call", toolCall("c1", "edit"));
+  await harness.emit("tool_execution_start", toolExecutionStart("c1", "edit"));
   // A tree switch drops the pending call before its result arrives.
   await harness.emit("session_tree", { type: "session_tree" });
-  await harness.emit("tool_result", toolResult("c1", "edit", true));
+  await harness.emit("tool_execution_end", toolExecutionEnd("c1", "edit", true));
   await harness.emit("turn_end", { type: "turn_end", turnIndex: 0 });
   const data = harness.entries.at(-1)?.data as { aggregates: Array<Record<string, unknown>> };
   assert.equal(data.aggregates.length, 1);
   assert.equal(data.aggregates[0].calls, 1);
   assert.equal(data.aggregates[0].failures, 1);
+});
+
+test("unknown tool, schema failure, and gate block paths are counted as calls and failures", async () => {
+  // The host emits only tool_execution_start/end for these immediate-failure
+  // paths (agent-loop prepareToolCall); tool_call/tool_result hooks never fire.
+  const harness = new TelemetryHarness();
+  telemetryExtension(harness.api);
+  await harness.emit("session_start", { type: "session_start", reason: "startup" });
+
+  await harness.emit("tool_execution_start", toolExecutionStart("u1", "unknown_tool"));
+  await harness.emit("tool_execution_end", toolExecutionEnd("u1", "unknown_tool", true));
+  await harness.emit("tool_execution_start", toolExecutionStart("s1", "read"));
+  await harness.emit("tool_execution_end", toolExecutionEnd("s1", "read", true));
+  await harness.emit("tool_execution_start", toolExecutionStart("g1", "edit"));
+  await harness.emit("tool_execution_end", toolExecutionEnd("g1", "edit", true));
+  await harness.emit("turn_end", { type: "turn_end", turnIndex: 0 });
+
+  const data = harness.entries.at(-1)?.data as { aggregates: Array<Record<string, unknown>> };
+  assert.equal(data.aggregates.length, 3);
+  const byTool = new Map(data.aggregates.map((aggregate) => [aggregate.tool, aggregate]));
+  for (const tool of ["unknown_tool", "read", "edit"]) {
+    const aggregate = byTool.get(tool);
+    assert.ok(aggregate, `${tool} is recorded`);
+    assert.equal(aggregate.calls, 1, `${tool} counts the attempt`);
+    assert.equal(aggregate.failures, 1, `${tool} counts the failure`);
+  }
+});
+
+test("orphan end after a restore still counts as a call when the aggregate exists", async () => {
+  const harness = new TelemetryHarness();
+  telemetryExtension(harness.api);
+  await harness.emit("session_start", { type: "session_start", reason: "startup" });
+  await harness.emit("tool_execution_start", toolExecutionStart("c1", "read"));
+  await harness.emit("tool_execution_end", toolExecutionEnd("c1", "read"));
+  await harness.emit("turn_end", { type: "turn_end", turnIndex: 0 });
+
+  // The tree switch replays the persisted snapshot (read: 1 call) but clears
+  // the pending table; the end for c2 arrives without its start while the
+  // aggregate already exists. It must imply one more call, not just a failure.
+  await harness.emit("session_tree", { type: "session_tree" });
+  await harness.emit("tool_execution_end", toolExecutionEnd("c2", "read", true));
+  await harness.emit("turn_end", { type: "turn_end", turnIndex: 1 });
+
+  const data = harness.entries.at(-1)?.data as { aggregates: Array<Record<string, unknown>> };
+  assert.equal(data.aggregates.length, 1);
+  assert.equal(data.aggregates[0].calls, 2);
+  assert.equal(data.aggregates[0].failures, 1);
+  assert.equal(data.aggregates[0].timedCalls, 1);
 });
 
 test("no-UI path restores silently and reset works without confirmation", async () => {
@@ -145,8 +193,8 @@ test("no-UI path restores silently and reset works without confirmation", async 
   harness.entries.push({ type: "custom", customType: TELEMETRY_STATE_TYPE, data: { version: 99 } });
   await harness.emit("session_start", { type: "session_start", reason: "resume" });
   assert.equal(harness.notifications.length, 0, "no notifications without UI");
-  await harness.emit("tool_call", toolCall("c1", "ls"));
-  await harness.emit("tool_result", toolResult("c1", "ls"));
+  await harness.emit("tool_execution_start", toolExecutionStart("c1", "ls"));
+  await harness.emit("tool_execution_end", toolExecutionEnd("c1", "ls"));
   await harness.command("telemetry", "reset");
   const entry = harness.entries.at(-1);
   assert.equal(entry?.customType, TELEMETRY_STATE_TYPE);
@@ -158,8 +206,8 @@ test("export writes bounded JSON inside the cwd and reports totals", async () =>
     const harness = new TelemetryHarness({ cwd });
     telemetryExtension(harness.api);
     await harness.emit("session_start", { type: "session_start", reason: "startup" });
-    await harness.emit("tool_call", toolCall("c1", "read"));
-    await harness.emit("tool_result", toolResult("c1", "read"));
+    await harness.emit("tool_execution_start", toolExecutionStart("c1", "read"));
+    await harness.emit("tool_execution_end", toolExecutionEnd("c1", "read"));
 
     await harness.command("telemetry", "export");
     const target = path.join(cwd, "telemetry-export.json");
@@ -216,8 +264,8 @@ test("reset requires confirmation with UI and appends a cleared snapshot", async
   const harness = new TelemetryHarness();
   telemetryExtension(harness.api);
   await harness.emit("session_start", { type: "session_start", reason: "startup" });
-  await harness.emit("tool_call", toolCall("c1", "grep"));
-  await harness.emit("tool_result", toolResult("c1", "grep"));
+  await harness.emit("tool_execution_start", toolExecutionStart("c1", "grep"));
+  await harness.emit("tool_execution_end", toolExecutionEnd("c1", "grep"));
 
   harness.confirmResponses.push(false);
   await harness.command("telemetry", "reset");
@@ -235,12 +283,12 @@ test("session_shutdown clears pending calls idempotently", async () => {
   const harness = new TelemetryHarness();
   telemetryExtension(harness.api);
   await harness.emit("session_start", { type: "session_start", reason: "startup" });
-  await harness.emit("tool_call", toolCall("c1", "find"));
+  await harness.emit("tool_execution_start", toolExecutionStart("c1", "find"));
   await harness.emit("session_shutdown", { type: "session_shutdown" });
   await harness.emit("session_shutdown", { type: "session_shutdown" });
   await harness.emit("session_start", { type: "session_start", reason: "reload" });
-  await harness.emit("tool_result", toolResult("c1", "find"));
+  await harness.emit("tool_execution_end", toolExecutionEnd("c1", "find"));
   await harness.emit("turn_end", { type: "turn_end", turnIndex: 0 });
   const data = harness.entries.at(-1)?.data as { aggregates: Array<Record<string, unknown>> };
-  assert.equal(data.aggregates[0].calls, 1, "the restored result counts as one implied call");
+  assert.equal(data.aggregates[0].calls, 1, "the restored end counts as one implied call");
 });

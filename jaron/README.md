@@ -5,8 +5,9 @@
 ## 特性
 
 - 替换默认 editor，不改变输入、提交、粘贴图片、快捷键等行为，也不注册或覆盖任何工具。
-- 输入区使用包含四角、上下边和左右边的完整闭合边框；Goal 状态嵌入上边框。
-- 输入框下方单独显示:当前 model、思考等级、Plan 状态、session 名、项目路径、git branch 和 context window 占用。
+- 输入区使用包含四角、上下边和左右边的完整闭合边框；Plan/Goal 状态统一嵌入上边框。
+- 输入以 `!` 开头时，上边框显示 `! shell mode`；以 `!!` 开头时显示 `!! shell mode · no context`，并保留 Pi 原生 shell 模式边框色。Shell 与 Plan/Goal 同时存在时会并列显示。
+- 输入框下方单独显示：当前 model、思考等级、session 名、项目路径、git branch 和 context window 占用。
 - 启动区替换为细边框终端横幅:品牌与版本嵌上边框,路径/branch 嵌下边框,内嵌紧凑按键提示;横幅以列表形式显示最近会话(每行 `◷ 时间 概要`,概要取会话首条消息或自定义名,不显示会话 ID),行数随终端宽度自适应(折叠态最多 3 行、展开态 4 行,超宽截断),切换或改名会话后自动刷新;按 `app.tools.expand` 可展开为完整按键帮助列表。
 - agent 工作时,状态行指示动画与输入框内 spinner 同帧同色(`warning` 色 `◐◓◑◒`);折叠的 thinking 块使用统一的 label 文案。
 - 终端窗口标题显示 `pi — <branch> — <session> — <cwd>`;切换 git 分支或重命名会话后自动刷新。

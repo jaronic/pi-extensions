@@ -77,6 +77,27 @@ test("recordCallEnd without a matching start implies one call", () => {
   assert.equal(aggregate.timedCalls, 0);
 });
 
+test("recordCallEnd with impliesCall adds a call even when the aggregate exists", () => {
+  let state = recordCallStart(emptyTelemetryState(), DIMS, 1_000);
+  state = recordCallEnd(state, DIMS, { isError: false, impliesCall: true, durationMs: 100 }, 2_000);
+  const aggregate = aggregateOf(state);
+  assert.ok(aggregate);
+  assert.equal(aggregate.calls, 2, "the orphan end implies one call on top of the existing aggregate");
+  assert.equal(aggregate.failures, 0);
+  assert.equal(aggregate.timedCalls, 1);
+  assert.equal(aggregate.totalDurationMs, 100);
+});
+
+test("recordCallEnd without impliesCall never adds a call to an existing aggregate", () => {
+  let state = recordCallStart(emptyTelemetryState(), DIMS, 1_000);
+  state = recordCallEnd(state, DIMS, { isError: true, durationMs: 50 }, 2_000);
+  const aggregate = aggregateOf(state);
+  assert.ok(aggregate);
+  assert.equal(aggregate.calls, 1, "a paired end settles the existing call only");
+  assert.equal(aggregate.failures, 1);
+  assert.equal(aggregate.timedCalls, 1);
+});
+
 test("recordCallEnd separates dimensions into distinct aggregates", () => {
   let state = recordCallStart(emptyTelemetryState(), DIMS, 1);
   state = recordCallStart(state, { ...DIMS, model: "other-model" }, 2);

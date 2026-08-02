@@ -285,7 +285,7 @@ export default function planExtension(
     automaticReviewUpdatedAt = undefined;
     automaticClarificationUpdatedAt = undefined;
     choiceAnswerQueuedAt = undefined;
-    if (state) toolLease.begin(state.enteredWithTools);
+    if (state) toolLease.rebase(state.enteredWithTools, pi.getActiveTools());
     else if (previousTools) pi.setActiveTools(previousTools);
     syncPlanTools();
     updateStatus(ctx);

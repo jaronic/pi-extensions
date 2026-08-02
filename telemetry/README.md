@@ -12,17 +12,17 @@
 
 ```mermaid
 flowchart LR
-    Call[tool_call 事件] --> Pending[按 toolCallId 记入 pending 表<br/>计数 +1,记下开始时间]
-    Result[tool_result 事件] --> Settle[匹配 pending,结算失败数与耗时<br/>孤儿 result 计一次隐含调用]
+    Call[tool_execution_start 事件] --> Pending[按 toolCallId 记入 pending 表<br/>计数 +1,记下开始时间]
+    Result[tool_execution_end 事件] --> Settle[匹配 pending,结算失败数与耗时<br/>孤儿 end 计一次隐含调用]
     TurnEnd[turn_end] -->|有变化| Journal[appendEntry 追加完整快照<br/>telemetry-state-v1]
     Start[session_start / session_tree] --> Replay[按当前分支重放快照恢复]
 ```
 
-- 每次 `tool_call` 按 `{tool, provider, model}` 维度计数；`tool_result` 补记失败与耗时（从 call 到 result 的墙钟时间）。provider/model 取自事件发生时 `ctx.model`，模型缺失时降级为 `unknown`。
+- 宿主对每次工具尝试都会发 `tool_execution_start`/`tool_execution_end` 一对事件，Telemetry 据此按 `{tool, provider, model}` 维度计数；`tool_execution_end` 补记失败与耗时（从 start 到 end 的墙钟时间）。未知工具、schema 校验失败、输出截断与 gate 阻断等即时失败路径只发这一对事件（从不触发 `tool_call`/`tool_result` 钩子），同样计入调用与失败。provider/model 取自事件发生时 `ctx.model`，模型缺失时降级为 `unknown`。
 - 聚合数据有界：最多 256 个 `{tool, provider, model}` 分组，超出时淘汰最久未使用的分组；单个维度值最长 128 个 Unicode 字符；pending 表上限 128（FIFO）。
 - 每个 turn 结束且数据有变化时，把完整快照作为 Pi session journal 的 custom entry（`telemetry-state-v1`）持久化；`session_start` 与 `session_tree` 都按当前分支重放恢复，最后一条有效快照生效。
 - 恢复不信任反序列化数据：版本不符或结构非法的快照整体丢弃，单条非法聚合（计数为负、failures > calls、重复维度等）逐条跳过并告警。
-- handler 对 `tool_call` 返回 `undefined`，永不阻塞或改写工具调用；观察逻辑失败不会影响原工具协议。
+- handler 返回 `undefined`，永不阻塞或改写工具调用；观察逻辑失败不会影响原工具协议。
 
 ## 适用场景与效果
 
@@ -66,7 +66,7 @@ Tool calls: 137 · failures: 4 · success: 97% · groups: 9/256
 
 ## 隐私边界
 
-Telemetry **只**记录工具名、provider ID、model ID、计数与耗时。它绝不读取、记录或导出工具参数（`input`）、工具输出（`content`/`details`）、prompt 文本或任何会话内容。`tool_call`/`tool_result` 事件中的参数与结果对象从不进入聚合状态、journal 快照或 export 文件。导出 JSON 可安全地离开本机用于离线评测，但仍包含你使用的 provider/model 名称，分享前请自行确认。
+Telemetry **只**记录工具名、provider ID、model ID、计数与耗时。它绝不读取、记录或导出工具参数（`args`）、工具输出（`result`/`details`）、prompt 文本或任何会话内容。`tool_execution_start`/`tool_execution_end` 事件中的 `args` 与 `result` 对象从不进入聚合状态、journal 快照或 export 文件。导出 JSON 可安全地离开本机用于离线评测，但仍包含你使用的 provider/model 名称，分享前请自行确认。
 
 ## 如何接入
 
@@ -139,19 +139,19 @@ pi --extension ./src/index.ts
 }
 ```
 
-`aggregates` 按调用数降序排列。`timedCalls` 可能小于 `calls`：只有本进程观察到的完整 call→result 对才有耗时样本；恢复后到达的孤儿 result 只计入调用与失败数。离线评测（对比不同 provider/model 的工具活跃度与成功率）直接按 `provider`/`model` 字段切片即可。
+`aggregates` 按调用数降序排列。`timedCalls` 可能小于 `calls`：只有本进程观察到的完整 start→end 对才有耗时样本；恢复后到达（或超过 pending 上限）的孤儿 end 只计入调用与失败数，且已有聚合时也补记一次调用。离线评测（对比不同 provider/model 的工具活跃度与成功率）直接按 `provider`/`model` 字段切片即可。
 
 ## 状态与生命周期
 
-- 观察：`tool_call` 记录一次调用并把 `{dims, startedAt}` 按 `toolCallId` 存入有界 pending 表（上限 128，FIFO 淘汰）；`tool_result` 匹配 pending 计算耗时并结算失败。工具调用被其他扩展阻止、被取消或跨 restore 丢失时，pending 条目被丢弃——调用计数仍保留，只是没有耗时样本。
+- 观察：`tool_execution_start` 记录一次调用并把 `{dims, startedAt}` 按 `toolCallId` 存入有界 pending 表（上限 128，FIFO 淘汰）；`tool_execution_end` 匹配 pending 计算耗时并结算失败。未知工具、schema 校验失败、输出截断与 gate 阻断等路径宿主只发 start/end 一对事件（从不触发 `tool_call`/`tool_result` 钩子），因此也被完整计入调用与失败。无匹配 start 的孤儿 end（跨 restore 丢失或超过 pending 上限）按一次隐含调用计数——即使该维度已有聚合——只是没有耗时样本。
 - 持久化：`turn_end` 时如有变化则追加完整快照；reset 追加空快照。恢复时从 `ctx.sessionManager.getBranch()` 顺序重放，最后一条有效快照生效；解码失败恢复快照为空并在有 UI 时告警。
-- `session_start` 与 `session_tree` 都会清空内存与 pending 表后重放，保证分支切换后数据与当前分支一致；restore 后到达的无匹配 result 按一次隐含调用计数。
+- `session_start` 与 `session_tree` 都会清空内存与 pending 表后重放，保证分支切换后数据与当前分支一致；restore 后到达的无匹配 end 按一次隐含调用计数。
 - `session_shutdown` 幂等清空 pending 表；本扩展没有 timer、子进程或监听器需要释放。
 - 四种模式：TUI/RPC 下命令通过 `ctx.ui.notify`/`confirm` 交互；JSON/print 模式下观察与持久化照常工作（不依赖任何 UI），slash 命令本身不可调用，也不会因为没有 UI 而崩溃。
 
 ## 与其他插件协作
 
-Telemetry 是纯观察者：不注册工具、不接管 active tools、不使用跨插件事件 channel，也不读取其他扩展的 custom entry。它与 Goal/Plan/Todo/Request 等插件可任意组合加载，互不影响；其他扩展注册的自定义工具同样以 `{tool, provider, model}` 维度被统计。工具调用若被 Plan 等门禁阻止（`tool_call` 返回 block），该次调用仍计入"模型尝试调用"，但不会产生 result——这正是评测"模型想用什么"与"实际能用什么"差异所需的数据。
+Telemetry 是纯观察者：不注册工具、不接管 active tools、不使用跨插件事件 channel，也不读取其他扩展的 custom entry。它与 Goal/Plan/Todo/Request 等插件可任意组合加载，互不影响；其他扩展注册的自定义工具同样以 `{tool, provider, model}` 维度被统计。工具调用若被 Plan 等门禁阻止（`tool_call` 钩子返回 block），宿主仍会发出 `tool_execution_end`（`isError`），该次尝试被计入调用与失败——这正是评测"模型想用什么"与"实际能用什么"差异所需的数据。
 
 ## 配置
 

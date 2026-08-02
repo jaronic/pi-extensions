@@ -122,8 +122,9 @@ export class LspClient {
     this.connection.listen();
   }
 
-  static async start(server: ServerConfig, root: string, defaultTimeoutMs: number, onClosed: () => void): Promise<LspClient> {
+  static async start(server: ServerConfig, root: string, defaultTimeoutMs: number, onClosed: () => void, signal?: AbortSignal): Promise<LspClient> {
     const resolvedCommand = await resolveServerCommand(server, root);
+    if (signal?.aborted) throw abortError();
     const [command, ...args] = resolvedCommand;
     const child = spawn(command, args, {
       cwd: root,
@@ -133,7 +134,7 @@ export class LspClient {
     });
     const client = new LspClient(server, root, child, onClosed);
     try {
-      await client.initialize(server.requestTimeoutMs ?? defaultTimeoutMs);
+      await client.initialize(server.requestTimeoutMs ?? defaultTimeoutMs, signal);
       return client;
     } catch (error) {
       await client.forceClose();
@@ -316,7 +317,7 @@ export class LspClient {
     return await this.closing;
   }
 
-  private async initialize(timeoutMs: number): Promise<void> {
+  private async initialize(timeoutMs: number, signal?: AbortSignal): Promise<void> {
     const rootUri = pathToFileURL(this.root).href;
     const result = await this.request<InitializeResult>("initialize", {
       processId: this.child.pid ?? null,
@@ -348,7 +349,7 @@ export class LspClient {
       },
       initializationOptions: this.server.initializationOptions,
       trace: "off",
-    }, undefined, timeoutMs);
+    }, signal, timeoutMs);
     this.capabilities = result.capabilities;
     this.positionEncoding = String(result.capabilities.positionEncoding ?? "utf-16").toLowerCase();
     this.syncOptions = normalizeSyncOptions(result.capabilities.textDocumentSync);
@@ -356,12 +357,13 @@ export class LspClient {
     if (this.server.settings) {
       await this.connection.sendNotification("workspace/didChangeConfiguration", { settings: this.server.settings });
     }
-    await this.waitForServiceReady(timeoutMs);
+    await this.waitForServiceReady(timeoutMs, signal);
     this.stateValue = "ready";
   }
 
   private registerServerHandlers(): void {
     this.connection.onNotification(PublishDiagnosticsNotification.type, (params: PublishDiagnosticsParams) => {
+      if (this.isStaleDiagnosticVersion(params.uri, params.version)) return;
       this.storeDiagnostics(params.uri, params.diagnostics, params.version);
     });
     const readyNotification = this.server.readyNotification;
@@ -390,7 +392,7 @@ export class LspClient {
     this.connection.onRequest("window/showMessageRequest", () => null);
   }
 
-  private async waitForServiceReady(timeoutMs: number): Promise<void> {
+  private async waitForServiceReady(timeoutMs: number, signal?: AbortSignal): Promise<void> {
     if (!this.server.readyNotification || this.serviceReady) return;
     const { promise, resolve: resolveReady, reject } = Promise.withResolvers<void>();
     let settled = false;
@@ -400,17 +402,20 @@ export class LspClient {
       settled = true;
       clearTimeout(timer);
       this.readyListeners.delete(onStatus);
+      signal?.removeEventListener("abort", onAbort);
       callback();
     };
     const onStatus = () => {
       if (this.serviceReady) finish(resolveReady);
       else if (this.stateValue === "closed") finish(() => reject(new Error(`LSP server ${this.server.id} closed before becoming ready`)));
     };
+    const onAbort = () => finish(() => reject(abortError()));
     timer = setTimeout(() => {
       finish(() => reject(new Error(`Timed out waiting for ${this.server.readyNotification?.method} from ${this.server.id} after ${timeoutMs}ms`)));
     }, timeoutMs);
     timer.unref();
     this.readyListeners.add(onStatus);
+    signal?.addEventListener("abort", onAbort, { once: true });
     onStatus();
     await promise;
   }
@@ -421,6 +426,15 @@ export class LspClient {
       textDocument: { uri: document.uri },
       text: this.syncOptions.includeTextOnSave ? document.text : undefined,
     });
+  }
+
+  private isStaleDiagnosticVersion(uri: string, version?: number): boolean {
+    if (version === undefined) return false;
+    const documentVersion = this.documents.get(uri)?.version;
+    if (documentVersion !== undefined && version < documentVersion) return true;
+    const storedVersion = this.diagnosticsByUri.get(uri)?.version;
+    if (storedVersion !== undefined && version < storedVersion) return true;
+    return false;
   }
 
   private storeDiagnostics(uri: string, items: Diagnostic[], version?: number): void {

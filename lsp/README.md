@@ -10,7 +10,7 @@
 
 - 按文件后缀和 server role 路由到匹配的 language server；多个候选按 priority 从高到低尝试。
 - client 按 `server + workspace root` 懒启动并复用，空闲后自动 shutdown。
-- diagnostics 对所有匹配服务器并行请求，保留成功结果并单独报告局部失败。
+- diagnostics 对所有匹配服务器并行请求，保留成功结果并单独报告局部失败；server push 的 publish diagnostics 若携带 version 且低于当前文档版本或已缓存版本，视为乱序旧通知直接丢弃（不覆盖缓存、不触发 settle）。
 - `edit`/`write` 工具成功后，已启动且覆盖该文件的 client 会同步最新磁盘内容；`ast_grep_edit` 仅在成功返回严格的 v1 `edit-apply` details 时触发同样同步，并把 details path 当作 literal machine path（不会剥离 `@`），preview、错误结果和 malformed details 均忽略。
 - 工具运行时 TUI status 以 accent 着色显示当前 action（经 `pi-uikit-dev` 的 `tone` 与 `ctx.ui.theme`）；`/lsp` 显示已配置和活跃的 client。
 - 工具卡片与结果渲染走自定义 `renderCall`/`renderResult`（`src/renderer.ts`），样式全部经 `pi-uikit-dev` 原语：调用卡片标题用 `toolCallTitle`（`LSP · action target`，rename 时 target 为 `file → newName`）并用 `reuseTextComponent` 复用流式 Text；结果首行是 `statusRow`（`✓`/`!` + action + 结果数，`status` action 显示 `active / configured`），正文按行着色（诊断 error/warning、`[server] ERROR` 与 `… omitted` 尾行分别着 error/warning/muted，其余 toolOutput），`collapseLines` 折叠 15 行、`moreLinesHint` 提示展开；截断时以 `kvRow` 追加完整 artifact 路径。模型可见的 `content` 文本不受渲染影响。
@@ -213,7 +213,7 @@ Server patch 除 `initOptions` 外是浅合并。修改嵌套对象时应提供�
 1. `src/config.ts` 合并内置、全局、可信项目配置，并按 priority 排序。
 2. file action 先 realpath 校验 workspace 边界，再根据 suffix + role 选候选 server。`server` 参数优先匹配配置 ID；没有同名 ID 时，可用唯一 language ID（如 `java`）选择其对应 server。
 3. `src/server-manager.ts` 为候选计算 workspace root，按需启动 `LspClient`；启动失败或未声明 capability 时尝试下一候选。显式指定 `server` 时不 fallback 到其他 ID。
-4. `src/lsp-client.ts` 用 stdio JSON-RPC initialize，跟踪 document version/position encoding，转发取消信号并收集有限 stderr。正常 shutdown 先发送协议 `shutdown`/`exit`；仍存活时 Unix 对独立 process group 依次发送 TERM/KILL，Windows 使用 `taskkill /t /f`，等待父进程与后代结束后才完成 cleanup。
+4. `src/lsp-client.ts` 用 stdio JSON-RPC initialize，跟踪 document version/position encoding，转发取消信号并收集有限 stderr。正常 shutdown 先发送协议 `shutdown`/`exit`；仍存活时 Unix 对独立 process group 依次发送 TERM/KILL，Windows 使用 `taskkill /t /f`，等待父进程与后代结束后才完成 cleanup。启动阶段可取消：调用方取消等待时立即以 AbortError 结束（共享启动继续供其他调用方），manager shutdown 会先中止所有 pending 启动再回收进程，不会等满 initialize 超时。
 5. diagnostics 是例外：所有匹配 diagnostics server 并行运行；只有全部失败时工具整体失败。
 
 ## 安全与限制
@@ -274,13 +274,13 @@ Server patch 除 `initOptions` 外是浅合并。修改嵌套对象时应提供�
 - `src/config.ts`：内置服务器、配置路径、严格 decoder、分层 patch、schema normalization、后缀/role 路由。
 - `src/server-manager.ts`：client 缓存、候选 fallback、并行 diagnostics、idle timer 和有界 shutdown。
 - `src/logger.ts`：默认开启 `error` 级、由 `PI_LSP_LOG`/`PI_EXT_LOG` 环境变量或全局 `lsp.json` 的 `logEnabled`/`logLevel` 控制、首次写入才创建日志目录、写入 `getAgentDir()/logs/lsp.log` 并有界轮转、C1 中和、吞掉自身失败的排查日志。与 hashline 的同名文件逐字节相同，避免跨包生产导入。
-- `src/lsp-client.ts`：子进程组、JSON-RPC、initialize/capability、文档同步、position encoding、timeout/cancel、ready notification 和升级式进程树回收。
+- `src/lsp-client.ts`：子进程组、JSON-RPC、initialize/capability、文档同步、position encoding、timeout/cancel、ready notification、版本化 diagnostics 去重和升级式进程树回收。
 - `src/roots.ts`：区分用户 `@` mention 与 literal machine path 的 realpath workspace confinement，以及 root marker 选择。
 - `src/positions.ts`：1-based Unicode 输入到 LSP position 的转换及唯一 symbol 解析。
 - `src/format.ts`：诊断、去重位置、符号、hover、忠实 WorkspaceEdit、准确 edit 计数和 code action 的稳定文本格式。
 - `src/output.ts`：输出截断、私有临时 artifact 与清理。
 - `src/tool-sync.ts`：内置 edit/write 与 `ast_grep_edit` 成功 apply 的严格解码、workspace 路径重验和 best-effort active-client 同步。
-- `test/fake-server.mjs`：确定性的测试 LSP 子进程；`test/*.test.ts` 覆盖严格配置、路由、协议、完整 artifact、准确计数、失败、取消、settle、顽固进程树和清理。
+- `test/fake-server.mjs` 与 `test/hanging-server.mjs`：确定性的测试 LSP 子进程；`test/*.test.ts` 覆盖严格配置、路由、协议、完整 artifact、准确计数、失败、取消（含启动阶段 abort）、settle、乱序诊断版本、顽固进程树和清理。
 
 ## 开发与验证
 
