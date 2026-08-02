@@ -14,6 +14,7 @@ import type { Component, EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
 	buildHeaderLines,
+	buildTerminalTitle,
 	compactCwd,
 	fitToWidth,
 	formatSessionTime,
@@ -163,6 +164,7 @@ export default function jaronEditor(pi: ExtensionAPI): void {
 	let footerData: ReadonlyFooterDataProvider | undefined;
 	let loadRecentSessions: (() => void) | undefined;
 	let recentSessions: RecentSession[] = [];
+	let applyTitle: (() => void) | undefined;
 
 	function stopTimer(): void {
 		if (!timer) return;
@@ -194,6 +196,7 @@ export default function jaronEditor(pi: ExtensionAPI): void {
 	pi.on("thinking_level_select", () => requestRender());
 
 	pi.on("session_info_changed", () => {
+		applyTitle?.();
 		loadRecentSessions?.();
 		requestRender();
 	});
@@ -204,6 +207,7 @@ export default function jaronEditor(pi: ExtensionAPI): void {
 		branch = undefined;
 		recentSessions = [];
 		loadRecentSessions = undefined;
+		applyTitle = undefined;
 		stopTimer();
 		activeTui = undefined;
 		footerData = undefined;
@@ -285,6 +289,17 @@ export default function jaronEditor(pi: ExtensionAPI): void {
 		};
 		loadRecentSessions();
 
+		applyTitle = () => {
+			ctx.ui.setTitle(
+				buildTerminalTitle({
+					cwd: ctx.cwd,
+					branch,
+					sessionName: pi.getSessionName(),
+				}),
+			);
+		};
+		applyTitle();
+
 		branchMonitor?.stop();
 		branchMonitor = new BranchMonitor({
 			runGit: async (args, cwd) => {
@@ -293,6 +308,7 @@ export default function jaronEditor(pi: ExtensionAPI): void {
 			},
 			onBranch: (value) => {
 				branch = value;
+				applyTitle?.();
 				requestRender();
 			},
 		});
@@ -362,8 +378,12 @@ export default function jaronEditor(pi: ExtensionAPI): void {
 				}
 
 				const project = `${accent(compactCwd(ctx.cwd))}${branch ? dim(` (${branch})`) : ""}`;
-				const contextWindow = `${working ? amber(`${SPINNER[spinnerIndex]} `) : ""}${dim(`▣ ctx ${formatContext(ctx)}`)}`;
 				const statusSeparator = dim(" · ");
+				const sessionName = pi.getSessionName();
+				const sessionLabel = sessionName
+					? `${dim(`◈ ${sessionName}`)}${statusSeparator}`
+					: "";
+				const contextWindow = `${working ? amber(`${SPINNER[spinnerIndex]} `) : ""}${sessionLabel}${dim(`▣ ctx ${formatContext(ctx)}`)}`;
 				const statusLeft = [
 					amber(`⬢ ${formatModel(ctx)}`),
 					amber(pi.getThinkingLevel()),
